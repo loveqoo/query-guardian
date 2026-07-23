@@ -33,6 +33,17 @@ class GateGuardTest {
     }
 
     @Test
+    fun `미완성 SELECT는 제대로 된 문법 오류로 차단 - NoClassDefFoundError 아님`() {
+        // druid가 이 경로에서 commons-lang3를 요구한다 — 의존성 누락 시 오류 메시지가 클래스명이 된다
+        val report = Fixtures.lint("SELECT e. FROM user_events e")
+        kotlin.test.assertTrue(report.blocked)
+        kotlin.test.assertTrue(
+            report.violations.none { it.message.contains("org/apache") },
+            "클래스패스 오류가 사용자에게 노출됨: ${report.violations}",
+        )
+    }
+
+    @Test
     fun `64KB 초과 입력은 차단`() {
         val huge = "SELECT id FROM orders WHERE status = '" + "x".repeat(70 * 1024) + "' LIMIT 10"
         assertBlockedBy(huge, "parse/input-too-large")

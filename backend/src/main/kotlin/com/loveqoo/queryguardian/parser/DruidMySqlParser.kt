@@ -96,7 +96,11 @@ class DruidMySqlParser(
      * 셀프 조인 대응: 귀속 결과는 물리 테이블명이 아니라 인스턴스 키다 — `a.x`가 `b` 인스턴스의 요건을
      * 충족시키지 못하게 한다 (§6.4).
      */
-    private class AliasResolver(val ownTables: List<TableRef>, val parent: AliasResolver?) {
+    private class AliasResolver(
+        val ownTables: List<TableRef>,
+        val parent: AliasResolver?,
+        private val cteNames: Set<String> = emptySet(),
+    ) {
         private val byQualifier: Map<String, String> = buildMap {
             for (t in ownTables) put((t.alias ?: t.name).lowercase(), t.instanceKey)
         }
@@ -106,14 +110,25 @@ class DruidMySqlParser(
 
         /** 비한정 컬럼: 현재 스코프 FROM이 단일 인스턴스일 때만 귀속. 그 외 null = fail-closed (§6.4). */
         fun resolveUnqualified(): String? = ownTables.map { it.instanceKey }.distinct().singleOrNull()
+
+        /** FROM이 참조한 이름이 (상위 포함) WITH 절의 CTE인가 — CTE는 물리 테이블이 아니다. */
+        fun isCte(name: String): Boolean =
+            cteNames.contains(name.lowercase()) || (parent?.isCte(name) ?: false)
     }
 
     private fun buildFromSelect(select: SQLSelect, kind: ScopeKind, parentResolver: AliasResolver?): SelectScope {
+        val cteNames = select.withSubQuery?.entries
+            ?.mapNotNull { entry -> norm(entry.alias)?.lowercase() }
+            ?.toSet() ?: emptySet()
+        // CTE 이름을 하위 스코프 전체에 전파 — FROM에서 CTE를 참조하면 물리 테이블로 취급하지 않는다
+        val resolver = if (cteNames.isEmpty()) parentResolver
+        else AliasResolver(emptyList(), parentResolver, cteNames)
+
         val cteChildren = mutableListOf<SelectScope>()
         select.withSubQuery?.entries?.forEach { entry ->
-            cteChildren += buildFromSelect(entry.subQuery, ScopeKind.CTE, parentResolver)
+            cteChildren += buildFromSelect(entry.subQuery, ScopeKind.CTE, resolver)
         }
-        val scope = buildFromQuery(select.query, kind, parentResolver)
+        val scope = buildFromQuery(select.query, kind, resolver)
         return if (cteChildren.isEmpty()) scope else scope.copy(children = cteChildren + scope.children)
     }
 
@@ -152,7 +167,8 @@ class DruidMySqlParser(
 
         // FROM: 테이블 수집을 먼저 끝내야 resolver가 완성된다. 파생 테이블 스코프는 resolver 완성 후에 만든다.
         val derivedSources = mutableListOf<SQLSubqueryTableSource>()
-        block.from?.let { collectTables(it, tables, derivedSources, innerOnExprs) }
+        val isCte: (String) -> Boolean = { name -> parentResolver?.isCte(name) ?: false }
+        block.from?.let { collectTables(it, tables, derivedSources, innerOnExprs, isCte) }
         val resolver = AliasResolver(tables, parentResolver)
         derivedSources.forEach { children += buildFromSelect(it.select, ScopeKind.DERIVED, resolver) }
 
@@ -174,6 +190,7 @@ class DruidMySqlParser(
         tables: MutableList<TableRef>,
         derived: MutableList<SQLSubqueryTableSource>,
         innerOnExprs: MutableList<SQLExpr>,
+        isCte: (String) -> Boolean,
     ) {
         when (source) {
             is SQLExprTableSource -> {
@@ -182,11 +199,13 @@ class DruidMySqlParser(
                     is SQLPropertyExpr -> e.name // schema.table → table
                     else -> source.expr.toString()
                 }
-                tables += TableRef(norm(name)!!, norm(source.alias))
+                val normalized = norm(name)!!
+                // CTE 참조는 물리 테이블이 아니다 — 카탈로그 조회·미등록 경고 대상에서 제외
+                tables += TableRef(normalized, norm(source.alias), physical = !isCte(normalized))
             }
             is SQLJoinTableSource -> {
-                collectTables(source.left, tables, derived, innerOnExprs)
-                collectTables(source.right, tables, derived, innerOnExprs)
+                collectTables(source.left, tables, derived, innerOnExprs, isCte)
+                collectTables(source.right, tables, derived, innerOnExprs, isCte)
                 // INNER 계열 ON만 WHERE 동치로 인정. OUTER JOIN ON은 행을 필터링하지 않는다 (§6.1).
                 val condition = source.condition
                 if (condition != null && source.joinType in INNER_JOIN_TYPES) {

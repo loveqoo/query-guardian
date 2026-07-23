@@ -197,6 +197,7 @@ select-item 수준의 `*` / `t.*` 에만 발화. `COUNT(*)` 등 집계 star는 �
 | `require-limit` | 구조 | 루트 스코프 SELECT에 LIMIT 필수 (한계: `LIMIT 0`/거대값도 통과 — 문서화) | WARN |
 | `require-partition-key` | 의미 | 파티션 키 등록 테이블은 §6.1+§6.6 형태로 WHERE에 필수 | BLOCK |
 | `require-predicate` | 의미 | 필수 술어 등록 테이블은 §6.1+§6.5 매치로 필수 (purpose 조건 지원) | BLOCK |
+| `unknown-table` | 의미 | 카탈로그 미등록 물리 테이블 경고 — 자동완성·의미 룰 미적용을 알림. CTE/파생 alias는 오탐 방지 위해 제외 (사용자 요청, v2 이후 추가) | WARN |
 
 ## 8. API 스케치
 

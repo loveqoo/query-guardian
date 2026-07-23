@@ -31,4 +31,7 @@ class DbTableCatalog(
                 RequiredPredicate(sql, predicate)
             }
             ?: emptyList()
+
+    override fun exists(tableName: String): Boolean =
+        repository.findByNameIgnoreCase(tableName) != null
 }

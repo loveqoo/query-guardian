@@ -88,6 +88,17 @@ class RequirePredicateRule : Rule {
     }
 }
 
+/** 카탈로그 미등록 물리 테이블 경고 — 자동완성·의미 룰이 적용되지 않음을 사용자에게 알린다. CTE/파생 alias는 제외. */
+class UnknownTableRule : Rule {
+    override val id = "unknown-table"
+    override val severity = Severity.WARN
+
+    override fun check(scope: SelectScope, catalog: TableCatalog, context: LintContext): List<Violation> =
+        scope.tables
+            .filter { it.physical && !catalog.exists(it.name) }
+            .map { Violation(id, severity, "테이블 ${it.name}은(는) 카탈로그에 등록되어 있지 않습니다. 자동완성과 의미 룰(파티션 키·필수 조건)이 적용되지 않습니다.") }
+}
+
 /** 필수 술어로 등록 가능한 정규형: 컬럼 EQ 리터럴값 (§6.5). 카탈로그 등록 검증에서도 사용한다. */
 data class RequiredForm(val column: String, val value: String)
 

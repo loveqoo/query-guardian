@@ -15,11 +15,12 @@ cd docker && docker compose up -d
 # 2) 백엔드 (Spring Boot, 포트 8080)
 cd backend && ./gradlew bootRun
 
-# 3) 프론트엔드 (Vite, 포트 5173 — /api를 8080으로 프록시)
+# 3) 프론트엔드 (Vite, 포트 5180 — /api를 8080으로 프록시)
 cd frontend && npm install && npm run dev
 ```
 
-http://localhost:5173 접속 → 카탈로그에서 테이블·제약·purpose 등록 → 에디터에서 쿼리 작성.
+http://localhost:5180 접속 → 카탈로그에서 테이블·제약·purpose 등록 → 에디터에서 쿼리 작성.
+(5173은 로컬의 다른 프로젝트가 사용하므로 비워 둔다. strictPort라 점유 시 조용히 이동하지 않고 실패한다.)
 
 ## 테스트
 

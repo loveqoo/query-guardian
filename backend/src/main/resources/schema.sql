@@ -8,22 +8,33 @@ CREATE TABLE IF NOT EXISTS catalog_column (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
     catalog_table BIGINT NOT NULL,
     name          VARCHAR(128) NOT NULL,
-    type          VARCHAR(64) NULL
-);
-
-CREATE TABLE IF NOT EXISTS catalog_constraint (
-    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
-    catalog_table BIGINT NOT NULL,
-    kind          VARCHAR(32) NOT NULL,
-    column_name   VARCHAR(128) NULL,
-    predicate_sql VARCHAR(500) NULL,
-    purpose_code  VARCHAR(64) NULL
+    type          VARCHAR(64) NULL,
+    is_pii        BOOLEAN NOT NULL DEFAULT FALSE,
+    cls           VARCHAR(16) NOT NULL DEFAULT 'STRING'
 );
 
 CREATE TABLE IF NOT EXISTS catalog_purpose (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
     code          VARCHAR(64) NOT NULL UNIQUE,
     description   VARCHAR(255) NULL
+);
+
+CREATE TABLE IF NOT EXISTS constraint_def (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    cls           VARCHAR(16) NOT NULL,
+    kind          VARCHAR(16) NOT NULL,
+    name          VARCHAR(128) NOT NULL,
+    description   VARCHAR(500) NULL,
+    expression    VARCHAR(500) NULL
+);
+
+CREATE TABLE IF NOT EXISTS constraint_mapping (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    column_id     BIGINT NOT NULL,
+    def_id        BIGINT NOT NULL,
+    purpose_code  VARCHAR(64) NULL,
+    params_json   VARCHAR(500) NULL,
+    CONSTRAINT uq_mapping UNIQUE (column_id, def_id, purpose_code)
 );
 
 CREATE TABLE IF NOT EXISTS saved_query (

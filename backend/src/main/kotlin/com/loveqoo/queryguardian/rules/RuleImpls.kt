@@ -21,17 +21,47 @@ class NoSelectStarRule : Rule {
     }
 }
 
-/** 루트 SELECT에 LIMIT 권고. 알려진 한계: LIMIT 0/거대값도 통과한다 (spec §7). */
-class RequireLimitRule : Rule {
+/** 루트 SELECT에 LIMIT 권고 + 상한 검사 (spec 002 B13). 알려진 한계: LIMIT 0은 통과한다. */
+class RequireLimitRule(private val maxLimit: Long = 1000) : Rule {
     override val id = "require-limit"
     override val severity = Severity.WARN
 
     override fun check(scope: SelectScope, catalog: TableCatalog, context: LintContext): List<Violation> {
         if (scope.kind != ScopeKind.ROOT) return emptyList()
-        return if (scope.limit == null) {
-            listOf(Violation(id, severity, "LIMIT이 없습니다. 결과 크기를 제한하는 것을 권장합니다."))
+        val limit = scope.limit
+            ?: return listOf(Violation(id, severity, "LIMIT이 없습니다. 결과 크기를 제한하는 것을 권장합니다."))
+        return if (limit > maxLimit) {
+            listOf(Violation(id, severity, "LIMIT $limit — 권장 최대 $maxLimit 이내로 제한하세요."))
         } else emptyList()
     }
+}
+
+/**
+ * BLOCK 매핑 컬럼 참조 차단 (spec 002 §5.2 신규). 스코프의 columnRefs 전체를 검사 —
+ * select·WHERE·GROUP BY·HAVING·ORDER BY·JOIN ON·함수 인자 포함. 귀속 불가 참조는 fail-closed.
+ * `SELECT *` 경유 노출은 no-select-star(BLOCK)가 담당(§3.2 의존 — 그 룰의 severity 강등 금지).
+ */
+class NoBlockedColumnRule : Rule {
+    override val id = "no-blocked-column"
+    override val severity = Severity.BLOCK
+
+    override fun check(scope: SelectScope, catalog: TableCatalog, context: LintContext): List<Violation> =
+        scope.columnRefs.mapNotNull { ref ->
+            val table = ref.table
+            if (table != null) {
+                if (table.physical && catalog.blockedColumns(table.name).contains(ref.column.lowercase())) {
+                    Violation(id, severity, "컬럼 ${table.name}.${ref.column}은(는) 조회가 차단된 컬럼입니다.")
+                } else null
+            } else {
+                // 귀속 불가: 스코프 내 어떤 물리 테이블이라도 동명 BLOCK 컬럼이 있으면 차단 (fail-closed, §6.4)
+                val candidate = scope.tables.firstOrNull {
+                    it.physical && catalog.blockedColumns(it.name).contains(ref.column.lowercase())
+                }
+                candidate?.let {
+                    Violation(id, severity, "컬럼 ${ref.column}은(는) ${it.name}의 차단 컬럼일 수 있어 조회할 수 없습니다(테이블 귀속 불명).")
+                }
+            }
+        }
 }
 
 /** 파티션 키 등록 테이블은 §6.1 위치 + §6.6 형태(베어 컬럼 =/IN/BETWEEN, 전부 리터럴)로만 충족. */
@@ -40,13 +70,15 @@ class RequirePartitionKeyRule : Rule {
     override val severity = Severity.BLOCK
 
     override fun check(scope: SelectScope, catalog: TableCatalog, context: LintContext): List<Violation> =
-        scope.tables.mapNotNull { table ->
-            if (!table.physical) return@mapNotNull null // 파생/CTE alias는 카탈로그 대상이 아니다
-            val key = catalog.partitionKey(table.name) ?: return@mapNotNull null
-            // 인스턴스 키로 판정 — 셀프 조인에서 alias 하나의 조건이 다른 인스턴스를 면제하지 못한다 (§6.4)
-            val satisfied = scope.whereConjuncts.any { satisfiesPartitionKey(it, table.instanceKey, key) }
-            if (satisfied) null
-            else Violation(id, severity, "테이블 ${table.name}(${table.instanceKey})은(는) 파티션 키 `$key` 조건(=/IN/BETWEEN, 함수 래핑 불가)이 WHERE에 필요합니다.")
+        scope.tables.flatMap { table ->
+            if (!table.physical) return@flatMap emptyList()
+            // 복합 파티션: 각 키는 독립 요건 — 전부 충족해야 한다 (spec 002 C4)
+            catalog.partitionKeys(table.name).mapNotNull { key ->
+                // 인스턴스 키로 판정 — 셀프 조인에서 alias 하나의 조건이 다른 인스턴스를 면제하지 못한다 (§6.4)
+                val satisfied = scope.whereConjuncts.any { satisfiesPartitionKey(it, table.instanceKey, key) }
+                if (satisfied) null
+                else Violation(id, severity, "테이블 ${table.name}(${table.instanceKey})은(는) 파티션 키 `$key` 조건(=/IN/BETWEEN, 함수 래핑 불가)이 WHERE에 필요합니다.")
+            }
         }
 
     private fun satisfiesPartitionKey(p: Predicate, table: String, key: String): Boolean = when (p) {

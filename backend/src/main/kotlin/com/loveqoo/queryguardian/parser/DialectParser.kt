@@ -11,6 +11,9 @@ interface DialectParser {
 
     /** 카탈로그의 필수 술어 문자열(`consent_yn = 'Y'`)을 구조 비교용 Predicate로 파싱 (§6.5). 실패 시 null. */
     fun parsePredicate(predicateSql: String): Predicate?
+
+    /** 강제식 등록 검증용 — 술어 표현식에 서브쿼리가 포함되면 true (spec 002 §3.3: 등록 거부 대상). */
+    fun predicateContainsSubquery(predicateSql: String): Boolean
 }
 
 sealed interface ParseResult {

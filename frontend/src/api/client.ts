@@ -35,33 +35,70 @@ export const savedQuerySchema = queryListItemSchema.extend({
 });
 export type SavedQuery = z.infer<typeof savedQuerySchema>;
 
+export const columnClassSchema = z.enum([
+  "PII",
+  "BOOLEAN",
+  "DATETIME",
+  "NUMERIC",
+  "KEY",
+  "STRING",
+]);
+export type ColumnClass = z.infer<typeof columnClassSchema>;
+
+export const defKindSchema = z.enum([
+  "MASK",
+  "FILTER",
+  "BLOCK",
+  "JOIN",
+  "INTEGRITY",
+  "PARTITION",
+]);
+export type DefKind = z.infer<typeof defKindSchema>;
+
 export const catalogColumnSchema = z.object({
   id: idSchema,
   name: z.string(),
   type: z.string(),
+  isPii: z.boolean(),
+  cls: columnClassSchema,
 });
 export type CatalogColumn = z.infer<typeof catalogColumnSchema>;
-
-export const constraintKindSchema = z.enum(["PARTITION_KEY", "REQUIRED_PREDICATE"]);
-export type ConstraintKind = z.infer<typeof constraintKindSchema>;
-
-export const catalogConstraintSchema = z.object({
-  id: idSchema,
-  kind: constraintKindSchema,
-  columnName: z.string().nullish(),
-  predicateSql: z.string().nullish(),
-  purposeCode: z.string().nullish(),
-});
-export type CatalogConstraint = z.infer<typeof catalogConstraintSchema>;
 
 export const catalogTableSchema = z.object({
   id: idSchema,
   name: z.string(),
   description: z.string().nullish(),
   columns: z.array(catalogColumnSchema),
-  constraints: z.array(catalogConstraintSchema),
 });
 export type CatalogTable = z.infer<typeof catalogTableSchema>;
+
+/** 제약 정의 (spec 002 §5.3 DefDto) */
+export const constraintDefSchema = z.object({
+  id: idSchema,
+  cls: columnClassSchema,
+  kind: defKindSchema,
+  name: z.string(),
+  description: z.string().nullish(),
+  expression: z.string().nullish(),
+  mappingCount: z.number(),
+});
+export type ConstraintDef = z.infer<typeof constraintDefSchema>;
+
+/** 컬럼 매핑 (spec 002 §5.3 MappingDto) */
+export const constraintMappingSchema = z.object({
+  id: idSchema,
+  tableId: idSchema,
+  tableName: z.string(),
+  columnId: idSchema,
+  columnName: z.string(),
+  defId: idSchema,
+  defName: z.string(),
+  defKind: defKindSchema,
+  purposeCode: z.string().nullish(),
+  paramsJson: z.string().nullish(),
+  clsMismatch: z.boolean(),
+});
+export type ConstraintMapping = z.infer<typeof constraintMappingSchema>;
 
 export const purposeSchema = z.object({
   id: idSchema,
@@ -88,17 +125,39 @@ export interface QueryInput {
   purposeCode?: string;
 }
 
+export interface TableColumnInput {
+  name: string;
+  type: string;
+  isPii: boolean;
+  /** 생략 시 백엔드가 자동 판별, 지정 시 override */
+  cls?: ColumnClass;
+}
+
 export interface TableInput {
   name: string;
   description: string;
-  columns: { name: string; type: string }[];
+  columns: TableColumnInput[];
 }
 
-export interface ConstraintInput {
-  kind: ConstraintKind;
-  columnName?: string;
-  predicateSql?: string;
+export interface DefInput {
+  cls: ColumnClass;
+  kind: DefKind;
+  name: string;
+  description: string;
+  expression?: string;
+}
+
+export interface MappingInput {
+  columnId: Id;
+  defId: Id;
   purposeCode?: string;
+  paramsJson?: string;
+}
+
+export interface MappingFilter {
+  tableId?: Id;
+  columnId?: Id;
+  defId?: Id;
 }
 
 export interface PurposeInput {
@@ -116,6 +175,22 @@ export class ApiError extends Error {
     super(`API 오류 (HTTP ${status})`);
     this.name = "ApiError";
   }
+}
+
+/** 400/409 응답 바디 {message}에서 서버 메시지를 추출한다 (없으면 null) */
+export function apiErrorMessage(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  const body = err.body;
+  if (typeof body === "string" && body) return body;
+  if (
+    body != null &&
+    typeof body === "object" &&
+    "message" in body &&
+    typeof (body as { message: unknown }).message === "string"
+  ) {
+    return (body as { message: string }).message;
+  }
+  return null;
 }
 
 const BASE = "/api";
@@ -215,16 +290,52 @@ export function deleteTable(id: Id): Promise<void> {
   return requestVoid(`/catalog/tables/${id}`, { method: "DELETE" });
 }
 
-// 백엔드는 제약이 추가된 테이블 전체를 돌려준다
-export function createConstraint(tableId: Id, input: ConstraintInput): Promise<CatalogTable> {
-  return request(catalogTableSchema, `/catalog/tables/${tableId}/constraints`, {
+// ---------- 제약 정의 (spec 002 §5.3) ----------
+
+export function listDefs(): Promise<ConstraintDef[]> {
+  return request(z.array(constraintDefSchema), "/catalog/defs");
+}
+
+export function createDef(input: DefInput): Promise<ConstraintDef> {
+  return request(constraintDefSchema, "/catalog/defs", {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
-export function deleteConstraint(id: Id): Promise<void> {
-  return requestVoid(`/catalog/constraints/${id}`, { method: "DELETE" });
+export function updateDef(id: Id, input: DefInput): Promise<ConstraintDef> {
+  return request(constraintDefSchema, `/catalog/defs/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+/** 매핑이 남아 있으면 409 {message} */
+export function deleteDef(id: Id): Promise<void> {
+  return requestVoid(`/catalog/defs/${id}`, { method: "DELETE" });
+}
+
+// ---------- 컬럼 매핑 (spec 002 §5.3) ----------
+
+export function listMappings(filter: MappingFilter = {}): Promise<ConstraintMapping[]> {
+  const params = new URLSearchParams();
+  if (filter.tableId != null) params.set("tableId", String(filter.tableId));
+  if (filter.columnId != null) params.set("columnId", String(filter.columnId));
+  if (filter.defId != null) params.set("defId", String(filter.defId));
+  const qs = params.toString();
+  return request(z.array(constraintMappingSchema), `/catalog/mappings${qs ? `?${qs}` : ""}`);
+}
+
+/** 400(클래스 불일치·판정 미지원 FILTER·params 검증) | 409(중복) */
+export function createMapping(input: MappingInput): Promise<ConstraintMapping> {
+  return request(constraintMappingSchema, "/catalog/mappings", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteMapping(id: Id): Promise<void> {
+  return requestVoid(`/catalog/mappings/${id}`, { method: "DELETE" });
 }
 
 export function listPurposes(): Promise<Purpose[]> {

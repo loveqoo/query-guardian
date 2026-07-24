@@ -20,10 +20,11 @@ class RuleEngine(private val rules: List<Rule>) {
     }
 
     companion object {
-        fun withDefaultRules(): RuleEngine = RuleEngine(
+        fun withDefaultRules(maxLimit: Long = 1000): RuleEngine = RuleEngine(
             listOf(
-                NoSelectStarRule(), RequireLimitRule(),
-                RequirePartitionKeyRule(), RequirePredicateRule(), UnknownTableRule(),
+                NoSelectStarRule(), RequireLimitRule(maxLimit),
+                RequirePartitionKeyRule(), RequirePredicateRule(),
+                NoBlockedColumnRule(), UnknownTableRule(),
             )
         )
     }

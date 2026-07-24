@@ -17,7 +17,7 @@ object Fixtures {
     val parser = DruidMySqlParser()
 
     val catalog = InMemoryTableCatalog(
-        partitionKeys = mapOf("user_events" to "event_date"),
+        partitionKeys = mapOf("user_events" to listOf("event_date")),
         required = listOf(
             InMemoryTableCatalog.Entry(
                 table = "user_events",
@@ -25,6 +25,9 @@ object Fixtures {
                 predicate = RequiredPredicate("consent_yn = 'Y'", parser.parsePredicate("consent_yn = 'Y'")!!),
             ),
         ),
+        // spec 002: users.ssn은 BLOCK 매핑 (디자인 표본 — 조회 전면 차단)
+        blocked = mapOf("users" to setOf("ssn")),
+        tables = setOf("user_events", "users"),
     )
 
     val service = LintService(parser, RuleEngine.withDefaultRules(), catalog)

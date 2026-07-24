@@ -10,6 +10,9 @@ class BlockedException(val report: LintReportDto) : RuntimeException("query bloc
 
 class NotFoundException(message: String) : RuntimeException(message)
 
+/** 무결성 충돌(중복 매핑, 참조 중 삭제 등) → 409 (spec 002 H5). */
+class ConflictException(message: String) : RuntimeException(message)
+
 data class ErrorResponse(val message: String)
 
 @RestControllerAdvice
@@ -26,4 +29,8 @@ class ApiExceptionHandler {
     @ExceptionHandler(NotFoundException::class)
     fun notFound(e: NotFoundException): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.NOT_FOUND).body(ErrorResponse(e.message ?: "찾을 수 없음"))
+
+    @ExceptionHandler(ConflictException::class)
+    fun conflict(e: ConflictException): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse(e.message ?: "충돌"))
 }

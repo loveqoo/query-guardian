@@ -29,6 +29,7 @@ import com.alibaba.druid.sql.ast.statement.SQLSubqueryTableSource
 import com.alibaba.druid.sql.ast.statement.SQLTableSource
 import com.alibaba.druid.sql.ast.statement.SQLUnionQuery
 import com.alibaba.druid.sql.visitor.SQLASTVisitorAdapter
+import com.loveqoo.queryguardian.ir.ColumnRef
 import com.loveqoo.queryguardian.ir.Dialect
 import com.loveqoo.queryguardian.ir.Op
 import com.loveqoo.queryguardian.ir.Predicate
@@ -86,6 +87,18 @@ class DruidMySqlParser(
         null
     }
 
+    override fun predicateContainsSubquery(predicateSql: String): Boolean = try {
+        var found = false
+        SQLUtils.toSQLExpr(predicateSql, DbType.mysql).accept(object : SQLASTVisitorAdapter() {
+            override fun visit(x: SQLQueryExpr): Boolean { found = true; return false }
+            override fun visit(x: SQLInSubQueryExpr): Boolean { found = true; return false }
+            override fun visit(x: SQLExistsExpr): Boolean { found = true; return false }
+        })
+        found
+    } catch (e: Exception) {
+        true // 파싱 불가 표현식은 어차피 등록 거부 대상 — fail-closed
+    }
+
     // ---- 스코프 구성 ----
 
     /** MySQL 식별자 정규화: 백틱 제거 등. 모든 식별자는 IR에 들어가기 전에 반드시 통과한다 (§6.5). */
@@ -101,15 +114,21 @@ class DruidMySqlParser(
         val parent: AliasResolver?,
         private val cteNames: Set<String> = emptySet(),
     ) {
-        private val byQualifier: Map<String, String> = buildMap {
-            for (t in ownTables) put((t.alias ?: t.name).lowercase(), t.instanceKey)
+        private val byQualifier: Map<String, TableRef> = buildMap {
+            for (t in ownTables) put((t.alias ?: t.name).lowercase(), t)
         }
 
-        fun resolveQualified(qualifier: String): String? =
-            byQualifier[qualifier.lowercase()] ?: parent?.resolveQualified(qualifier)
+        /** 한정 참조를 TableRef로 해석 — 상관 서브쿼리는 부모 체인에서 바깥 TableRef를 찾는다. */
+        fun resolveQualifiedRef(qualifier: String): TableRef? =
+            byQualifier[qualifier.lowercase()] ?: parent?.resolveQualifiedRef(qualifier)
+
+        fun resolveQualified(qualifier: String): String? = resolveQualifiedRef(qualifier)?.instanceKey
 
         /** 비한정 컬럼: 현재 스코프 FROM이 단일 인스턴스일 때만 귀속. 그 외 null = fail-closed (§6.4). */
-        fun resolveUnqualified(): String? = ownTables.map { it.instanceKey }.distinct().singleOrNull()
+        fun resolveUnqualifiedRef(): TableRef? =
+            ownTables.distinctBy { it.instanceKey }.singleOrNull()
+
+        fun resolveUnqualified(): String? = resolveUnqualifiedRef()?.instanceKey
 
         /** FROM이 참조한 이름이 (상위 포함) WITH 절의 CTE인가 — CTE는 물리 테이블이 아니다. */
         fun isCte(name: String): Boolean =
@@ -164,11 +183,12 @@ class DruidMySqlParser(
         val tables = mutableListOf<TableRef>()
         val children = mutableListOf<SelectScope>()
         val innerOnExprs = mutableListOf<SQLExpr>()
+        val allOnExprs = mutableListOf<SQLExpr>()
 
         // FROM: 테이블 수집을 먼저 끝내야 resolver가 완성된다. 파생 테이블 스코프는 resolver 완성 후에 만든다.
         val derivedSources = mutableListOf<SQLSubqueryTableSource>()
         val isCte: (String) -> Boolean = { name -> parentResolver?.isCte(name) ?: false }
-        block.from?.let { collectTables(it, tables, derivedSources, innerOnExprs, isCte) }
+        block.from?.let { collectTables(it, tables, derivedSources, innerOnExprs, allOnExprs, isCte) }
         val resolver = AliasResolver(tables, parentResolver)
         derivedSources.forEach { children += buildFromSelect(it.select, ScopeKind.DERIVED, resolver) }
 
@@ -181,8 +201,51 @@ class DruidMySqlParser(
             selectItems += toSelectItem(item.expr, resolver, children)
         }
 
+        // 컬럼 참조 수집 (spec 002 §5.1) — BLOCK 판정의 근거. 술어 모델과 독립적으로 전 절을 훑는다.
+        val columnRefs = mutableListOf<ColumnRef>()
+        val refExprs = mutableListOf<SQLExpr>()
+        block.selectList.forEach { refExprs += it.expr }
+        block.where?.let { refExprs += it }
+        block.groupBy?.let { groupBy ->
+            refExprs += groupBy.items.filterIsInstance<SQLExpr>()
+            groupBy.having?.let { refExprs += it }
+        }
+        block.orderBy?.items?.forEach { refExprs += it.expr }
+        refExprs += allOnExprs
+        refExprs.forEach { collectColumnRefs(it, resolver, columnRefs) }
+
         val limit = block.limit?.rowCount?.let { (it as? SQLIntegerExpr)?.number?.toLong() }
-        return SelectScope(kind, tables, selectItems, conjuncts, limit, children)
+        return SelectScope(kind, tables, selectItems, conjuncts, limit, children, columnRefs = columnRefs)
+    }
+
+    /**
+     * 표현식 안의 모든 컬럼 참조를 수집한다 — 함수 인자·CASE·Between/In 피연산자 포함.
+     * 서브쿼리 경계에서 멈춘다(자식 스코프가 자체 수집). star는 no-select-star 담당이라 제외.
+     */
+    private fun collectColumnRefs(expr: SQLExpr, resolver: AliasResolver, into: MutableList<ColumnRef>) {
+        expr.accept(object : SQLASTVisitorAdapter() {
+            override fun visit(x: SQLIdentifierExpr): Boolean {
+                into += ColumnRef(resolver.resolveUnqualifiedRef(), norm(x.name)!!)
+                return false
+            }
+
+            override fun visit(x: SQLPropertyExpr): Boolean {
+                if (x.name != "*") {
+                    val table = qualifierOf(x)?.let { resolver.resolveQualifiedRef(it) }
+                    into += ColumnRef(table, norm(x.name)!!)
+                }
+                return false
+            }
+
+            // 서브쿼리 경계 — 단, IN의 좌변 피연산자는 이 스코프의 참조이므로 수집한다
+            override fun visit(x: SQLInSubQueryExpr): Boolean {
+                collectColumnRefs(x.expr, resolver, into)
+                return false
+            }
+
+            override fun visit(x: SQLQueryExpr): Boolean = false
+            override fun visit(x: SQLExistsExpr): Boolean = false
+        })
     }
 
     private fun collectTables(
@@ -190,6 +253,7 @@ class DruidMySqlParser(
         tables: MutableList<TableRef>,
         derived: MutableList<SQLSubqueryTableSource>,
         innerOnExprs: MutableList<SQLExpr>,
+        allOnExprs: MutableList<SQLExpr>,
         isCte: (String) -> Boolean,
     ) {
         when (source) {
@@ -204,12 +268,15 @@ class DruidMySqlParser(
                 tables += TableRef(normalized, norm(source.alias), physical = !isCte(normalized))
             }
             is SQLJoinTableSource -> {
-                collectTables(source.left, tables, derived, innerOnExprs, isCte)
-                collectTables(source.right, tables, derived, innerOnExprs, isCte)
-                // INNER 계열 ON만 WHERE 동치로 인정. OUTER JOIN ON은 행을 필터링하지 않는다 (§6.1).
+                collectTables(source.left, tables, derived, innerOnExprs, allOnExprs, isCte)
+                collectTables(source.right, tables, derived, innerOnExprs, allOnExprs, isCte)
                 val condition = source.condition
-                if (condition != null && source.joinType in INNER_JOIN_TYPES) {
-                    innerOnExprs += condition
+                if (condition != null) {
+                    // 컬럼 참조 수집은 조인 종류 불문(§5.1). WHERE 동치 인정은 INNER 계열만(§6.1).
+                    allOnExprs += condition
+                    if (source.joinType in INNER_JOIN_TYPES) {
+                        innerOnExprs += condition
+                    }
                 }
             }
             is SQLSubqueryTableSource -> {

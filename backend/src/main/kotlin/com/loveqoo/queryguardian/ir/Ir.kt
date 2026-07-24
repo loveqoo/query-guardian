@@ -21,7 +21,19 @@ data class SelectScope(
     val children: List<SelectScope>,
     /** IR로 표현 불가한 쿼리 형태(예: VALUES). null이 아니면 엔진이 무조건 차단한다 — fail-closed (§3). */
     val unverifiable: String? = null,
+    /**
+     * 이 스코프가 참조하는 모든 컬럼 (spec 002 §5.1) — select 목록·WHERE·GROUP BY·HAVING·ORDER BY·
+     * JOIN ON·함수 인자·CASE·Between/In 피연산자 전체에서 수집. BLOCK 판정(no-blocked-column)의 근거.
+     * 술어 모델(whereConjuncts)과 달리 "어디에 어떤 형태로" 쓰였는지는 담지 않는다 — 참조 사실만.
+     */
+    val columnRefs: List<ColumnRef> = emptyList(),
 )
+
+/**
+ * 해석된 컬럼 참조. [table]은 resolver 체인으로 찾은 TableRef 자체 — 상관 서브쿼리가 바깥 테이블을
+ * 참조하면 그 바깥 TableRef가 담긴다. 귀속 불가면 null (룰이 fail-closed로 처리, §6.4).
+ */
+data class ColumnRef(val table: TableRef?, val column: String)
 
 /**
  * [physical]=false는 파생 테이블/CTE의 alias 참조 — 물리 테이블이 아니므로 카탈로그 조회 대상이 아니다.

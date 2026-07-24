@@ -1,0 +1,45 @@
+/* ============================================================
+   Ant Design — Typography tokens
+   AntD ships NO custom webfont. It relies on a native system
+   font stack so text matches each OS. Code uses a mono stack.
+   Type scale + line heights are AntD v5's generated values
+   (base 14px, modular scale via base * e^(i/5)).
+   ============================================================ */
+
+:root {
+  /* ---- Font families ---- */
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-family-code: "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
+    Courier, monospace;
+
+  /* ---- Font sizes (px) ---- */
+  --font-size-sm: 12px;
+  --font-size: 14px;          /* body default */
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+
+  /* Headings */
+  --font-size-heading-1: 38px;
+  --font-size-heading-2: 30px;
+  --font-size-heading-3: 24px;
+  --font-size-heading-4: 20px;
+  --font-size-heading-5: 16px;
+
+  /* ---- Line heights (unitless, = (size+8)/size) ---- */
+  --line-height-sm: 1.6667;   /* 12px */
+  --line-height: 1.5714;      /* 14px body */
+  --line-height-lg: 1.5;      /* 16px */
+
+  --line-height-heading-1: 1.2105;  /* 38px */
+  --line-height-heading-2: 1.2667;  /* 30px */
+  --line-height-heading-3: 1.3333;  /* 24px */
+  --line-height-heading-4: 1.4;     /* 20px */
+  --line-height-heading-5: 1.5;     /* 16px */
+
+  /* ---- Font weights ---- */
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;   /* buttons, headings, active states */
+  --font-weight-strong: 600;   /* AntD <strong> / emphasized headings */
+}

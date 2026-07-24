@@ -1,0 +1,11 @@
+/* ============================================================
+   Ant Design System — global stylesheet entry point.
+   Consumers link THIS one file. It only @imports token layers.
+   AntD uses a native system font stack, so there are no
+   @font-face rules / webfont binaries to ship.
+   ============================================================ */
+
+@import "tokens/colors.css";
+@import "tokens/typography.css";
+@import "tokens/spacing.css";
+@import "tokens/base.css";

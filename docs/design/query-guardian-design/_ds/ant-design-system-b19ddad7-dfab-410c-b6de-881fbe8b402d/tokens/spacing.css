@@ -1,0 +1,89 @@
+/* ============================================================
+   Ant Design — Size, spacing, radius, shadow & motion tokens
+   Spacing follows AntD's 4px unit + step system.
+   Control heights: SM 24 / default 32 / LG 40.
+   Radius derives from a 6px base (genRadius).
+   Shadows are AntD v5's canonical elevation set.
+   ============================================================ */
+
+:root {
+  /* ---- Spacing scale (AntD padding/margin steps) ---- */
+  --space-xxs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;     /* default padding */
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;
+
+  /* Fine-grained padding aliases used across components */
+  --padding-xxs: 4px;
+  --padding-xs: 8px;
+  --padding-sm: 12px;
+  --padding: 16px;
+  --padding-lg: 24px;
+
+  /* Content/margin rhythm */
+  --margin-xs: 8px;
+  --margin-sm: 12px;
+  --margin: 16px;
+  --margin-lg: 24px;
+  --margin-xl: 32px;
+
+  /* ---- Border radius (base 6) ---- */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius: 6px;        /* default — buttons, inputs, cards */
+  --radius-lg: 8px;
+  --radius-outer: 4px;
+
+  /* ---- Border ---- */
+  --line-width: 1px;
+  --line-width-bold: 2px;
+  --line-type: solid;
+
+  /* ---- Control heights ---- */
+  --control-height-sm: 24px;
+  --control-height: 32px;   /* default button / input */
+  --control-height-lg: 40px;
+
+  /* ---- Elevation / shadows (AntD v5) ---- */
+  /* Default drop shadow — cards on hover, dropdowns */
+  --box-shadow:
+    0 6px 16px 0 rgba(0, 0, 0, 0.08),
+    0 3px 6px -4px rgba(0, 0, 0, 0.12),
+    0 9px 28px 8px rgba(0, 0, 0, 0.05);
+  /* Secondary — popovers, elevated panels */
+  --box-shadow-secondary:
+    0 6px 16px 0 rgba(0, 0, 0, 0.08),
+    0 3px 6px -4px rgba(0, 0, 0, 0.12),
+    0 9px 28px 8px rgba(0, 0, 0, 0.05);
+  /* Tertiary — subtle resting card lift */
+  --box-shadow-tertiary:
+    0 1px 2px 0 rgba(0, 0, 0, 0.03),
+    0 1px 6px -1px rgba(0, 0, 0, 0.02),
+    0 2px 4px 0 rgba(0, 0, 0, 0.02);
+
+  /* ---- Z-index scale ---- */
+  --z-base: 0; /* @kind other */
+  --z-affix: 10; /* @kind other */
+  --z-popup: 1000; /* @kind other */
+  --z-dropdown: 1050; /* @kind other */
+  --z-modal: 1000; /* @kind other */
+  --z-message: 1010; /* @kind other */
+  --z-notification: 1010; /* @kind other */
+  --z-tooltip: 1070; /* @kind other */
+
+  /* ---- Motion ---- */
+  --motion-duration-fast: 0.1s; /* @kind other */
+  --motion-duration-mid: 0.2s; /* @kind other */
+  --motion-duration-slow: 0.3s; /* @kind other */
+
+  /* Easing curves (AntD seed) */
+  --ease-out-circ: cubic-bezier(0.08, 0.82, 0.17, 1); /* @kind other */
+  --ease-in-out-circ: cubic-bezier(0.78, 0.14, 0.15, 0.86); /* @kind other */
+  --ease-out: cubic-bezier(0.215, 0.61, 0.355, 1); /* @kind other */
+  --ease-in-out: cubic-bezier(0.645, 0.045, 0.355, 1); /* @kind other */
+  --ease-out-back: cubic-bezier(0.12, 0.4, 0.29, 1.46); /* @kind other */
+  --ease-in-back: cubic-bezier(0.71, -0.46, 0.88, 0.6); /* @kind other */
+}

@@ -1,0 +1,50 @@
+/* ============================================================
+   Ant Design — base element resets / defaults
+   Mirrors AntD's normalized typography baseline so any card or
+   kit that links styles.css inherits the right body defaults.
+   ============================================================ */
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+  color: var(--color-text);
+  background: var(--color-bg-container);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+h1, h2, h3, h4, h5 {
+  margin: 0;
+  color: var(--color-text-heading);
+  font-weight: var(--font-weight-strong);
+  line-height: var(--line-height-heading-3);
+}
+
+h1 { font-size: var(--font-size-heading-1); line-height: var(--line-height-heading-1); }
+h2 { font-size: var(--font-size-heading-2); line-height: var(--line-height-heading-2); }
+h3 { font-size: var(--font-size-heading-3); line-height: var(--line-height-heading-3); }
+h4 { font-size: var(--font-size-heading-4); line-height: var(--line-height-heading-4); }
+h5 { font-size: var(--font-size-heading-5); line-height: var(--line-height-heading-5); }
+
+a {
+  color: var(--color-link);
+  text-decoration: none;
+  transition: color var(--motion-duration-slow);
+  cursor: pointer;
+}
+a:hover { color: var(--color-link-hover); }
+a:active { color: var(--color-link-active); }
+
+code, kbd, pre, samp {
+  font-family: var(--font-family-code);
+}
+
+*, *::before, *::after { box-sizing: border-box; }

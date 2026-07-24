@@ -1,0 +1,2027 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/ant-design-system-b19ddad7-dfab-410c-b6de-881fbe8b402d/tokens/colors.css">
+<link rel="stylesheet" href="_ds/ant-design-system-b19ddad7-dfab-410c-b6de-881fbe8b402d/tokens/typography.css">
+<link rel="stylesheet" href="_ds/ant-design-system-b19ddad7-dfab-410c-b6de-881fbe8b402d/tokens/spacing.css">
+<link rel="stylesheet" href="_ds/ant-design-system-b19ddad7-dfab-410c-b6de-881fbe8b402d/tokens/base.css">
+<link rel="stylesheet" href="_ds/ant-design-system-b19ddad7-dfab-410c-b6de-881fbe8b402d/styles.css">
+<script src="_ds/ant-design-system-b19ddad7-dfab-410c-b6de-881fbe8b402d/_ds_bundle.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:var(--color-bg-layout)}
+a{color:var(--color-link);text-decoration:none}
+a:hover{color:var(--color-link-hover)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:rgba(0,0,0,.18);border-radius:8px}
+::-webkit-scrollbar-track{background:transparent}
+@keyframes qgFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.qg-code-input::selection{background:rgba(22,119,255,.18)}
+</style>
+</helmet>
+<div style="display:flex;height:100vh;width:100%;font-family:var(--font-family);color:var(--color-text);overflow:hidden">
+
+  <!-- ===================== SIDER ===================== -->
+  <aside style="width:236px;flex:none;background:#001529;display:flex;flex-direction:column;height:100%">
+    <div style="height:56px;flex:none;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid rgba(255,255,255,.08)">
+      <div style="width:30px;height:30px;flex:none;border-radius:7px;background:linear-gradient(135deg,#1677ff,#0958d9);display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px">
+        <x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="lock" hint-size="16px,16px"></x-import>
+      </div>
+      <div style="min-width:0">
+        <div style="color:#fff;font-size:15px;font-weight:600;line-height:1.2">Query Guardian</div>
+        <div style="color:rgba(255,255,255,.45);font-size:11px;line-height:1.2">안전한 SQL 거버넌스</div>
+      </div>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:8px 0">
+      <x-import component-from-global-scope="AntDesignSystem_b19dda.Menu" items="{{ navItems }}" selected-key="{{ screen }}" on-select="{{ go }}" theme="dark" mode="inline" hint-size="100%,auto"></x-import>
+    </div>
+    <div style="flex:none;padding:12px 16px;border-top:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:10px">
+      <div style="width:32px;height:32px;flex:none;border-radius:50%;background:#1677ff;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">김</div>
+      <div style="min-width:0;flex:1">
+        <div style="color:#fff;font-size:13px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">김도현</div>
+        <div style="color:rgba(255,255,255,.45);font-size:11px;line-height:1.3">데이터 분석가</div>
+      </div>
+      <span style="color:rgba(255,255,255,.45);cursor:pointer;display:inline-flex">
+        <x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="logout" hint-size="16px,16px"></x-import>
+      </span>
+    </div>
+  </aside>
+
+  <!-- ===================== MAIN ===================== -->
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column;height:100%">
+    <!-- header -->
+    <header style="height:56px;flex:none;background:#fff;border-bottom:1px solid var(--color-border-secondary);display:flex;align-items:center;justify-content:space-between;padding:0 24px;gap:16px">
+      <div style="min-width:0">
+        <div style="font-size:12px;color:var(--color-text-tertiary);line-height:1.3">{{ crumb }}</div>
+        <div style="font-size:16px;font-weight:600;color:var(--color-text-heading);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pageTitle }}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;flex:none">
+        <span style="color:var(--color-text-secondary);cursor:pointer;display:inline-flex;font-size:18px">
+          <x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="bell" hint-size="18px,18px"></x-import>
+        </span>
+        <span style="color:var(--color-text-secondary);cursor:pointer;display:inline-flex;font-size:18px">
+          <x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="question-circle" hint-size="18px,18px"></x-import>
+        </span>
+      </div>
+    </header>
+
+    <!-- content -->
+    <main style="flex:1;min-height:0;overflow-y:auto;padding:24px">
+
+      <!-- ============ DATABASES ============ -->
+      <sc-if value="{{ isDatabases }}" hint-placeholder-val="{{ true }}">
+        <div style="animation:qgFade .2s;display:grid;grid-template-columns:300px 300px 1fr;gap:16px;height:100%;min-height:560px">
+          <!-- connections -->
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:14px 16px;border-bottom:1px solid var(--color-border-secondary);display:flex;align-items:center;justify-content:space-between">
+              <span style="font-weight:600;font-size:14px">연결 목록</span>
+              <span style="font-size:12px;color:var(--color-text-tertiary)">{{ dbCount }}개</span>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:8px">
+              <sc-for list="{{ dbList }}" as="db" hint-placeholder-count="3">
+                <div onClick="{{ db.onClick }}" style="{{ db.style }}" style-hover="{{ hoverRow }}">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                    <span style="display:flex;align-items:center;gap:8px;min-width:0">
+                      <span style="color:var(--color-text-tertiary);display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="appstore" hint-size="15px,15px"></x-import></span>
+                      <span style="font-weight:500;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ db.name }}</span>
+                    </span>
+                    <span style="display:flex;align-items:center;gap:6px;flex:none">
+                      <sc-if value="{{ db.locked }}" hint-placeholder-val="{{ false }}"><span style="color:var(--color-text-quaternary);display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="lock" hint-size="13px,13px"></x-import></span></sc-if>
+                      <x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ db.vendorColor }}" hint-size="auto,22px">{{ db.vendor }}</x-import>
+                    </span>
+                  </div>
+                  <div style="font-size:12px;color:var(--color-text-tertiary);margin-top:6px;padding-left:23px">{{ db.host }} · {{ db.tables }}개 테이블</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <!-- tables -->
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:10px 12px;border-bottom:1px solid var(--color-border-secondary)">
+              <div style="font-weight:600;font-size:14px;margin:4px 4px 10px">{{ currentDbName }} · 테이블</div>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Input" prefix-icon="search" placeholder="테이블 검색" size="small" hint-size="100%,24px"></x-import>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:8px">
+              <sc-for list="{{ tableList }}" as="tb" hint-placeholder-count="6">
+                <div onClick="{{ tb.onClick }}" style="{{ tb.style }}" style-hover="{{ hoverRow }}">
+                  <span style="display:flex;align-items:center;gap:8px;min-width:0">
+                    <span style="color:{{ tb.iconColor }};display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="appstore" hint-size="14px,14px"></x-import></span>
+                    <span style="font-size:13px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ tb.name }}</span>
+                  </span>
+                  <span style="flex:none;display:flex;align-items:center;gap:4px">
+                    <sc-if value="{{ tb.locked }}" hint-placeholder-val="{{ false }}"><span style="color:var(--color-text-quaternary);display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="lock" hint-size="12px,12px"></x-import></span></sc-if>
+                    <span style="font-size:11px;color:var(--color-text-tertiary)">{{ tb.rows }}</span>
+                  </span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <!-- columns -->
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:14px 16px;border-bottom:1px solid var(--color-border-secondary)">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                <span style="display:flex;align-items:center;gap:8px;min-width:0">
+                  <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-weight:600;font-size:14px">{{ currentTableName }}</span>
+                  <span style="font-size:12px;color:var(--color-text-tertiary)">· {{ colCount }} columns</span>
+                </span>
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" size="small" icon-name="code" disabled="{{ cannotEditCurrent }}" hint-size="auto,24px" onClick="{{ queryThisTable }}">이 테이블로 쿼리</x-import>
+              </div>
+              <sc-if value="{{ cannotEditCurrent }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--gold-7);background:var(--gold-1);border:1px solid var(--gold-3);border-radius:6px;padding:6px 10px">
+                  <span style="display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="lock" hint-size="13px,13px"></x-import></span>
+                  접근 권한 없음 · 열람 전용 (편집·쿼리 불가)
+                </div>
+              </sc-if>
+              <div style="font-size:12px;color:var(--color-text-secondary);margin-top:8px">{{ tableComment }}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+                <sc-for list="{{ tableMetaChips }}" as="tm" hint-placeholder-count="3"><span style="font-size:11px;background:var(--gray-2);border:1px solid var(--color-border-secondary);border-radius:4px;padding:2px 8px;color:var(--color-text-tertiary)">{{ tm.k }} <span style="color:var(--color-text-secondary);font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">{{ tm.v }}</span></span></sc-for>
+              </div>
+            </div>
+            <div style="flex:1;overflow-y:auto">
+              <div style="display:grid;grid-template-columns:1.2fr 1fr 0.8fr 1fr;gap:0;padding:10px 16px;border-bottom:1px solid var(--color-border-secondary);font-size:12px;color:var(--color-text-tertiary);font-weight:500;position:sticky;top:0;background:#fff">
+                <span>컬럼</span><span>타입</span><span>NULL</span><span>기본값</span>
+              </div>
+              <sc-for list="{{ currentColumns }}" as="col" hint-placeholder-count="6">
+                <div onClick="{{ col.onSelect }}" style="{{ col.rowStyle }}" style-hover="{{ hoverTableRow }}">
+                  <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ col.name }}</span>
+                  <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;color:var(--color-text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ col.type }}</span>
+                  <span style="font-size:11px;color:{{ col.nullColor }}">{{ col.nullLabel }}</span>
+                  <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:11px;color:var(--color-text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ col.defLabel }}</span>
+                </div>
+              </sc-for>
+              <div style="border-top:8px solid var(--gray-3)">
+                <div style="border-bottom:1px solid var(--color-border-secondary)">
+                  <div style="display:flex;align-items:center;gap:8px;padding:12px 16px">
+                    <span style="font-size:13px;font-weight:600">인덱스</span>
+                    <span style="margin-left:auto;font-size:12px;color:var(--color-text-tertiary)">{{ indexCountLabel }}</span>
+                  </div>
+                  <div style="padding:0 16px 16px 16px">
+                    <div style="display:flex;flex-direction:column;gap:10px">
+                      <sc-for list="{{ currentIndexes }}" as="ix" hint-placeholder-count="3">
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                          <span style="width:74px;flex:none"><span style="font-size:11px;font-weight:600;padding:1px 7px;border-radius:4px;background:var(--gray-3);border:1px solid var(--color-border-secondary);color:{{ ix.typeTextColor }}">{{ ix.type }}</span></span>
+                          <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:12px;color:var(--color-text)">{{ ix.name }}</span>
+                          <span style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+                            <sc-for list="{{ ix.cols }}" as="ic" hint-placeholder-count="1"><span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:11px;background:var(--gray-3);border:1px solid var(--color-border-secondary);border-radius:4px;padding:1px 7px;color:var(--color-text-secondary)">{{ ic.name }}</span></sc-for>
+                          </span>
+                          <sc-if value="{{ ix.hasNote }}" hint-placeholder-val="{{ false }}"><span style="font-size:11px;color:var(--color-text-tertiary)">{{ ix.note }}</span></sc-if>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </div>
+                <div style="border-bottom:1px solid var(--color-border-secondary)">
+                  <div style="display:flex;align-items:center;gap:8px;padding:12px 16px">
+                    <span style="font-size:13px;font-weight:600">코멘트</span>
+                    <span style="font-size:12px;color:var(--color-text-tertiary)">· <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">{{ selColName }}</span></span>
+                  </div>
+                  <div style="padding:0 16px 16px 16px">
+                    <div style="font-size:13px;color:var(--color-text);line-height:1.6;white-space:normal;overflow-wrap:break-word;word-break:break-word">{{ selColComment }}</div>
+                  </div>
+                </div>
+                <div style="border-bottom:1px solid var(--color-border-secondary)">
+                  <div style="display:flex;align-items:center;gap:8px;padding:12px 16px">
+                    <span style="font-size:13px;font-weight:600">개인정보 컬럼</span>
+                    <span style="margin-left:auto;font-size:12px;color:{{ piiCountColor }}">{{ piiCountLabel }}</span>
+                  </div>
+                  <div style="padding:0 16px 16px 16px">
+                    <sc-if value="{{ hasPiiCols }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;flex-wrap:wrap;gap:8px">
+                        <sc-for list="{{ piiColumns }}" as="pc" hint-placeholder-count="2">
+                          <span style="display:inline-flex;align-items:center;padding:2px 8px;background:var(--red-1);border:1px solid var(--red-3);border-radius:4px">
+                            <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:12px;color:var(--color-text)">{{ pc.name }}</span>
+                          </span>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ noPiiCols }}" hint-placeholder-val="{{ false }}">
+                      <div style="font-size:12px;color:var(--color-text-tertiary)">개인정보로 분류된 컬럼이 없습니다.</div>
+                    </sc-if>
+                  </div>
+                </div>
+                <div>
+                  <div onClick="{{ toggleDbConstraint }}" style="display:flex;align-items:center;gap:8px;padding:12px 16px;cursor:pointer" style-hover="{{ hoverTableRow }}">
+                    <span style="display:inline-flex;color:var(--color-text-tertiary);transition:transform .15s;transform:{{ dbConstraintCaret }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="down" hint-size="12px,12px"></x-import></span>
+                    <span style="font-size:13px;font-weight:600">쿼리 제약</span>
+                  </div>
+                  <sc-if value="{{ dbOpenConstraint }}" hint-placeholder-val="{{ true }}">
+                    <div style="padding:0 16px 16px 36px">
+                      <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Button" size="small" type="dashed" icon-name="edit" disabled="{{ cannotEditCurrent }}" hint-size="auto,26px" onClick="{{ onMapSelCol }}">매핑 편집</x-import></div>
+                      <sc-if value="{{ selColHasConstraints }}" hint-placeholder-val="{{ true }}">
+                        <div style="display:flex;flex-direction:column;gap:8px">
+                          <sc-for list="{{ selColConstraints }}" as="mc" hint-placeholder-count="2">
+                            <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#fff;border:1px solid var(--color-border-secondary);border-radius:6px">
+                              <span style="width:6px;height:6px;border-radius:50%;background:var(--color-primary);flex:none"></span>
+                              <span style="min-width:0"><div style="font-size:13px;font-weight:500">{{ mc.name }}</div><div style="font-size:12px;color:var(--color-text-tertiary);margin-top:1px">{{ mc.desc }}</div></span>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ selColEmpty }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:12px;color:var(--color-text-tertiary)">이 컬럼에 매핑된 제약이 없습니다. "매핑 편집"으로 추가하세요.</div>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ QUERY EDITOR ============ -->
+      <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ true }}">
+        <div style="animation:qgFade .2s;display:flex;gap:16px;height:100%;min-height:600px">
+          <!-- editor column -->
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px">
+            <!-- toolbar -->
+            <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <div style="flex:1;min-width:180px">
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Input" value="{{ queryName }}" onChange="{{ onQueryName }}" prefix-icon="edit" hint-size="100%,32px"></x-import>
+              </div>
+              <div style="width:150px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ vendorOptions }}" value="{{ editorVendor }}" onChange="{{ onVendor }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:170px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ connOptions }}" value="{{ connKey }}" onChange="{{ onConn }}" hint-size="100%,32px"></x-import></div>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" icon-name="thunderbolt" hint-size="auto,32px" onClick="{{ toggleSuggest }}">추천</x-import>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" icon-name="check-circle" hint-size="auto,32px" onClick="{{ runRuleCheck }}">규칙 검사</x-import>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="primary" icon-name="thunderbolt" hint-size="auto,32px" onClick="{{ runQuery }}">실행</x-import>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" icon-name="robot" hint-size="auto,32px" onClick="{{ toggleAi }}">AI 에이전트</x-import>
+            </div>
+            <!-- code + suggest -->
+            <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;overflow:hidden;position:relative">
+              <div style="height:38px;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--color-border-secondary);background:var(--gray-2)">
+                <span style="width:11px;height:11px;border-radius:50%;background:#ff5f56;display:inline-block"></span>
+                <span style="width:11px;height:11px;border-radius:50%;background:#ffbd2e;display:inline-block"></span>
+                <span style="width:11px;height:11px;border-radius:50%;background:#27c93f;display:inline-block"></span>
+                <span style="font-size:12px;color:var(--color-text-tertiary);margin-left:8px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">{{ queryName }}.sql</span>
+                <span style="margin-left:auto;font-size:12px;color:var(--color-text-tertiary)">{{ editorVendorLabel }}</span>
+              </div>
+              <div class="qg-code-scroll" style="height:320px;overflow:auto;background:#fff">
+                <div style="display:flex;min-height:100%">
+                  <div style="flex:none;padding:12px 10px;text-align:right;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px;line-height:1.7;color:var(--color-text-quaternary);background:var(--gray-2);user-select:none;border-right:1px solid var(--color-border-secondary)">
+                    <sc-for list="{{ codeLines }}" as="ln" hint-placeholder-count="10"><div>{{ ln }}</div></sc-for>
+                  </div>
+                  <div style="position:relative;flex:1;min-width:0">
+                    <pre style="margin:0;padding:12px 16px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px;line-height:1.7;white-space:pre-wrap;overflow-wrap:break-word;color:var(--color-text)">{{ highlightedCode }}</pre>
+                    <textarea class="qg-code-input" value="{{ sql }}" onChange="{{ onSqlChange }}" spellcheck="false" style="position:absolute;inset:0;margin:0;padding:12px 16px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px;line-height:1.7;white-space:pre-wrap;overflow-wrap:break-word;border:0;outline:0;resize:none;background:transparent;color:transparent;caret-color:#1677ff;overflow:hidden"></textarea>
+                  </div>
+                </div>
+              </div>
+              <!-- suggestion popup -->
+              <sc-if value="{{ showSuggest }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;right:20px;top:120px;width:280px;background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,.12);overflow:hidden;z-index:20">
+                  <div style="padding:8px 12px;font-size:12px;color:var(--color-text-tertiary);border-bottom:1px solid var(--color-border-secondary)">쿼리 추천</div>
+                  <sc-for list="{{ suggestions }}" as="sg" hint-placeholder-count="4">
+                    <div onClick="{{ sg.onClick }}" style="padding:9px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--color-split)" style-hover="{{ hoverSuggest }}">
+                      <span style="width:20px;height:20px;flex:none;border-radius:4px;background:{{ sg.badgeBg }};color:{{ sg.badgeColor }};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:ui-monospace,monospace">{{ sg.kind }}</span>
+                      <span style="min-width:0"><div style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ sg.text }}</div><div style="font-size:11px;color:var(--color-text-tertiary)">{{ sg.hint }}</div></span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+            <!-- bottom panel -->
+            <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;overflow:hidden;flex:none">
+              <div style="display:flex;gap:2px;border-bottom:1px solid var(--color-border-secondary);padding:0 8px">
+                <sc-for list="{{ bottomTabs }}" as="bt" hint-placeholder-count="3">
+                  <div onClick="{{ bt.onClick }}" style="{{ bt.style }}">{{ bt.label }}</div>
+                </sc-for>
+              </div>
+              <div style="padding:16px;max-height:210px;overflow-y:auto">
+                <sc-if value="{{ isRuleCheckTab }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex;flex-direction:column;gap:10px">
+                    <sc-for list="{{ ruleResults }}" as="rr" hint-placeholder-count="3">
+                      <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid {{ rr.borderColor }};background:{{ rr.bg }};border-radius:6px">
+                        <span style="color:{{ rr.iconColor }};display:inline-flex;font-size:16px;margin-top:1px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="{{ rr.icon }}" hint-size="16px,16px"></x-import></span>
+                        <span><div style="font-size:13px;font-weight:500">{{ rr.rule }}</div><div style="font-size:12px;color:var(--color-text-secondary);margin-top:2px">{{ rr.note }}</div></span>
+                        <span style="margin-left:auto;flex:none"><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ rr.tagColor }}" hint-size="auto,22px">{{ rr.tagLabel }}</x-import></span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ isResultTab }}" hint-placeholder-val="{{ false }}">
+                  <div style="overflow-x:auto">
+                    <div style="display:grid;grid-template-columns:60px 1fr 100px 160px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:12px;min-width:480px">
+                      <div style="padding:8px 10px;background:var(--gray-2);color:var(--color-text-tertiary);border-bottom:1px solid var(--color-border-secondary)">id</div>
+                      <div style="padding:8px 10px;background:var(--gray-2);color:var(--color-text-tertiary);border-bottom:1px solid var(--color-border-secondary)">email</div>
+                      <div style="padding:8px 10px;background:var(--gray-2);color:var(--color-text-tertiary);border-bottom:1px solid var(--color-border-secondary)">name</div>
+                      <div style="padding:8px 10px;background:var(--gray-2);color:var(--color-text-tertiary);border-bottom:1px solid var(--color-border-secondary)">consent_at</div>
+                      <sc-for list="{{ resultRows }}" as="row" hint-placeholder-count="4">
+                        <div style="padding:8px 10px;border-bottom:1px solid var(--color-split)">{{ row.id }}</div>
+                        <div style="padding:8px 10px;border-bottom:1px solid var(--color-split)">{{ row.email }}</div>
+                        <div style="padding:8px 10px;border-bottom:1px solid var(--color-split)">{{ row.name }}</div>
+                        <div style="padding:8px 10px;border-bottom:1px solid var(--color-split)">{{ row.consent }}</div>
+                      </sc-for>
+                    </div>
+                    <div style="font-size:12px;color:var(--color-text-tertiary);margin-top:10px">4 rows · 0.08s · LIMIT 100 적용됨</div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ isMsgTab }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:12px;line-height:1.9;color:var(--color-text-secondary)">
+                    <div><span style="color:var(--green-7)">✓</span> 승인 요청 REQ-1043 연결됨 (마케팅 캠페인)</div>
+                    <div><span style="color:var(--green-7)">✓</span> 규칙 2건 통과 · 1건 경고</div>
+                    <div><span style="color:var(--gold-7)">⚠</span> LIMIT 100 — 권장 최대 1,000 이내</div>
+                    <div><span style="color:var(--color-text-tertiary)">·</span> 자동 저장됨 2026-07-24 14:32</div>
+                  </div>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+          <!-- AI panel -->
+          <sc-if value="{{ aiOpen }}" hint-placeholder-val="{{ true }}">
+            <div style="width:360px;flex:none;background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+              <div style="padding:14px 16px;border-bottom:1px solid var(--color-border-secondary);display:flex;align-items:center;gap:10px">
+                <span style="width:28px;height:28px;flex:none;border-radius:8px;background:rgba(22,119,255,.12);color:#1677ff;display:flex;align-items:center;justify-content:center"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="robot" hint-size="16px,16px"></x-import></span>
+                <div style="flex:1"><div style="font-weight:600;font-size:14px">AI 에이전트</div><div style="font-size:11px;color:var(--color-text-tertiary)">승인 요건·규칙 기반 쿼리 생성</div></div>
+                <span onClick="{{ toggleAi }}" style="cursor:pointer;color:var(--color-text-tertiary);display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="close" hint-size="14px,14px"></x-import></span>
+              </div>
+              <div style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:16px">
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Welcome" variant="filled" title="AI 에이전트" description="조회할 데이터를 자연어로 설명하면 승인 요건과 규칙에 맞는 SQL을 제안해 드립니다." hint-size="100%,auto"></x-import>
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.BubbleList" gap="16" hint-size="100%,auto">
+                  <sc-for list="{{ aiList }}" as="m" hint-placeholder-count="1">
+                    <x-import component-from-global-scope="AntDesignSystem_b19dda.Bubble" placement="{{ m.placement }}" variant="filled" content="{{ m.text }}" hint-size="100%,auto"></x-import>
+                    <sc-if value="{{ m.hasSql }}" hint-placeholder-val="{{ false }}">
+                      <div style="align-self:flex-start;max-width:90%;background:#0b1220;border-radius:8px;overflow:hidden">
+                        <pre style="margin:0;padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:12px;line-height:1.6;color:#e6edf3;white-space:pre-wrap;overflow-wrap:break-word">{{ m.sql }}</pre>
+                        <div style="padding:8px 12px;background:rgba(255,255,255,.04);display:flex;justify-content:flex-end">
+                          <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="primary" size="small" icon-name="check" hint-size="auto,24px" onClick="{{ m.onApply }}">에디터에 적용</x-import>
+                        </div>
+                      </div>
+                    </sc-if>
+                  </sc-for>
+                </x-import>
+              </div>
+              <div style="flex:none;padding:12px 16px;border-top:1px solid var(--color-border-secondary);display:flex;flex-direction:column;gap:12px">
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Prompts" items="{{ promptItems }}" onItemClick="{{ onPromptClick }}" wrap="{{ true }}" hint-size="100%,auto"></x-import>
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Sender" value="{{ aiInput }}" onChange="{{ onAiInputVal }}" onSubmit="{{ onAiSubmit }}" placeholder="원하는 데이터를 설명하세요" hint-size="100%,auto"></x-import>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- ============ SAVED QUERIES ============ -->
+      <sc-if value="{{ isQueries }}" hint-placeholder-val="{{ true }}">
+        <div style="animation:qgFade .2s">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <div style="width:220px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Input" prefix-icon="search" placeholder="이름·DB·작성자 검색" value="{{ qSearch }}" onChange="{{ onQSearch }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:140px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ qStatusOptions }}" value="{{ qStatus }}" onChange="{{ onQStatus }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:150px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ qVendorOptions }}" value="{{ qVendor }}" onChange="{{ onQVendor }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:140px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ qAuthorOptions }}" value="{{ qAuthor }}" onChange="{{ onQAuthor }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:150px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ qRuleOptions }}" value="{{ qRule }}" onChange="{{ onQRule }}" hint-size="100%,32px"></x-import></div>
+            </div>
+            <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="primary" icon-name="plus" hint-size="auto,32px" onClick="{{ goNewQuery }}">새 쿼리 작성</x-import>
+          </div>
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:2fr 1fr 1.2fr 1fr 1fr 1fr 1fr 90px;gap:0;padding:12px 20px;border-bottom:1px solid var(--color-border-secondary);font-size:12px;color:var(--color-text-tertiary);font-weight:500">
+              <span>쿼리 이름</span><span>벤더</span><span>데이터베이스</span><span>작성자</span><span>승인 상태</span><span>규칙 검사</span><span>수정일</span><span></span>
+            </div>
+            <sc-for list="{{ savedQueries }}" as="q" hint-placeholder-count="5">
+              <div style="display:grid;grid-template-columns:2fr 1fr 1.2fr 1fr 1fr 1fr 1fr 90px;gap:0;padding:14px 20px;border-bottom:1px solid var(--color-split);align-items:center" style-hover="{{ hoverTableRow }}">
+                <span style="display:flex;align-items:center;gap:10px;min-width:0">
+                  <span style="color:var(--color-text-tertiary);display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="file" hint-size="15px,15px"></x-import></span>
+                  <span onClick="{{ q.onDetail }}" style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-link);cursor:pointer" style-hover="{{ hoverChip }}">{{ q.name }}</span>
+                </span>
+                <span><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ q.vendorColor }}" hint-size="auto,22px">{{ q.vendor }}</x-import></span>
+                <span style="font-size:13px;color:var(--color-text-secondary);font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">{{ q.db }}</span>
+                <span style="font-size:13px;color:var(--color-text-secondary)">{{ q.author }}</span>
+                <span><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ q.statusColor }}" hint-size="auto,22px">{{ q.statusLabel }}</x-import></span>
+                <span style="display:flex;align-items:center;gap:6px;font-size:13px;color:{{ q.ruleTextColor }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="{{ q.ruleIcon }}" hint-size="14px,14px"></x-import>{{ q.ruleLabel }}</span>
+                <span style="font-size:13px;color:var(--color-text-tertiary)">{{ q.updated }}</span>
+                <span style="display:flex;gap:4px;justify-content:flex-end">
+                  <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="text" size="small" icon-name="eye" hint-size="24px,24px" onClick="{{ q.onDetail }}"></x-import>
+                  <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="text" size="small" icon-name="edit" hint-size="24px,24px" onClick="{{ q.onOpen }}"></x-import>
+                  <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="text" size="small" icon-name="copy" hint-size="24px,24px"></x-import>
+                </span>
+              </div>
+            </sc-for>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-top:1px solid var(--color-split)">
+              <span style="font-size:13px;color:var(--color-text-tertiary)">{{ savedPager.rangeText }}</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span onClick="{{ savedPager.onPrev }}" style="{{ savedPager.prevStyle }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="left" hint-size="12px,12px"></x-import></span>
+                <sc-for list="{{ savedPager.nums }}" as="pg" hint-placeholder-count="2"><span onClick="{{ pg.onClick }}" style="{{ pg.style }}">{{ pg.n }}</span></sc-for>
+                <span onClick="{{ savedPager.onNext }}" style="{{ savedPager.nextStyle }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="right" hint-size="12px,12px"></x-import></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ APPROVALS ============ -->
+      <sc-if value="{{ isApprovals }}" hint-placeholder-val="{{ true }}">
+        <div style="animation:qgFade .2s;max-width:960px">
+          <div style="display:flex;gap:2px;border-bottom:1px solid var(--color-border-secondary);margin-bottom:20px">
+            <sc-for list="{{ apprTabs }}" as="at" hint-placeholder-count="2">
+              <div onClick="{{ at.onClick }}" style="{{ at.style }}">{{ at.label }}</div>
+            </sc-for>
+          </div>
+          <!-- request list -->
+          <sc-if value="{{ isApprList }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+              <div style="width:240px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Input" prefix-icon="search" placeholder="요청번호·목적 검색" value="{{ apprSearch }}" onChange="{{ onApprSearch }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:140px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ apprStatusOptions }}" value="{{ apprStatus }}" onChange="{{ onApprStatus }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:150px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ apprRequesterOptions }}" value="{{ apprRequester }}" onChange="{{ onApprRequester }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:220px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ apprApproverOptions }}" value="{{ apprApprover }}" onChange="{{ onApprApprover }}" hint-size="100%,32px"></x-import></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:14px">
+              <sc-for list="{{ approvals }}" as="a" hint-placeholder-count="3">
+                <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;padding:18px 20px">
+                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                    <div style="min-width:0">
+                      <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+                        <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:12px;color:var(--color-text-tertiary)">{{ a.id }}</span>
+                        <x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ a.statusColor }}" hint-size="auto,22px">{{ a.statusLabel }}</x-import>
+                      </div>
+                      <div style="font-size:15px;font-weight:600;color:var(--color-text-heading)">{{ a.purpose }}</div>
+                    </div>
+                    <div style="text-align:right;flex:none"><div style="font-size:12px;color:var(--color-text-tertiary)">요청일</div><div style="font-size:13px">{{ a.date }}</div></div>
+                  </div>
+                  <div style="display:flex;gap:32px;margin-top:14px;flex-wrap:wrap">
+                    <div><div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:4px">요청자</div><div style="font-size:13px">{{ a.requester }}</div></div>
+                    <div><div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:4px">승인자 (상위 조직장)</div><div style="font-size:13px">{{ a.approver }}</div></div>
+                    <div style="min-width:0"><div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:4px">조회 테이블</div><div style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:12px;color:var(--color-text-secondary)">{{ a.tablesText }}</div></div>
+                  </div>
+                  <div style="display:flex;gap:6px;margin-top:14px;flex-wrap:wrap">
+                    <sc-for list="{{ a.reqTags }}" as="rt" hint-placeholder-count="2"><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="geekblue" hint-size="auto,22px">{{ rt.label }}</x-import></sc-for>
+                  </div>
+                  <sc-if value="{{ a.isPending }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;gap:8px;margin-top:16px;padding-top:14px;border-top:1px solid var(--color-split);justify-content:flex-end;align-items:center">
+                      <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" size="small" hint-size="auto,24px" onClick="{{ a.onCancel }}">요청 취소</x-import>
+                      <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" size="small" danger="{{ true }}" hint-size="auto,24px">반려</x-import>
+                      <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" size="small" type="primary" icon-name="check" hint-size="auto,24px">승인</x-import>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px">
+              <span style="font-size:13px;color:var(--color-text-tertiary)">{{ apprPager.rangeText }}</span>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span onClick="{{ apprPager.onPrev }}" style="{{ apprPager.prevStyle }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="left" hint-size="12px,12px"></x-import></span>
+                <sc-for list="{{ apprPager.nums }}" as="pg" hint-placeholder-count="2"><span onClick="{{ pg.onClick }}" style="{{ pg.style }}">{{ pg.n }}</span></sc-for>
+                <span onClick="{{ apprPager.onNext }}" style="{{ apprPager.nextStyle }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="right" hint-size="12px,12px"></x-import></span>
+              </div>
+            </div>
+          </sc-if>
+          <!-- new request form -->
+          <sc-if value="{{ isApprNew }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;padding:28px 32px">
+              <div style="font-size:16px;font-weight:600;margin-bottom:6px">쿼리 작성 요청서</div>
+              <div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:24px">요건을 제출하면 지정된 상위 조직장의 승인 후 쿼리 작성이 가능합니다.</div>
+
+              <div style="margin-bottom:20px">
+                <label style="display:block;font-size:14px;font-weight:500;margin-bottom:8px">쿼리 목적 <span style="color:var(--color-error)">*</span></label>
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Input" placeholder="예: Q3 마케팅 캠페인 대상자 추출" hint-size="100%,32px"></x-import>
+              </div>
+
+              <div style="margin-bottom:20px">
+                <label style="display:block;font-size:14px;font-weight:500;margin-bottom:8px">조회 대상 테이블 · 적용 규칙 <span style="color:var(--color-error)">*</span></label>
+                <div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:10px">테이블을 선택하면 연결된 규칙이 펼쳐집니다. 함께 적용할 규칙을 선택하세요.</div>
+                <div style="display:flex;flex-direction:column;gap:10px">
+                  <sc-for list="{{ reqTableList }}" as="t" hint-placeholder-count="5">
+                    <div style="{{ t.cardStyle }}">
+                      <div onClick="{{ t.onToggle }}" style="{{ t.headerStyle }}" style-hover="{{ hoverTableRow }}">
+                        <span style="width:92px;flex:none"><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ t.vendorColor }}" hint-size="auto,22px">{{ t.vendor }}</x-import></span>
+                        <span style="display:flex;flex-direction:column;min-width:0;flex:1">
+                          <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px;color:var(--color-text)">{{ t.db }}.{{ t.table }}</span>
+                          <span style="font-size:11px;color:var(--color-text-tertiary)">{{ t.ruleCountLabel }}</span>
+                        </span>
+                        <sc-if value="{{ t.selected }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;color:var(--color-primary)"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="check" hint-size="15px,15px"></x-import></span></sc-if>
+                      </div>
+                      <sc-if value="{{ t.selected }}" hint-placeholder-val="{{ false }}">
+                        <div style="padding:10px 12px 12px;border-top:1px solid var(--color-border-secondary);background:var(--gray-2);display:flex;flex-direction:column;gap:8px">
+                          <sc-for list="{{ t.rules }}" as="r" hint-placeholder-count="2">
+                            <div onClick="{{ r.onToggle }}" style="{{ r.style }}">
+                              <x-import component-from-global-scope="AntDesignSystem_b19dda.Checkbox" checked="{{ r.checked }}" hint-size="16px,16px"></x-import>
+                              <span style="flex:1;min-width:0;font-size:13px;font-weight:500">{{ r.name }}</span>
+                              <sc-if value="{{ r.global }}" hint-placeholder-val="{{ false }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="gold" hint-size="auto,22px">전역</x-import></sc-if>
+                              <x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ r.sevColor }}" hint-size="auto,22px">{{ r.sevLabel }}</x-import>
+                            </div>
+                          </sc-for>
+                          <sc-if value="{{ t.noRules }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:var(--color-text-tertiary);padding:2px">이 테이블에 연결된 규칙이 없습니다.</div></sc-if>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+
+              <div style="margin-bottom:20px">
+                <label style="display:block;font-size:14px;font-weight:500;margin-bottom:12px">비즈니스 요건 (해당 항목 체크)</label>
+                <div style="display:flex;flex-direction:column;gap:14px">
+                  <sc-for list="{{ reqCheckList }}" as="c" hint-placeholder-count="5">
+                    <div onClick="{{ c.onToggle }}" style="{{ c.style }}">
+                      <x-import component-from-global-scope="AntDesignSystem_b19dda.Checkbox" checked="{{ c.checked }}" hint-size="16px,16px"></x-import>
+                      <span style="min-width:0"><div style="font-size:14px;font-weight:500">{{ c.label }}</div><div style="font-size:12px;color:var(--color-text-tertiary);margin-top:2px">{{ c.desc }}</div></span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+
+              <div style="margin-bottom:20px">
+                <label style="display:block;font-size:14px;font-weight:500;margin-bottom:8px">승인 라인 (순차 승인)</label>
+                <div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:12px">위에서부터 순서대로 승인이 진행됩니다</div>
+                <div style="display:flex;flex-direction:column;gap:0">
+                  <sc-for list="{{ reqApproverList }}" as="ap" hint-placeholder-count="2">
+                    <div>
+                      <div style="display:flex;align-items:center;gap:12px;background:var(--gray-2);border:1px solid var(--color-border-secondary);border-radius:8px;padding:12px 14px">
+                        <span style="width:24px;height:24px;flex:none;border-radius:50%;background:var(--color-primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600">{{ ap.step }}</span>
+                        <span style="width:34px;height:34px;flex:none;border-radius:50%;background:{{ ap.color }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600">{{ ap.initial }}</span>
+                        <span style="flex:1;min-width:0"><div style="font-size:14px;font-weight:500">{{ ap.name }}</div><div style="font-size:12px;color:var(--color-text-tertiary)">{{ ap.role }}</div></span>
+                        <span style="font-size:11px;color:var(--color-text-tertiary)">{{ ap.stepLabel }}</span>
+                        <sc-if value="{{ ap.canRemove }}" hint-placeholder-val="{{ false }}"><span onClick="{{ ap.onRemove }}" style="cursor:pointer;color:var(--color-text-tertiary);display:inline-flex" style-hover="{{ hoverDanger }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="delete" hint-size="15px,15px"></x-import></span></sc-if>
+                      </div>
+                      <sc-if value="{{ ap.showArrow }}" hint-placeholder-val="{{ false }}"><div style="display:flex;justify-content:center;padding:6px 0;color:var(--color-text-quaternary)"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="down" hint-size="14px,14px"></x-import></div></sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="margin-top:12px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="dashed" block="{{ true }}" icon-name="plus" hint-size="100%,32px" onClick="{{ addApprover }}">승인자 추가</x-import></div>
+              </div>
+
+              <div style="display:flex;gap:10px;justify-content:flex-end">
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" hint-size="auto,32px" onClick="{{ cancelReq }}">취소</x-import>
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="primary" icon-name="upload" hint-size="auto,32px" onClick="{{ submitReq }}">승인 요청 제출</x-import>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- ============ RULES ============ -->
+      <sc-if value="{{ isRules }}" hint-placeholder-val="{{ true }}">
+        <div style="animation:qgFade .2s;display:grid;grid-template-columns:280px 1fr 320px;gap:16px;height:100%;min-height:580px">
+          <!-- rule list -->
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:14px 16px;border-bottom:1px solid var(--color-border-secondary);display:flex;align-items:center;justify-content:space-between">
+              <span style="font-weight:600;font-size:14px">규칙 목록</span>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" size="small" type="text" icon-name="plus" hint-size="24px,24px"></x-import>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:8px">
+              <sc-for list="{{ ruleList }}" as="r" hint-placeholder-count="3">
+                <div onClick="{{ r.onClick }}" style="{{ r.style }}" style-hover="{{ hoverRow }}">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="width:8px;height:8px;border-radius:50%;background:{{ r.dotColor }};flex:none"></span>
+                    <span style="font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.name }}</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding-left:16px">
+                    <x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ r.scopeColor }}" hint-size="auto,22px">{{ r.scopeLabel }}</x-import>
+                    <span style="font-size:11px;color:var(--color-text-tertiary)">{{ r.hits }}회 위반 감지</span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <!-- builder -->
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:16px 20px;border-bottom:1px solid var(--color-border-secondary)">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px">
+                <span style="font-size:15px;font-weight:600">{{ ruleName }}</span>
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ severityColor }}" hint-size="auto,22px">{{ severityLabel }}</x-import>
+              </div>
+              <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+                <div style="min-width:220px"><label style="display:block;font-size:12px;color:var(--color-text-tertiary);margin-bottom:6px">적용 범위</label><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ scopeOptions }}" value="{{ ruleScope }}" onChange="{{ setRuleScope }}" hint-size="100%,32px"></x-import></div>
+                <div style="flex:1;min-width:240px"><label style="display:block;font-size:12px;color:var(--color-text-tertiary);margin-bottom:6px">대상 서버 (클러스터)</label>
+                <sc-if value="{{ ruleScopeGlobal }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;gap:6px;min-height:32px;font-size:13px;color:var(--color-text-tertiary)"><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="gold" hint-size="auto,22px">전체 서버</x-import>전역 규칙 · 모든 서버에 적용</div></sc-if>
+                <sc-if value="{{ ruleScopeScoped }}" hint-placeholder-val="{{ true }}"><div>
+                  <x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ serverOptions }}" value="{{ ruleServer }}" onChange="{{ setRuleServer }}" hint-size="100%,32px"></x-import>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--color-text-tertiary)">
+                    <span style="display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="appstore" hint-size="13px,13px"></x-import></span>
+                    <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">{{ serverHost }}</span>
+                    <span>·</span><span>{{ serverCluster }}</span><span>·</span><span>{{ serverNodes }}</span>
+                  </div>
+                  <div style="font-size:11px;color:var(--color-text-quaternary);margin-top:6px">테이블은 각 조건의 <b>대상</b>에서 이 서버 내 데이터베이스·테이블로 선택합니다. 서버 간 조인은 지원하지 않습니다.</div>
+                </div></sc-if></div>
+              </div>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:20px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px">
+                <span style="font-size:13px;font-weight:500;color:var(--color-text-secondary)">{{ ruleModeHint }}</span>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="font-size:12px;color:var(--color-text-tertiary)">편집 모드</span>
+                  <div style="display:flex;border:1px solid var(--color-border);border-radius:6px;overflow:hidden">
+                    <sc-for list="{{ modeTabs }}" as="mt" hint-placeholder-count="2"><span onClick="{{ mt.onClick }}" style="{{ mt.style }}">{{ mt.label }}</span></sc-for>
+                  </div>
+                </div>
+              </div>
+              {{ ruleTreeEl }}
+            </div>
+            <div style="flex:none;padding:14px 20px;border-top:1px solid var(--color-border-secondary);display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <sc-if value="{{ ruleInvalid }}" hint-placeholder-val="{{ false }}">
+                <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--color-error)"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="exclamation-circle" hint-size="14px,14px"></x-import>{{ ruleInvalidMsg }}</span>
+              </sc-if>
+              <sc-if value="{{ ruleValid }}" hint-placeholder-val="{{ true }}"><span></span></sc-if>
+              <div style="display:flex;gap:10px">
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" hint-size="auto,32px">테스트 실행</x-import>
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="primary" icon-name="check" disabled="{{ ruleInvalid }}" hint-size="auto,32px">규칙 저장</x-import>
+              </div>
+            </div>
+          </div>
+          <!-- IR preview -->
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:10px 16px 0;border-bottom:1px solid var(--color-border-secondary);display:flex;align-items:center;gap:2px">
+              <sc-for list="{{ irTabs }}" as="it" hint-placeholder-count="2"><div onClick="{{ it.onClick }}" style="{{ it.style }}">{{ it.label }}</div></sc-for>
+            </div>
+            <sc-if value="{{ isSummaryTab }}" hint-placeholder-val="{{ true }}">
+              <div style="flex:1;overflow:auto;padding:18px;background:#fff">{{ ruleSummaryEl }}</div>
+            </sc-if>
+            <sc-if value="{{ isIrTab }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;overflow:auto;background:#0b1220;padding:16px">{{ ruleIrTree }}</div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ ADMIN ============ -->
+      <sc-if value="{{ isAdmin }}" hint-placeholder-val="{{ true }}">
+        <div style="animation:qgFade .2s;display:grid;grid-template-columns:280px 1fr;gap:16px;height:100%;min-height:580px">
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:14px 16px;border-bottom:1px solid var(--color-border-secondary);font-weight:600;font-size:14px">사용자</div>
+            <div style="flex:1;overflow-y:auto;padding:8px">
+              <sc-for list="{{ adminUserList }}" as="u" hint-placeholder-count="4">
+                <div onClick="{{ u.onClick }}" style="{{ u.style }}" style-hover="{{ hoverRow }}">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="width:32px;height:32px;flex:none;border-radius:50%;background:{{ u.color }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">{{ u.initial }}</span>
+                    <span style="min-width:0"><div style="font-size:14px;font-weight:500">{{ u.name }}</div><div style="font-size:12px;color:var(--color-text-tertiary)">{{ u.role }}</div></span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:16px 20px;border-bottom:1px solid var(--color-border-secondary);display:flex;align-items:center;gap:12px">
+              <span style="width:38px;height:38px;flex:none;border-radius:50%;background:{{ adminUserColor }};color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600">{{ adminUserInitial }}</span>
+              <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600">{{ adminUserName }}</div><div style="font-size:12px;color:var(--color-text-tertiary)">{{ adminUserRole }} · 접근 가능한 데이터베이스·테이블을 설정하세요</div></div>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px">
+              <sc-for list="{{ adminDbs }}" as="db" hint-placeholder-count="3">
+                <div style="border:1px solid var(--color-border-secondary);border-radius:8px;overflow:hidden">
+                  <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:var(--gray-2);border-bottom:1px solid var(--color-border-secondary)">
+                    <x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ db.vendorColor }}" hint-size="auto,22px">{{ db.vendor }}</x-import>
+                    <span style="font-weight:600;font-size:14px">{{ db.name }}</span>
+                    <span style="font-size:12px;color:var(--color-text-tertiary);font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">{{ db.host }}</span>
+                    <span style="margin-left:auto;display:flex;align-items:center;gap:12px">
+                      <span style="font-size:12px;color:var(--color-text-tertiary)">{{ db.allowedText }}</span>
+                      <x-import component-from-global-scope="AntDesignSystem_b19dda.Switch" checked="{{ db.on }}" onChange="{{ db.onToggleDb }}" hint-size="44px,22px"></x-import>
+                    </span>
+                  </div>
+                  <div style="padding:10px 12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px">
+                    <sc-for list="{{ db.tables }}" as="t" hint-placeholder-count="6">
+                      <div style="{{ t.style }}">
+                        <x-import component-from-global-scope="AntDesignSystem_b19dda.Checkbox" checked="{{ t.checked }}" disabled="{{ t.disabled }}" onChange="{{ t.onToggle }}" hint-size="16px,16px"></x-import>
+                        <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.name }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ CATALOG ============ -->
+      <sc-if value="{{ isCatalog }}" hint-placeholder-val="{{ true }}">
+        <div style="animation:qgFade .2s;max-width:1040px">
+          <div style="display:flex;gap:2px;border-bottom:1px solid var(--color-border-secondary);margin-bottom:20px">
+            <sc-for list="{{ catalogTabs }}" as="ct" hint-placeholder-count="2"><div onClick="{{ ct.onClick }}" style="{{ ct.style }}">{{ ct.label }}</div></sc-for>
+          </div>
+
+          <!-- 제약 정의 -->
+          <sc-if value="{{ isCatDefs }}" hint-placeholder-val="{{ true }}">
+            <div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:16px">컬럼 타입(class)별로 제약 사항을 정의합니다. 하나의 타입에 여러 제약을 등록할 수 있고, 각 테이블 컬럼에 매핑됩니다.</div>
+            <div style="display:flex;flex-direction:column;gap:16px">
+              <sc-for list="{{ defClassSections }}" as="sec" hint-placeholder-count="3">
+                <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;overflow:hidden">
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--color-border-secondary);background:var(--gray-2)">
+                    <span style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px">{{ sec.label }}<span style="font-size:12px;color:var(--color-text-tertiary);font-weight:400">타입</span></span>
+                    <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" size="small" type="dashed" icon-name="plus" hint-size="auto,26px" onClick="{{ sec.onAdd }}">정의 추가</x-import>
+                  </div>
+                  <div>
+                    <sc-for list="{{ sec.defs }}" as="d" hint-placeholder-count="2">
+                      <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--color-split)" style-hover="{{ hoverTableRow }}">
+                        <span style="width:56px;flex:none"><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ d.kindColor }}" hint-size="auto,22px">{{ d.kindLabel }}</x-import></span>
+                        <span style="min-width:0;flex:1">
+                          <div style="font-size:14px;font-weight:500">{{ d.name }}</div>
+                          <div style="font-size:12px;color:var(--color-text-tertiary);margin-top:2px">{{ d.desc }}</div>
+                          <div style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:11px;color:var(--color-primary);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.preview }}</div>
+                        </span>
+                        <span style="font-size:11px;color:var(--color-text-tertiary);flex:none">{{ d.mappedCount }}개 컬럼 매핑</span>
+                        <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="text" size="small" icon-name="edit" hint-size="24px,24px" onClick="{{ d.onEdit }}"></x-import>
+                        <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="text" size="small" icon-name="delete" hint-size="24px,24px" onClick="{{ d.onDelete }}"></x-import>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <!-- 컬럼 매핑 -->
+          <sc-if value="{{ isCatMap }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+              <div style="width:200px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ catServerOptions }}" value="{{ catServer }}" onChange="{{ setCatServer }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:160px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ catDbOptions }}" value="{{ catDb }}" onChange="{{ setCatDb }}" hint-size="100%,32px"></x-import></div>
+              <div style="width:200px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ catTableOptions }}" value="{{ catTable }}" onChange="{{ setCatTable }}" hint-size="100%,32px"></x-import></div>
+            </div>
+            <div style="background:#fff;border:1px solid var(--color-border-secondary);border-radius:8px;overflow:hidden">
+              <div style="display:grid;grid-template-columns:1.1fr 0.9fr 2fr 110px;gap:0;padding:12px 20px;border-bottom:1px solid var(--color-border-secondary);font-size:12px;color:var(--color-text-tertiary);font-weight:500">
+                <span>컬럼</span><span>타입</span><span>매핑된 제약</span><span></span>
+              </div>
+              <sc-for list="{{ catColumns }}" as="col" hint-placeholder-count="6">
+                <div style="display:grid;grid-template-columns:1.1fr 0.9fr 2fr 110px;gap:0;padding:12px 20px;border-bottom:1px solid var(--color-split);align-items:center">
+                  <span style="display:flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px">{{ col.name }}<sc-if value="{{ col.isPii }}" hint-placeholder-val="{{ false }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="red" hint-size="auto,22px">PII</x-import></sc-if></span>
+                  <span style="font-size:12px;color:var(--color-text-secondary)">{{ col.classLabel }}</span>
+                  <span style="display:flex;flex-wrap:wrap;gap:6px">
+                    <sc-for list="{{ col.mapped }}" as="m" hint-placeholder-count="1">
+                      <span style="display:inline-flex;align-items:center;gap:4px;background:var(--color-primary-bg);border:1px solid var(--color-primary-border);border-radius:100px;padding:2px 6px 2px 10px;font-size:12px;color:var(--color-primary)">{{ m.name }}<span onClick="{{ m.onRemove }}" style="cursor:pointer;display:inline-flex;color:var(--color-primary)"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="close" hint-size="10px,10px"></x-import></span></span>
+                    </sc-for>
+                    <sc-if value="{{ col.empty }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:var(--color-text-quaternary)">매핑 없음</span></sc-if>
+                  </span>
+                  <span style="text-align:right"><x-import component-from-global-scope="AntDesignSystem_b19dda.Button" size="small" type="dashed" icon-name="plus" hint-size="auto,26px" onClick="{{ col.onAddOpen }}">매핑</x-import></span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- ============ DEF MODAL ============ -->
+      <sc-if value="{{ defModalOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ cancelDef }}" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px">
+          <div onClick="{{ stopProp }}" style="background:#fff;border-radius:8px;width:460px;max-width:100%;box-shadow:0 6px 16px rgba(0,0,0,.16);overflow:hidden">
+            <div style="padding:18px 24px;border-bottom:1px solid var(--color-border-secondary);display:flex;align-items:center;gap:10px">
+              <span style="font-size:15px;font-weight:600">제약 정의</span>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="geekblue" hint-size="auto,22px">{{ defEditingClassLabel }}</x-import>
+            </div>
+            <div style="padding:24px;display:flex;flex-direction:column;gap:16px">
+              <div><label style="display:block;font-size:13px;font-weight:500;margin-bottom:8px">강제 방식 (kind)</label><x-import component-from-global-scope="AntDesignSystem_b19dda.Select" options="{{ defKindOptions }}" value="{{ defEditingKind }}" onChange="{{ onDefKind }}" hint-size="100%,32px"></x-import><div style="font-size:12px;color:var(--color-text-tertiary);margin-top:6px">엔진 동작: {{ defEditingKindAction }}</div></div>
+              <div><label style="display:block;font-size:13px;font-weight:500;margin-bottom:8px">제약 이름 <span style="color:var(--color-error)">*</span></label><x-import component-from-global-scope="AntDesignSystem_b19dda.Input" value="{{ defEditingName }}" onChange="{{ onDefName }}" placeholder="예: 전화번호 마스킹 (010-****-1234)" hint-size="100%,32px"></x-import></div>
+              <div><label style="display:block;font-size:13px;font-weight:500;margin-bottom:8px">강제식 (expression)</label><x-import component-from-global-scope="AntDesignSystem_b19dda.Input" value="{{ defEditingExpr }}" onChange="{{ onDefExpr }}" placeholder="{col} >= NOW() - INTERVAL 90 DAY" hint-size="100%,32px"></x-import><div style="font-size:12px;color:var(--color-text-tertiary);margin-top:6px">대상 컬럼은 <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">{col}</span>, 입력값은 <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">:param</span> 으로 표기</div></div>
+              <div><label style="display:block;font-size:13px;font-weight:500;margin-bottom:8px">실행 미리보기 (IR → SQL)</label><div style="background:#0b1220;border-radius:6px;padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:12px;line-height:1.6;color:#e6edf3;white-space:pre-wrap;overflow-wrap:break-word">{{ defEditingPreview }}</div></div>
+              <div><label style="display:block;font-size:13px;font-weight:500;margin-bottom:8px">설명</label><x-import component-from-global-scope="AntDesignSystem_b19dda.Input" value="{{ defEditingDesc }}" onChange="{{ onDefDesc }}" placeholder="제약의 동작을 간단히 설명" hint-size="100%,32px"></x-import></div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;padding:16px 24px;border-top:1px solid var(--color-border-secondary)">
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" hint-size="auto,32px" onClick="{{ cancelDef }}">취소</x-import>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="primary" icon-name="check" hint-size="auto,32px" onClick="{{ saveDef }}">저장</x-import>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ MAP MODAL ============ -->
+      <sc-if value="{{ mapModalOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ cancelMap }}" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px">
+          <div onClick="{{ stopProp }}" style="background:#fff;border-radius:8px;width:480px;max-width:100%;max-height:82vh;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.16)">
+            <div style="padding:18px 24px;border-bottom:1px solid var(--color-border-secondary)">
+              <div style="font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px"><span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace">{{ mapModalCol }}</span> 제약 매핑</div>
+              <div style="font-size:12px;color:var(--color-text-tertiary);margin-top:4px">{{ mapModalClassLabel }} 타입에 등록된 제약 중에서 선택하세요</div>
+            </div>
+            <div style="padding:20px;display:flex;flex-direction:column;gap:10px">
+              <sc-for list="{{ mapChoices }}" as="mc" hint-placeholder-count="3">
+                <div onClick="{{ mc.onToggle }}" style="{{ mc.style }}">
+                  <x-import component-from-global-scope="AntDesignSystem_b19dda.Checkbox" checked="{{ mc.checked }}" hint-size="16px,16px"></x-import>
+                  <span style="min-width:0"><div style="font-size:14px;font-weight:500">{{ mc.name }}</div><div style="font-size:12px;color:var(--color-text-tertiary);margin-top:2px">{{ mc.desc }}</div></span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;padding:16px 24px;border-top:1px solid var(--color-border-secondary)">
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" hint-size="auto,32px" onClick="{{ cancelMap }}">취소</x-import>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="primary" icon-name="check" hint-size="auto,32px" onClick="{{ saveMap }}">매핑 저장</x-import>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ DETAIL MODAL ============ -->
+      <sc-if value="{{ detailOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ closeDetail }}" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px">
+          <div onClick="{{ stopProp }}" style="background:#fff;border-radius:8px;width:620px;max-width:100%;max-height:88vh;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.16)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 24px;border-bottom:1px solid var(--color-border-secondary)">
+              <span style="display:flex;align-items:center;gap:10px;min-width:0">
+                <span style="color:var(--color-text-tertiary);display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="file" hint-size="16px,16px"></x-import></span>
+                <span style="font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ detailQuery.name }}</span>
+                <x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ detailQuery.statusColor }}" hint-size="auto,22px">{{ detailQuery.statusLabel }}</x-import>
+              </span>
+              <span onClick="{{ closeDetail }}" style="cursor:pointer;color:var(--color-text-tertiary);display:inline-flex"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="close" hint-size="16px,16px"></x-import></span>
+            </div>
+            <div style="padding:24px">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px 24px;margin-bottom:22px">
+                <div><div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:6px">데이터베이스</div><div style="display:flex;align-items:center;gap:8px"><x-import component-from-global-scope="AntDesignSystem_b19dda.Tag" color="{{ detailQuery.vendorColor }}" hint-size="auto,22px">{{ detailQuery.vendor }}</x-import><span style="font-size:13px;color:var(--color-text-secondary)">{{ detailQuery.db }}</span></div></div>
+                <div><div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:6px">작성자</div><div style="font-size:14px">{{ detailQuery.author }}</div></div>
+                <div><div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:6px">규칙 검사</div><div style="display:flex;align-items:center;gap:6px;font-size:14px;color:{{ detailQuery.ruleTextColor }}"><x-import component-from-global-scope="AntDesignSystem_b19dda.Icon" name="{{ detailQuery.ruleIcon }}" hint-size="15px,15px"></x-import>{{ detailQuery.ruleLabel }}</div></div>
+                <div><div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:6px">수정일</div><div style="font-size:14px">{{ detailQuery.updated }}</div></div>
+              </div>
+              <div style="font-size:12px;color:var(--color-text-tertiary);margin-bottom:8px">쿼리 (SQL)</div>
+              <div style="background:var(--gray-2);border:1px solid var(--color-border-secondary);border-radius:8px;overflow:auto"><pre style="margin:0;padding:14px 16px;font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:13px;line-height:1.7;white-space:pre-wrap;overflow-wrap:break-word;color:var(--color-text)">{{ detailSqlCode }}</pre></div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;padding:16px 24px;border-top:1px solid var(--color-border-secondary)">
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" hint-size="auto,32px" onClick="{{ closeDetail }}">닫기</x-import>
+              <x-import component-from-global-scope="AntDesignSystem_b19dda.Button" type="primary" icon-name="edit" hint-size="auto,32px" onClick="{{ openDetailInEditor }}">에디터에서 열기</x-import>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = {
+    screen: 'databases',
+    dbKey: 'mysql-prod',
+    tableName: 'users',
+    sql: "-- 마케팅 동의 사용자 추출 (Marketing consent users)\nSELECT\n  u.id,\n  u.email,\n  u.name,\n  m.consent_at\nFROM users AS u\nJOIN marketing_consents AS m\n  ON m.user_id = u.id\nWHERE m.is_agreed = TRUE\n  AND u.created_at >= '2025-01-01'\nORDER BY m.consent_at DESC\nLIMIT 100;",
+    queryName: 'marketing_consent_users',
+    editorVendor: 'mysql',
+    connKey: 'mysql-prod',
+    showSuggest: false,
+    bottomTab: 'rulecheck',
+    aiOpen: true,
+    aiInput: '',
+    aiMessages: [],
+    apprTab: 'list',
+    qSearch: '', qStatus: 'all', qVendor: 'all', qAuthor: 'all', qRule: 'all', qPage: 1,
+    apprSearch: '', apprStatus: 'all', apprRequester: 'all', apprApprover: 'all', apprPage: 1,
+    reqChecks: { marketing: true, pii: true, mask: true, retention: false, external: false },
+    reqTables: ['t1', 't2'],
+    reqRules: ['r1', 'r2'],
+    reqApprovers: [
+      { id: 'ap1', name: '최지훈', role: '마케팅본부장', initial: '최', color: '#722ed1' },
+      { id: 'ap2', name: '한도윤', role: '데이터플랫폼장', initial: '한', color: '#1677ff' },
+    ],
+    ruleKey: 'r2',
+    cancelledIds: [],
+    detailQuery: null,
+    currentUserId: 'u1',
+    adminUser: 'u1',
+    perms: null,
+    irCollapsed: {},
+    expandedCond: 'c1',
+    matchMode: 'all',
+    ruleMode: 'basic',
+    irTab: 'summary',
+    ruleScope: 'multi',
+    ruleServer: 'mysql-prod',
+    catalogTab: 'defs',
+    defEditing: null,
+    catServer: 'mysql-prod', catDb: 'prod-main', catTable: 'users',
+    expandedDbCol: null,
+    dbDetailTab: 'constraint',
+    dbOpenConstraint: true,
+    dbOpenIndex: true,
+    mapModalKey: null, mapModalSel: [],
+    constraintDefs: [
+      { id: 'd_pii_domain', kind: 'mask', cls: 'pii', name: '도메인만 노출 (a***@x.com)', desc: '이메일 로컬파트 마스킹, 도메인만 노출', expr: "mask_domain({col})" },
+      { id: 'd_pii_phone', kind: 'mask', cls: 'pii', name: '전화번호 마스킹 (010-****-1234)', desc: '가운데 4자리 마스킹', expr: "mask_middle({col}, 4)" },
+      { id: 'd_pii_full', kind: 'mask', cls: 'pii', name: '전체 마스킹 (****)', desc: '값 전체를 마스킹 처리', expr: "'****'" },
+      { id: 'd_pii_block', kind: 'block', cls: 'pii', name: '조회 전면 차단', desc: '해당 컬럼 조회 자체를 차단', expr: "{col}" },
+      { id: 'd_bool_true', kind: 'filter', cls: 'boolean', name: '반드시 TRUE', desc: '값이 TRUE인 행만 허용', expr: "{col} = TRUE" },
+      { id: 'd_bool_false', kind: 'filter', cls: 'boolean', name: '반드시 FALSE', desc: '값이 FALSE인 행만 허용', expr: "{col} = FALSE" },
+      { id: 'd_dt_30', kind: 'filter', cls: 'datetime', name: '최근 30일 이내', desc: '조회 시점 기준 30일 이내', expr: "{col} >= NOW() - INTERVAL 30 DAY" },
+      { id: 'd_dt_90', kind: 'filter', cls: 'datetime', name: '최근 90일 이내', desc: '조회 시점 기준 90일 이내', expr: "{col} >= NOW() - INTERVAL 90 DAY" },
+      { id: 'd_dt_period', kind: 'filter', cls: 'datetime', name: '특정 기간 내', desc: '지정한 시작~종료 기간 내', expr: "{col} BETWEEN :start AND :end" },
+      { id: 'd_dt_notnull', kind: 'integrity', cls: 'datetime', name: 'NOT NULL 필수', desc: 'NULL 값 금지', expr: "{col} IS NOT NULL" },
+      { id: 'd_num_gte0', kind: 'filter', cls: 'numeric', name: '0 이상', desc: '음수 금지', expr: "{col} >= 0" },
+      { id: 'd_num_range', kind: 'filter', cls: 'numeric', name: '범위 지정 (min ~ max)', desc: '지정 범위 내 값만 허용', expr: "{col} BETWEEN :min AND :max" },
+      { id: 'd_num_max', kind: 'filter', cls: 'numeric', name: '상한 제한', desc: '지정 상한 이하', expr: "{col} <= :max" },
+      { id: 'd_num_notnull', kind: 'integrity', cls: 'numeric', name: 'NOT NULL 필수', desc: 'NULL 값 금지', expr: "{col} IS NOT NULL" },
+      { id: 'd_key_join', kind: 'join', cls: 'key', name: '참조 테이블 키로 조인', desc: '외래키로 참조 테이블과 조인', expr: "{col} = :ref_table.id" },
+      { id: 'd_key_notnull', kind: 'integrity', cls: 'key', name: 'NOT NULL 필수', desc: 'NULL 값 금지', expr: "{col} IS NOT NULL" },
+      { id: 'd_key_single', kind: 'filter', cls: 'key', name: '단일 값 제한', desc: '단일 값만 허용', expr: "{col} = :value" },
+      { id: 'd_str_eq', kind: 'filter', cls: 'string', name: '지정값과 일치', desc: '지정한 값과 정확히 일치', expr: "{col} = :value" },
+      { id: 'd_str_like', kind: 'filter', cls: 'string', name: 'LIKE 패턴 일치', desc: '지정 패턴에 매칭', expr: "{col} LIKE :pattern" },
+      { id: 'd_str_in', kind: 'filter', cls: 'string', name: 'IN 목록 포함', desc: '허용 목록에 포함', expr: "{col} IN (:list)" },
+      { id: 'd_str_notnull', kind: 'integrity', cls: 'string', name: 'NOT NULL 필수', desc: 'NULL 값 금지', expr: "{col} IS NOT NULL" },
+    ],
+    colConstraints: {
+      'prod-main/users/phone': ['d_pii_phone', 'd_pii_full', 'd_pii_block'],
+      'prod-main/users/email': ['d_pii_domain', 'd_pii_full', 'd_pii_block'],
+      'prod-main/users/name': ['d_pii_full', 'd_pii_block'],
+      'prod-main/users/ssn': ['d_pii_block', 'd_pii_full'],
+      'prod-main/marketing_consents/is_agreed': ['d_bool_true', 'd_bool_false'],
+      'prod-main/marketing_consents/user_id': ['d_key_join', 'd_key_notnull'],
+      'prod-main/marketing_consents/consent_at': ['d_dt_30', 'd_dt_90', 'd_dt_period', 'd_dt_notnull'],
+    },
+    extraReqs: [],
+    ruleTrees: {
+      r1: { id: 'g0', combinator: 'all', children: [
+        { type: 'cond', id: 'c1', op: 'must_be_masked', db: 'prod-main', table: 'users', column: 'phone', value: 'd_pii_phone' },
+        { type: 'cond', id: 'c2', op: 'must_be_masked', db: 'prod-main', table: 'users', column: 'email', value: 'd_pii_domain' },
+        { type: 'cond', id: 'c3', op: 'blocks', db: 'prod-main', table: 'users', column: 'ssn', value: 'd_pii_block' },
+      ] },
+      r2: { id: 'g0', combinator: 'all', children: [
+        { type: 'cond', id: 'c1', op: 'requires', db: 'prod-main', table: 'marketing_consents', column: 'is_agreed', value: 'd_bool_true' },
+        { type: 'cond', id: 'c2', op: 'joins', db: 'prod-main', table: 'marketing_consents', column: 'user_id', value: 'd_key_join' },
+        { type: 'cond', id: 'c3', op: 'must_be_within', db: 'prod-main', table: 'marketing_consents', column: 'consent_at', value: 'd_dt_90' },
+      ] },
+      r3: { id: 'g0', combinator: 'all', children: [
+        { type: 'cond', id: 'c1', op: 'requires', subject: 'SELECT statement', value: 'LIMIT ≤ 1000 필수' },
+        { type: 'cond', id: 'c2', op: 'blocks', subject: 'SELECT *', value: '전체 컬럼 조회 금지' },
+      ] },
+    },
+  };
+
+  navItems = [
+    { type: 'group', label: '탐색', children: [{ key: 'databases', label: '데이터베이스', icon: 'appstore' }] },
+    { type: 'group', label: '쿼리', children: [{ key: 'editor', label: '쿼리 에디터', icon: 'code' }, { key: 'queries', label: '저장된 쿼리', icon: 'file' }] },
+    { type: 'group', label: '거버넌스', children: [{ key: 'approvals', label: '승인 요청', icon: 'check-circle' }, { key: 'rules', label: '규칙 관리', icon: 'thunderbolt' }, { key: 'catalog', label: '제약 카탈로그', icon: 'bulb' }] },
+    { type: 'group', label: '관리', children: [{ key: 'admin', label: '접근 권한 관리', icon: 'key' }] },
+  ];
+
+  databases = [
+    { key: 'mysql-prod', name: 'prod-main', vendor: 'MySQL', vendorColor: 'blue', host: '10.0.2.11:3306', tables: 42 },
+    { key: 'pg-analytics', name: 'analytics-dw', vendor: 'PostgreSQL', vendorColor: 'geekblue', host: '10.0.3.4:5432', tables: 88 },
+    { key: 'trino-lake', name: 'data-lake', vendor: 'Trino', vendorColor: 'purple', host: 'trino.internal:8080', tables: 213 },
+  ];
+
+  tablesByDb = {
+    'mysql-prod': [
+      { name: 'users', rows: '2.1M' }, { name: 'orders', rows: '8.7M' }, { name: 'marketing_consents', rows: '1.4M' },
+      { name: 'payments', rows: '8.3M' }, { name: 'products', rows: '12K' }, { name: 'sessions', rows: '44M' },
+    ],
+    'pg-analytics': [
+      { name: 'dim_user', rows: '2.1M' }, { name: 'fact_orders', rows: '8.7M' }, { name: 'fact_events', rows: '312M' },
+      { name: 'dim_product', rows: '12K' }, { name: 'agg_daily_active', rows: '540' },
+    ],
+    'trino-lake': [
+      { name: 'events_raw', rows: '4.2B' }, { name: 'clickstream', rows: '1.1B' }, { name: 'ad_impressions', rows: '820M' },
+      { name: 'user_profiles', rows: '2.1M' }, { name: 'revenue_daily', rows: '900' },
+    ],
+  };
+
+  columnsByTable = {
+    users: [
+      { name: 'id', type: 'BIGINT', keys: ['PK'], isPii: false, nullable: false, def: 'AUTO_INCREMENT', comment: '사용자 고유 ID' },
+      { name: 'email', type: 'VARCHAR(255)', keys: ['UK'], isPii: true, nullable: false, def: null, comment: '로그인 이메일 · 유니크' },
+      { name: 'name', type: 'VARCHAR(100)', keys: [], isPii: true, nullable: false, def: null, comment: '실명' },
+      { name: 'phone', type: 'VARCHAR(20)', keys: ['UK'], isPii: true, nullable: true, def: null, comment: '휴대폰 번호 · 유니크' },
+      { name: 'ssn', type: 'VARCHAR(13)', keys: [], isPii: true, nullable: true, def: null, comment: '주민등록번호' },
+      { name: 'status', type: 'VARCHAR(20)', keys: ['IDX'], isPii: false, nullable: false, def: "'active'", comment: 'active / dormant' },
+      { name: 'created_at', type: 'DATETIME', keys: ['IDX'], isPii: false, nullable: false, def: 'CURRENT_TIMESTAMP', comment: '가입 일시' },
+    ],
+    marketing_consents: [
+      { name: 'id', type: 'BIGINT', keys: ['PK'], isPii: false, nullable: false, def: 'AUTO_INCREMENT', comment: '' },
+      { name: 'user_id', type: 'BIGINT', keys: ['FK', 'UK'], isPii: false, nullable: false, def: null, comment: 'users.id 참조 · 유니크 제약' },
+      { name: 'is_agreed', type: 'BOOLEAN', keys: [], isPii: false, nullable: false, def: 'FALSE', comment: '수신 동의 여부' },
+      { name: 'channel', type: 'VARCHAR(20)', keys: ['IDX'], isPii: false, nullable: false, def: "'email'", comment: 'email / sms / push' },
+      { name: 'consent_at', type: 'DATETIME', keys: [], isPii: false, nullable: true, def: null, comment: '동의 일시' },
+    ],
+    orders: [
+      { name: 'id', type: 'BIGINT', keys: ['PK'], isPii: false, nullable: false, def: 'AUTO_INCREMENT', comment: '' },
+      { name: 'user_id', type: 'BIGINT', keys: ['FK'], isPii: false, nullable: false, def: null, comment: 'users.id 참조' },
+      { name: 'amount', type: 'DECIMAL(12,2)', keys: ['CHECK'], isPii: false, nullable: false, def: '0.00', comment: 'CHECK (amount >= 0)' },
+      { name: 'status', type: 'VARCHAR(20)', keys: ['IDX'], isPii: false, nullable: false, def: "'paid'", comment: 'paid / refunded' },
+      { name: 'ordered_at', type: 'DATETIME', keys: ['PARTITION'], isPii: false, nullable: false, def: 'CURRENT_TIMESTAMP', comment: 'RANGE 파티션 키 (월별)' },
+    ],
+    events_raw: [
+      { name: 'event_id', type: 'VARCHAR', keys: ['PK'], isPii: false, nullable: false, def: null, comment: 'UUID' },
+      { name: 'user_id', type: 'BIGINT', keys: ['IDX'], isPii: false, nullable: true, def: null, comment: '' },
+      { name: 'event_type', type: 'VARCHAR', keys: [], isPii: false, nullable: false, def: null, comment: 'click / view / purchase' },
+      { name: 'payload', type: 'JSON', keys: [], isPii: false, nullable: true, def: null, comment: '이벤트 속성' },
+      { name: 'dt', type: 'DATE', keys: ['PARTITION'], isPii: false, nullable: false, def: null, comment: 'Hive 파티션 키 (일자)' },
+      { name: 'hour', type: 'INTEGER', keys: ['PARTITION'], isPii: false, nullable: false, def: '0', comment: 'Hive 파티션 키 (시간)' },
+    ],
+  };
+  genericCols = [
+    { name: 'id', type: 'BIGINT', keys: ['PK'], isPii: false, comment: '' },
+    { name: 'name', type: 'VARCHAR(255)', keys: [], isPii: false, comment: '' },
+    { name: 'value', type: 'DOUBLE', keys: [], isPii: false, comment: '' },
+    { name: 'dt', type: 'DATE', keys: ['PARTITION'], isPii: false, comment: '파티션 키' },
+    { name: 'updated_at', type: 'TIMESTAMP', keys: ['IDX'], isPii: false, comment: '' },
+  ];
+
+  tableComments = {
+    users: '서비스 가입 사용자 마스터',
+    marketing_consents: '마케팅 수신 동의 이력',
+    orders: '주문 내역',
+    events_raw: '원본 이벤트 로그 (파티셔닝)',
+  };
+  tableMetaByName = {
+    users: { '엔진': 'InnoDB', '인코딩': 'utf8mb4', '정렬': 'utf8mb4_0900_ai_ci', '로우': '2.1M' },
+    marketing_consents: { '엔진': 'InnoDB', '인코딩': 'utf8mb4', '정렬': 'utf8mb4_0900_ai_ci', '로우': '1.4M' },
+    orders: { '엔진': 'InnoDB', '인코딩': 'utf8mb4', '정렬': 'utf8mb4_0900_ai_ci', '로우': '8.7M' },
+    events_raw: { '포맷': 'Parquet', '압축': 'ZSTD', '파티션': 'dt / hour', '로우': '4.2B' },
+  };
+  genericTableMeta = { '엔진': 'InnoDB', '인코딩': 'utf8mb4', '로우': '—' };
+
+  // 컬럼 타입(class) 라벨
+  kindMeta = {
+    mask: { label: '마스킹', color: 'purple', action: 'SELECT 절의 대상 컬럼을 변형식으로 치환', skeleton: 'SELECT …, {expr} AS {col} FROM …' },
+    filter: { label: '필터', color: 'blue', action: 'WHERE 절에 술어를 추가해 미충족 행을 제외', skeleton: 'SELECT … FROM … WHERE {expr}' },
+    block: { label: '차단', color: 'red', action: '쿼리가 이 컬럼을 참조하면 실행 자체를 거부', skeleton: '-- REJECT: 컬럼 {col} 참조 감지 → 쿼리 차단' },
+    join: { label: '조인', color: 'cyan', action: '필수 조인이 존재하는지 검사, 없으면 거부', skeleton: 'SELECT … FROM … JOIN … ON {expr}' },
+    integrity: { label: '무결성', color: 'geekblue', action: 'WHERE 절에 무결성 술어를 추가', skeleton: 'SELECT … FROM … WHERE {expr}' },
+  };
+  classLabels = { pii: '개인정보', boolean: 'BOOLEAN', datetime: '날짜/시간', numeric: '숫자', key: '키/조인', string: '문자열' };
+  enforcePreview(kind, expr, col) {
+    const m = this.kindMeta[kind]; if (!m) return '';
+    const c = col || '{col}';
+    return (m.skeleton || '{expr}').split('{expr}').join((expr || c).split('{col}').join(c)).split('{col}').join(c);
+  }
+  columnsFor(table) { return this.columnsByTable[table] || this.genericCols; }
+  colClass(col) {
+    if (!col) return 'string';
+    if (col.isPii) return 'pii';
+    const t = (col.type || '').toUpperCase();
+    if (t.includes('BOOL')) return 'boolean';
+    if (/DATE|TIME|TIMESTAMP/.test(t)) return 'datetime';
+    if (/INT|DECIMAL|DOUBLE|NUMERIC|FLOAT/.test(t)) {
+      if ((col.keys || []).some(k => k === 'PK' || k === 'FK') || /(^id$|_id$)/.test(col.name)) return 'key';
+      return 'numeric';
+    }
+    return 'string';
+  }
+  defById(id) { return (this.state.constraintDefs || []).find(d => d.id === id); }
+  defsByClass(cls) { return (this.state.constraintDefs || []).filter(d => d.cls === cls); }
+  // db/table/column 에 매핑된 제약 정의 → 규칙 빌더 옵션
+  constraintOptionsFor(db, table, columnName) {
+    const col = this.columnsFor(table).find(c => c.name === columnName);
+    const cls = this.colClass(col);
+    const key = db + '/' + table + '/' + columnName;
+    const ids = (this.state.colConstraints || {})[key] || [];
+    const options = ids.map(id => this.defById(id)).filter(Boolean).map(d => ({ value: d.id, label: d.name }));
+    return { options, cls, type: col ? col.type : null, mapped: ids.length };
+  }
+  condValueLabel(node) {
+    if (node.db || node.table) { const d = this.defById(node.value); return d ? d.name : (node.value || ''); }
+    return node.value || '';
+  }
+
+  indexesByTable = {
+    users: [
+      { type: 'PRIMARY', name: 'pk_users', columns: ['id'], note: '' },
+      { type: 'UNIQUE', name: 'uk_users_email', columns: ['email'], note: '' },
+      { type: 'UNIQUE', name: 'uk_users_phone', columns: ['phone'], note: '' },
+      { type: 'INDEX', name: 'idx_users_status_created', columns: ['status', 'created_at'], note: '복합 인덱스' },
+    ],
+    marketing_consents: [
+      { type: 'PRIMARY', name: 'pk_mc', columns: ['id'], note: '' },
+      { type: 'UNIQUE', name: 'uk_mc_user_channel', columns: ['user_id', 'channel'], note: '복합 유니크 · 사용자당 채널 1건' },
+      { type: 'FOREIGN', name: 'fk_mc_user', columns: ['user_id'], note: '→ users.id' },
+      { type: 'INDEX', name: 'idx_mc_channel', columns: ['channel'], note: '' },
+    ],
+    orders: [
+      { type: 'PRIMARY', name: 'pk_orders', columns: ['id'], note: '' },
+      { type: 'FOREIGN', name: 'fk_orders_user', columns: ['user_id'], note: '→ users.id' },
+      { type: 'UNIQUE', name: 'uk_orders_user_ordered', columns: ['user_id', 'ordered_at'], note: '복합 유니크' },
+      { type: 'INDEX', name: 'idx_orders_status', columns: ['status'], note: '' },
+      { type: 'PARTITION', name: 'p_range_ordered', columns: ['ordered_at'], note: 'RANGE · 월별' },
+    ],
+    events_raw: [
+      { type: 'PARTITION', name: 'hive_part', columns: ['dt', 'hour'], note: 'Hive 복합 파티션' },
+      { type: 'INDEX', name: 'bloom_user_id', columns: ['user_id'], note: 'Bloom filter (Trino)' },
+      { type: 'INDEX', name: 'bloom_event_type', columns: ['event_type'], note: 'Bloom filter (Trino)' },
+    ],
+  };
+  genericIndexes = [
+    { type: 'PRIMARY', name: 'pk', columns: ['id'], note: '' },
+    { type: 'PARTITION', name: 'p_dt', columns: ['dt'], note: '일자 파티션' },
+  ];
+
+  baseApprovals = [
+    { id: 'REQ-1043', purpose: 'Q3 마케팅 캠페인 대상자 추출', requester: '김도현', approver: '최지훈 (마케팅본부장)', status: 'pending', reqs: ['마케팅 동의', '개인정보 포함'], date: '2026-07-23', tables: ['users', 'marketing_consents'] },
+    { id: 'REQ-1041', purpose: 'VIP 고객 리텐션 분석', requester: '이서연', approver: '한도윤 (데이터플랫폼장)', status: 'approved', reqs: ['개인정보 포함', '민감정보 마스킹'], date: '2026-07-21', tables: ['users', 'orders', 'payments'] },
+    { id: 'REQ-1038', purpose: '환불 이상거래 감사', requester: '정하윤', approver: '한도윤 (데이터플랫폼장)', status: 'rejected', reqs: ['민감정보 마스킹'], date: '2026-07-18', tables: ['payments', 'orders'] },
+  ];
+
+  businessReqs = [
+    { key: 'marketing', label: '마케팅 수신 동의자 한정', desc: 'is_agreed = TRUE 인 사용자만 조회' },
+    { key: 'pii', label: '개인정보(PII) 포함', desc: '이메일·전화번호 등 식별정보 조회 필요' },
+    { key: 'mask', label: '민감정보 마스킹 적용', desc: '주민번호·카드번호는 마스킹 처리' },
+    { key: 'retention', label: '보관기간 준수', desc: '수집 후 최대 90일 데이터만 사용' },
+    { key: 'external', label: '외부 반출 목적', desc: '제3자 제공/반출 검토 필요' },
+  ];
+  tableOptions = ['users', 'marketing_consents', 'orders', 'payments', 'products', 'sessions'];
+
+  reqTableOptions = [
+    { id: 't1', vendor: 'MySQL', vendorColor: 'blue', db: 'prod-main', host: '10.0.2.11:3306', table: 'users' },
+    { id: 't2', vendor: 'MySQL', vendorColor: 'blue', db: 'prod-main', host: '10.0.2.11:3306', table: 'marketing_consents' },
+    { id: 't3', vendor: 'MySQL', vendorColor: 'blue', db: 'prod-main', host: '10.0.2.11:3306', table: 'orders' },
+    { id: 't4', vendor: 'PostgreSQL', vendorColor: 'geekblue', db: 'analytics-dw', host: '10.0.3.4:5432', table: 'fact_events' },
+    { id: 't5', vendor: 'Trino', vendorColor: 'purple', db: 'data-lake', host: 'trino.internal:8080', table: 'events_raw' },
+  ];
+  approverPool = [
+    { name: '최지훈', role: '마케팅본부장', initial: '최', color: '#722ed1' },
+    { name: '한도윤', role: '데이터플랫폼장', initial: '한', color: '#1677ff' },
+    { name: '서준호', role: '정보보호책임자(CISO)', initial: '서', color: '#08979c' },
+    { name: '김영은', role: '최고데이터책임자(CDO)', initial: '김', color: '#d46b08' },
+  ];
+
+  users = [
+    { id: 'u1', name: '김도현', role: '데이터 분석가', initial: '김', color: '#1677ff' },
+    { id: 'u2', name: '이서연', role: '데이터 분석가', initial: '이', color: '#722ed1' },
+    { id: 'u3', name: '박민준', role: '데이터 엔지니어', initial: '박', color: '#08979c' },
+    { id: 'u4', name: '정하윤', role: '데이터 거버넌스', initial: '정', color: '#d46b08' },
+  ];
+  buildDefaultPerms() {
+    const p = {};
+    this.users.forEach(u => {
+      p[u.id] = { dbs: {}, tables: {} };
+      this.databases.forEach(d => {
+        p[u.id].dbs[d.key] = true;
+        (this.tablesByDb[d.key] || []).forEach(t => { p[u.id].tables[d.key + '/' + t.name] = true; });
+      });
+    });
+    p.u1.dbs['trino-lake'] = false;
+    p.u1.tables['mysql-prod/payments'] = false;
+    p.u1.tables['mysql-prod/sessions'] = false;
+    p.u2.dbs['mysql-prod'] = false;
+    p.u3.dbs['pg-analytics'] = false;
+    return p;
+  }
+  toggleDbPerm(uid, dbKey) {
+    this.setState(s => {
+      const p = JSON.parse(JSON.stringify(s.perms || this.buildDefaultPerms()));
+      p[uid].dbs[dbKey] = !p[uid].dbs[dbKey];
+      return { perms: p };
+    });
+  }
+  toggleTablePerm(uid, dbKey, table) {
+    this.setState(s => {
+      const p = JSON.parse(JSON.stringify(s.perms || this.buildDefaultPerms()));
+      const k = dbKey + '/' + table;
+      p[uid].tables[k] = !p[uid].tables[k];
+      return { perms: p };
+    });
+  }
+
+  rulesMeta = [
+    { key: 'r1', name: 'PII 컬럼 마스킹 필수', scope: 'single', server: 'mysql-prod', severity: 'error', hits: 12 },
+    { key: 'r2', name: '마케팅 동의 사용자 한정', scope: 'multi', server: 'mysql-prod', severity: 'error', hits: 5 },
+    { key: 'r3', name: '대량 조회 LIMIT 강제', scope: 'global', server: null, severity: 'warning', hits: 31 },
+  ];
+
+  servers = [
+    { key: 'mysql-prod', vendor: 'MySQL', vendorColor: 'blue', host: 'proxysql.prod:6033', cluster: 'Master/Slave 프록시', nodes: '1 master · 2 replica', databases: { 'prod-main': ['users', 'orders', 'marketing_consents', 'payments', 'products', 'sessions'], 'prod-archive': ['users_archive', 'orders_archive'] } },
+    { key: 'pg-analytics', vendor: 'PostgreSQL', vendorColor: 'geekblue', host: '10.0.3.4:5432', cluster: '단일 인스턴스', nodes: '1 primary', databases: { 'analytics-dw': ['dim_user', 'fact_orders', 'fact_events', 'dim_product', 'agg_daily_active'] } },
+    { key: 'trino-lake', vendor: 'Trino', vendorColor: 'purple', host: 'trino.internal:8080', cluster: 'Coordinator/Worker', nodes: '1 coordinator · 12 worker', databases: { 'data-lake': ['events_raw', 'clickstream', 'ad_impressions', 'user_profiles', 'revenue_daily'] } },
+  ];
+
+  opMeta = {
+    requires: { label: '요건 필요', color: 'blue' },
+    joins: { label: '조인 강제', color: 'cyan' },
+    must_be_within: { label: '기간 이내', color: 'gold' },
+    must_be_masked: { label: '마스킹 필수', color: 'purple' },
+    blocks: { label: '차단', color: 'red' },
+  };
+
+  // ---------- helpers ----------
+  esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  highlight(sql) {
+    const KW = new Set(['SELECT','FROM','WHERE','JOIN','LEFT','RIGHT','INNER','OUTER','FULL','ON','GROUP','BY','ORDER','HAVING','LIMIT','OFFSET','AS','AND','OR','NOT','IN','IS','NULL','LIKE','BETWEEN','INSERT','INTO','VALUES','UPDATE','SET','DELETE','CREATE','TABLE','WITH','DISTINCT','CASE','WHEN','THEN','ELSE','END','DESC','ASC','UNION','ALL','EXISTS','TRUE','FALSE']);
+    const FN = new Set(['COUNT','SUM','AVG','MIN','MAX','COALESCE','NOW','DATE','LOWER','UPPER','CAST','ROUND','CONCAT']);
+    const re = /(--[^\n]*|\/\*[\s\S]*?\*\/)|('(?:[^']|'')*')|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)|(\s+)|([^\s])/g;
+    let out = '', m;
+    const span = (c, t, w) => `<span style="color:${c}${w ? ';font-weight:600' : ''}">${this.esc(t)}</span>`;
+    while ((m = re.exec(sql))) {
+      if (m[1]) out += span('#8c8c8c', m[1]);
+      else if (m[2]) out += span('#c41d7f', m[2]);
+      else if (m[3]) out += span('#d46b08', m[3]);
+      else if (m[4]) {
+        const up = m[4].toUpperCase();
+        if (KW.has(up)) out += span('#0958d9', m[4], true);
+        else if (FN.has(up)) out += span('#08979c', m[4]);
+        else out += this.esc(m[4]);
+      } else if (m[5]) out += this.esc(m[5]);
+      else out += this.esc(m[6]);
+    }
+    return out + '\n';
+  }
+  mockSql(text) {
+    return "-- AI 생성: " + text.slice(0, 40) + "\nSELECT u.id, u.email, u.name, m.consent_at\nFROM users AS u\nJOIN marketing_consents AS m ON m.user_id = u.id\nWHERE m.is_agreed = TRUE\n  AND m.consent_at >= NOW() - INTERVAL 30 DAY\nORDER BY m.consent_at DESC\nLIMIT 100;";
+  }
+  toggleIr(path) {
+    this.setState(s => {
+      const c = { ...(s.irCollapsed || {}) };
+      c[path] = !c[path];
+      return { irCollapsed: c };
+    });
+  }
+  jsonTree(data) {
+    const C = { key: '#c9d1d9', str: '#a5d6a4', num: '#f0a878', bool: '#79b8ff', type: '#8b98a5', badge: '#4b5566' };
+    const h = React.createElement;
+    const collapsed = this.state.irCollapsed || {};
+    const rows = [];
+    const leaf = (v) => {
+      if (typeof v === 'string') return h('span', { key: 'v', style: { color: C.str } }, '"' + v + '"');
+      if (typeof v === 'number') return h('span', { key: 'v', style: { color: C.num } }, String(v));
+      if (typeof v === 'boolean') return h('span', { key: 'v', style: { color: C.bool } }, String(v));
+      if (v === null) return h('span', { key: 'v', style: { color: C.type } }, 'null');
+      return h('span', { key: 'v' }, String(v));
+    };
+    const caret = (open, onClick) => h('span', {
+      key: 'c', onClick,
+      style: { display: 'inline-flex', width: '14px', height: '18px', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: C.type, flex: 'none', transition: 'transform .15s', transform: open ? 'none' : 'rotate(-90deg)' },
+    }, h('svg', { width: 9, height: 9, viewBox: '0 0 10 10' }, h('path', { d: 'M1 3l4 4 4-4', stroke: 'currentColor', strokeWidth: 1.4, fill: 'none', strokeLinecap: 'round', strokeLinejoin: 'round' })));
+    const keyLabel = (k) => k != null ? h('span', { key: 'k', style: { color: C.key } }, k) : null;
+    const typeBadge = (t) => h('span', { key: 't', style: { color: C.type, fontSize: '11px', marginLeft: '6px' } }, t);
+    const row = (indent, expandable, path, kids, hoverable) => h('div', {
+      key: 'r' + path,
+      style: { display: 'flex', alignItems: 'center', minHeight: '22px', lineHeight: '1.6', paddingLeft: (indent * 16 + (expandable ? 0 : 14)) + 'px', borderRadius: '4px' },
+    }, kids);
+    const walk = (d, indent, k, path) => {
+      const isArr = Array.isArray(d);
+      const isObj = d && typeof d === 'object';
+      if (isArr || isObj) {
+        const open = !collapsed[path];
+        const keys = isArr ? d.map((_, i) => i) : Object.keys(d);
+        const count = keys.length;
+        const summary = isArr ? '[ ' + count + ' ]' : '{ ' + count + ' }';
+        rows.push(row(indent, true, path, [
+          caret(open, (e) => { e.stopPropagation(); this.toggleIr(path); }),
+          keyLabel(k),
+          k != null ? typeBadge(isArr ? 'Array' + summary : 'Object' + summary) : typeBadge((isArr ? 'Array' : 'Object') + ' ' + summary),
+        ]));
+        if (open) keys.forEach((kk) => walk(isArr ? d[kk] : d[kk], indent + 1, isArr ? String(kk) : kk, path + '.' + kk));
+      } else {
+        rows.push(row(indent, false, path, [
+          keyLabel(k),
+          k != null ? h('span', { key: 's', style: { color: C.type, margin: '0 6px' } }, ':') : null,
+          leaf(d),
+        ]));
+      }
+    };
+    walk(data, 0, null, '$');
+    return h('div', { style: { fontFamily: 'ui-monospace,SFMono-Regular,Consolas,Menlo,monospace', fontSize: '12.5px', color: '#e6edf3' } }, rows);
+  }
+
+  go = (k) => this.setState({ screen: k });
+
+  renderVals() {
+    const st = this.state;
+    const rowBase = { padding: '10px 12px', borderRadius: '6px', cursor: 'pointer', marginBottom: '4px', border: '1px solid transparent' };
+    const rowSel = { background: 'var(--color-primary-bg)', borderColor: 'var(--color-primary-border)' };
+    const tableRowBase = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', borderRadius: '6px', cursor: 'pointer', marginBottom: '2px' };
+
+    // databases
+    const perms = st.perms || this.buildDefaultPerms();
+    const up = perms[st.currentUserId];
+    const dbList = this.databases.map(d => {
+      const accessible = up.dbs[d.key];
+      return {
+        ...d, accessible, locked: !accessible,
+        onClick: () => { const first = (this.tablesByDb[d.key] || []).find(t => up.tables[d.key + '/' + t.name]) || this.tablesByDb[d.key][0]; this.setState({ dbKey: d.key, tableName: first.name }); },
+        style: !accessible
+          ? (d.key === st.dbKey ? { ...rowBase, ...rowSel, opacity: '0.8' } : { ...rowBase, background: 'var(--gray-2)', borderColor: 'var(--color-border-secondary)', opacity: '0.72', cursor: 'pointer' })
+          : (d.key === st.dbKey ? { ...rowBase, ...rowSel } : { ...rowBase, background: '#fff', borderColor: 'var(--color-border-secondary)' }),
+      };
+    });
+    const curDb = this.databases.find(d => d.key === st.dbKey);
+    const tables = this.tablesByDb[st.dbKey] || [];
+    const tableList = tables.map(t => {
+      const accessible = up.dbs[st.dbKey] && up.tables[st.dbKey + '/' + t.name];
+      return {
+        ...t, accessible, locked: !accessible,
+        onClick: () => this.setState({ tableName: t.name }),
+        iconColor: t.name === st.tableName ? 'var(--color-primary)' : 'var(--color-text-quaternary)',
+        style: !accessible
+          ? (t.name === st.tableName ? { ...tableRowBase, background: 'var(--color-primary-bg)', opacity: '0.8' } : { ...tableRowBase, background: 'transparent', opacity: '0.65', cursor: 'pointer' })
+          : (t.name === st.tableName ? { ...tableRowBase, background: 'var(--color-primary-bg)' } : { ...tableRowBase, background: 'transparent' }),
+      };
+    });
+    const currentTableAccessible = !!(up.dbs[st.dbKey] && up.tables[st.dbKey + '/' + st.tableName]);
+    const keyColorMap = { PK: 'gold', FK: 'geekblue', UK: 'cyan', PARTITION: 'purple', IDX: 'blue', CHECK: 'green' };
+    const dbNameForCols = curDb ? curDb.name : '';
+    const dbColsList = this.columnsFor(st.tableName);
+    const selColName = (st.expandedDbCol && dbColsList.some(c => c.name === st.expandedDbCol)) ? st.expandedDbCol : (dbColsList[0] ? dbColsList[0].name : '');
+    const cols = dbColsList.map(c => {
+      const key = dbNameForCols + '/' + st.tableName + '/' + c.name;
+      const ids = (st.colConstraints || {})[key] || [];
+      return {
+        ...c,
+        keyTags: (c.keys || []).map((k, i) => ({ id: i, label: k, color: keyColorMap[k] || '' })),
+        constraintCountLabel: ids.length ? ids.length + '개' : '없음',
+        constraintCountColor: ids.length ? 'var(--color-primary)' : 'var(--color-text-quaternary)',
+        nullLabel: c.nullable ? 'NULL' : 'NOT NULL',
+        nullColor: c.nullable ? 'var(--color-text-quaternary)' : 'var(--color-text-secondary)',
+        defLabel: (c.def === null || c.def === undefined) ? '—' : c.def,
+        commentText: c.comment || '—',
+        selected: c.name === selColName,
+        rowStyle: {
+          display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr 1fr', gap: 0, padding: '11px 16px',
+          borderBottom: '1px solid var(--color-split)', alignItems: 'center', fontSize: '13px', cursor: 'pointer',
+          background: c.name === selColName ? 'var(--color-primary-bg)' : 'transparent',
+          boxShadow: c.name === selColName ? 'inset 3px 0 0 var(--color-primary)' : 'none',
+        },
+        onSelect: () => this.setState({ expandedDbCol: c.name, dbOpenConstraint: true }),
+      };
+    });
+    const selKey = dbNameForCols + '/' + st.tableName + '/' + selColName;
+    const selIds = (st.colConstraints || {})[selKey] || [];
+    const selColMeta = dbColsList.find(c => c.name === selColName);
+    const selColConstraints = selIds.map(id => this.defById(id)).filter(Boolean).map(d => ({ id: d.id, name: d.name, desc: d.desc }));
+    const idxColorMap = { PRIMARY: 'gold', UNIQUE: 'cyan', INDEX: 'blue', FOREIGN: 'geekblue', PARTITION: 'purple' };
+    const idxTextMap = { PRIMARY: 'var(--gold-7)', UNIQUE: 'var(--cyan-7)', INDEX: 'var(--blue-7)', FOREIGN: 'var(--geekblue-7)', PARTITION: 'var(--purple-7)' };
+    const currentIndexes = (this.indexesByTable[st.tableName] || this.genericIndexes).map((x, i) => ({
+      ...x, id: i, typeColor: idxColorMap[x.type] || '', typeTextColor: idxTextMap[x.type] || 'var(--color-text-secondary)',
+      cols: x.columns.map((c, j) => ({ id: j, name: c })),
+      composite: x.columns.length > 1,
+      hasNote: !!x.note,
+    }));
+
+    // saved queries
+    const statusMap = { approved: ['green', '승인됨'], pending: ['gold', '승인 대기'], draft: ['', '초안'], rejected: ['red', '반려됨'], cancelled: ['', '요청 취소됨'] };
+    const savedAll = [
+      { name: 'marketing_consent_users', db: 'prod-main', vendor: 'MySQL', vendorColor: 'blue', author: '김도현', status: 'approved', rule: 'passed', updated: '2026-07-22', sql: "SELECT u.id, u.email, u.name, m.consent_at\nFROM users u\nJOIN marketing_consents m ON m.user_id = u.id\nWHERE m.is_agreed = TRUE\nLIMIT 100;" },
+      { name: 'high_value_customers_q3', db: 'analytics-dw', vendor: 'PostgreSQL', vendorColor: 'geekblue', author: '이서연', status: 'pending', rule: 'passed', updated: '2026-07-23', sql: "SELECT user_id, SUM(amount) AS total\nFROM fact_orders\nWHERE ordered_at >= '2026-07-01'\nGROUP BY user_id\nORDER BY total DESC\nLIMIT 100;" },
+      { name: 'churn_risk_segment', db: 'data-lake', vendor: 'Trino', vendorColor: 'purple', author: '박민준', status: 'draft', rule: 'failed', updated: '2026-07-24', sql: "SELECT user_id, last_active_at\nFROM user_profiles\nWHERE last_active_at < NOW() - INTERVAL '30' DAY;" },
+      { name: 'daily_active_users', db: 'analytics-dw', vendor: 'PostgreSQL', vendorColor: 'geekblue', author: '김도현', status: 'approved', rule: 'passed', updated: '2026-07-20', sql: "SELECT dt, COUNT(DISTINCT user_id) AS dau\nFROM fact_events\nGROUP BY dt\nORDER BY dt DESC;" },
+      { name: 'refund_audit_2026', db: 'prod-main', vendor: 'MySQL', vendorColor: 'blue', author: '정하윤', status: 'rejected', rule: 'failed', updated: '2026-07-19', sql: "SELECT o.id, o.amount, o.status\nFROM orders o\nWHERE o.status = 'refunded'\nLIMIT 200;" },
+      { name: 'signup_funnel_weekly', db: 'analytics-dw', vendor: 'PostgreSQL', vendorColor: 'geekblue', author: '이서연', status: 'approved', rule: 'passed', updated: '2026-07-16', sql: "SELECT week, step, COUNT(*) AS cnt\nFROM fact_events\nWHERE event_type = 'signup'\nGROUP BY week, step;" },
+      { name: 'ad_click_attribution', db: 'data-lake', vendor: 'Trino', vendorColor: 'purple', author: '박민준', status: 'pending', rule: 'passed', updated: '2026-07-15', sql: "SELECT campaign_id, COUNT(*) AS clicks\nFROM ad_impressions\nWHERE dt >= DATE '2026-07-01'\nGROUP BY campaign_id;" },
+    ].map(q => {
+      const o = {
+        ...q,
+        statusColor: statusMap[q.status][0],
+        statusLabel: statusMap[q.status][1],
+        ruleIcon: q.rule === 'passed' ? 'check-circle' : 'close-circle',
+        ruleLabel: q.rule === 'passed' ? '통과' : '실패',
+        ruleTextColor: q.rule === 'passed' ? 'var(--green-7)' : 'var(--color-error)',
+      };
+      o.onOpen = () => this.setState({ screen: 'editor', queryName: q.name, sql: q.sql });
+      o.onDetail = () => this.setState({ detailQuery: o });
+      return o;
+    });
+    const savedFiltered = savedAll.filter(q =>
+      (!st.qSearch || (q.name + ' ' + q.db + ' ' + q.author).toLowerCase().includes(st.qSearch.toLowerCase())) &&
+      (st.qStatus === 'all' || q.status === st.qStatus) &&
+      (st.qVendor === 'all' || q.vendor === st.qVendor) &&
+      (st.qAuthor === 'all' || q.author === st.qAuthor) &&
+      (st.qRule === 'all' || q.rule === st.qRule));
+    const savedPager = this.pager(savedFiltered.length, st.qPage, 5, (p) => this.setState({ qPage: p }));
+    const savedPage = savedFiltered.slice((savedPager.cur - 1) * 5, savedPager.cur * 5);
+
+    // approvals
+    const allApprovals = [...st.extraReqs, ...this.baseApprovals].map(a => {
+      const status = st.cancelledIds.includes(a.id) ? 'cancelled' : a.status;
+      return {
+        ...a, status,
+        statusColor: statusMap[status][0],
+        statusLabel: statusMap[status][1],
+        isPending: status === 'pending',
+        tablesText: a.tables.join(', '),
+        reqTags: a.reqs.map((r, i) => ({ id: i, label: r })),
+        onCancel: () => this.setState(s => ({ cancelledIds: [...s.cancelledIds, a.id] })),
+      };
+    });
+    const apprFiltered = allApprovals.filter(a =>
+      (!st.apprSearch || (a.id + ' ' + a.purpose).toLowerCase().includes(st.apprSearch.toLowerCase())) &&
+      (st.apprStatus === 'all' || a.status === st.apprStatus) &&
+      (st.apprRequester === 'all' || a.requester === st.apprRequester) &&
+      (st.apprApprover === 'all' || a.approver === st.apprApprover));
+    const apprPager = this.pager(apprFiltered.length, st.apprPage, 4, (p) => this.setState({ apprPage: p }));
+    const apprPage = apprFiltered.slice((apprPager.cur - 1) * 4, apprPager.cur * 4);
+    const apprTabs = [{ k: 'list', l: '요청 목록' }, { k: 'new', l: '새 요청 작성' }].map(t => ({
+      label: t.l, onClick: () => this.setState({ apprTab: t.k }), style: this.tabStyle(st.apprTab === t.k),
+    }));
+    const scopeMapR = { single: ['단일 테이블', 'green'], multi: ['다중 테이블', 'cyan'], global: ['전역', 'gold'] };
+    const ruleTablesOf = (rk) => {
+      const tree = st.ruleTrees[rk]; if (!tree) return [];
+      return Array.from(new Set(this._collectLeaves(tree, []).filter(n => n.table).map(n => n.db + '.' + n.table)));
+    };
+    const toggleReqRule = (key) => this.setState(s => ({ reqRules: s.reqRules.includes(key) ? s.reqRules.filter(x => x !== key) : [...s.reqRules, key] }));
+    const ruleRowStyle = (checked) => ({ display: 'flex', gap: '10px', alignItems: 'center', padding: '9px 12px', borderRadius: '6px', cursor: 'pointer', border: checked ? '1px solid var(--color-primary-border)' : '1px solid var(--color-border-secondary)', background: checked ? 'var(--color-primary-bg)' : '#fff' });
+    const reqTableList = this.reqTableOptions.map(o => {
+      const selected = st.reqTables.includes(o.id);
+      const qkey = o.db + '.' + o.table;
+      const rules = this.rulesMeta.filter(r => r.scope === 'global' || ruleTablesOf(r.key).includes(qkey)).map(r => {
+        const checked = st.reqRules.includes(r.key);
+        return { key: r.key, name: r.name, checked, global: r.scope === 'global', sevColor: r.severity === 'error' ? 'red' : 'gold', sevLabel: r.severity === 'error' ? '오류' : '경고', onToggle: (e) => { if (e) e.stopPropagation(); toggleReqRule(r.key); }, style: ruleRowStyle(checked) };
+      });
+      const selCount = rules.filter(r => r.checked).length;
+      return {
+        ...o, selected, rules, noRules: rules.length === 0,
+        ruleCountLabel: selected ? (selCount + '/' + rules.length + ' 규칙 선택') : (rules.length + ' 규칙 연결'),
+        onToggle: () => this.setState(s => ({ reqTables: s.reqTables.includes(o.id) ? s.reqTables.filter(x => x !== o.id) : [...s.reqTables, o.id] })),
+        cardStyle: { borderRadius: '8px', overflow: 'hidden', border: selected ? '1px solid var(--color-primary)' : '1px solid var(--color-border-secondary)' },
+        headerStyle: { display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', cursor: 'pointer', background: selected ? 'var(--color-primary-bg)' : '#fff' },
+      };
+    });
+    const reqApproverList = st.reqApprovers.map((a, i) => ({
+      ...a, step: i + 1, stepLabel: (i + 1) + '차 승인',
+      showArrow: i < st.reqApprovers.length - 1,
+      canRemove: st.reqApprovers.length > 1,
+      onRemove: () => this.setState(s => ({ reqApprovers: s.reqApprovers.filter(x => x.id !== a.id) })),
+    }));
+    const reqCheckList = this.businessReqs.map(b => {
+      const checked = !!st.reqChecks[b.key];
+      return {
+        ...b, checked,
+        onToggle: () => this.setState(s => ({ reqChecks: { ...s.reqChecks, [b.key]: !s.reqChecks[b.key] } })),
+        style: { display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '12px 14px', borderRadius: '8px', cursor: 'pointer', border: checked ? '1px solid var(--color-primary-border)' : '1px solid var(--color-border-secondary)', background: checked ? 'var(--color-primary-bg)' : '#fff' },
+      };
+    });
+
+    // editor
+    const vendorLabels = { mysql: 'MySQL 8.0', postgresql: 'PostgreSQL 16', trino: 'Trino 440' };
+    const codeLines = st.sql.split('\n').map((_, i) => i + 1);
+    const suggestions = [
+      { kind: 'F', text: 'marketing_consents', hint: 'table', badgeBg: '#e6f4ff', badgeColor: '#1677ff' },
+      { kind: 'C', text: 'is_agreed', hint: 'boolean · marketing_consents', badgeBg: '#f9f0ff', badgeColor: '#722ed1' },
+      { kind: 'ƒ', text: 'COUNT(*)', hint: 'aggregate function', badgeBg: '#e6fffb', badgeColor: '#08979c' },
+      { kind: 'K', text: 'GROUP BY', hint: 'keyword', badgeBg: '#f0f5ff', badgeColor: '#2f54eb' },
+    ].map(s => ({ ...s, onClick: () => this.setState(p => ({ sql: p.sql.replace(/;?\s*$/, '') + ' ' + s.text, showSuggest: false })) }));
+
+    const ruleResults = [
+      { rule: 'PII 컬럼 마스킹 필수', status: 'pass', note: 'email·name 조회는 승인 요청 REQ-1043 요건에 포함됨' },
+      { rule: '마케팅 동의 사용자 한정', status: 'pass', note: 'm.is_agreed = TRUE 조건 확인됨' },
+      { rule: '대량 조회 LIMIT 강제', status: 'warn', note: 'LIMIT 100 — 권장 최대 1,000 이내' },
+    ].map(r => {
+      const isPass = r.status === 'pass';
+      return {
+        ...r,
+        icon: isPass ? 'check-circle' : 'exclamation-circle',
+        iconColor: isPass ? 'var(--green-6)' : 'var(--gold-6)',
+        borderColor: isPass ? 'var(--green-3)' : 'var(--gold-3)',
+        bg: isPass ? 'var(--green-1)' : 'var(--gold-1)',
+        tagColor: isPass ? 'green' : 'gold',
+        tagLabel: isPass ? '통과' : '경고',
+      };
+    });
+    const bottomTabs = [{ k: 'rulecheck', l: '규칙 검사 결과' }, { k: 'result', l: '실행 결과' }, { k: 'messages', l: '메시지' }].map(t => ({
+      label: t.l, onClick: () => this.setState({ bottomTab: t.k }), style: this.tabStyleSm(st.bottomTab === t.k),
+    }));
+    const resultRows = [
+      { id: '10231', email: 'j***@naver.com', name: '김*현', consent: '2026-07-20 09:12' },
+      { id: '10244', email: 's***@gmail.com', name: '이*연', consent: '2026-07-19 22:41' },
+      { id: '10250', email: 'p***@kakao.com', name: '박*준', consent: '2026-07-18 14:03' },
+      { id: '10262', email: 'h***@daum.net', name: '정*윤', consent: '2026-07-17 11:55' },
+    ];
+
+    // ai
+    const aiList = st.aiMessages.map((m, i) => {
+      const isA = m.role === 'assistant';
+      return {
+        ...m, isAssistant: isA, hasSql: !!m.sql, placement: isA ? 'start' : 'end',
+        onApply: m.sql ? () => this.setState({ sql: m.sql, bottomTab: 'rulecheck' }) : null,
+        wrapStyle: { display: 'flex', flexDirection: 'column', alignItems: isA ? 'flex-start' : 'flex-end' },
+        bubbleStyle: isA
+          ? { background: 'var(--gray-3)', color: 'var(--color-text)', padding: '10px 14px', borderRadius: '12px 12px 12px 4px', fontSize: '13px', lineHeight: '1.6', maxWidth: '90%' }
+          : { background: 'var(--color-primary)', color: '#fff', padding: '10px 14px', borderRadius: '12px 12px 4px 12px', fontSize: '13px', lineHeight: '1.6', maxWidth: '90%' },
+      };
+    });
+    const promptChips = ['최근 30일 마케팅 동의자', '주문 금액 상위 100명', '이탈 위험 고객 세그먼트'].map(t => ({ text: t, onClick: () => this.sendAi(t) }));
+
+    // rules
+    const scopeMap = { single: ['단일 테이블', 'green'], multi: ['다중 테이블 조인', 'cyan'], global: ['전역 규칙', 'gold'] };
+    const ruleList = this.rulesMeta.map(r => ({
+      ...r,
+      onClick: () => this.setState({ ruleKey: r.key, ruleScope: r.scope, ruleServer: r.server || 'mysql-prod', expandedCond: null }),
+      dotColor: r.severity === 'error' ? 'var(--color-error)' : 'var(--gold-6)',
+      scopeColor: scopeMap[r.scope][1],
+      scopeLabel: scopeMap[r.scope][0],
+      style: r.key === st.ruleKey ? { ...rowBase, ...rowSel } : { ...rowBase, background: '#fff', borderColor: 'var(--color-border-secondary)' },
+    }));
+    const curRule = this.rulesMeta.find(r => r.key === st.ruleKey);
+    const tree = st.ruleTrees[st.ruleKey];
+    const irFromNode = (node) => node.children
+      ? { match: node.combinator, conditions: node.children.map(irFromNode) }
+      : { op: node.op, subject: this.condSubject(node), constraint: this.condValueLabel(node) };
+    const ruleIrObj = {
+      rule: st.ruleKey + ':' + (curRule ? curRule.name : ''),
+      scope: st.ruleScope === 'single' ? 'single_table' : st.ruleScope === 'multi' ? 'multi_table' : 'global',
+      server: st.ruleScope === 'global' ? null : st.ruleServer,
+      ...irFromNode(tree),
+      severity: curRule ? curRule.severity : 'error',
+      on_violation: (curRule && curRule.severity === 'error') ? 'block' : 'warn',
+    };
+
+    const adminUserList = this.users.map(u => ({
+      ...u, active: u.id === st.adminUser,
+      onClick: () => this.setState({ adminUser: u.id }),
+      style: u.id === st.adminUser ? { ...rowBase, ...rowSel } : { ...rowBase, background: '#fff', borderColor: 'var(--color-border-secondary)' },
+    }));
+    const adminSel = this.users.find(u => u.id === st.adminUser) || this.users[0];
+    const adminDbs = this.databases.map(d => {
+      const dbOn = perms[st.adminUser].dbs[d.key];
+      const tbls = this.tablesByDb[d.key] || [];
+      return {
+        key: d.key, name: d.name, vendor: d.vendor, vendorColor: d.vendorColor, host: d.host,
+        on: dbOn, onToggleDb: () => this.toggleDbPerm(st.adminUser, d.key),
+        allowedText: (dbOn ? tbls.filter(t => perms[st.adminUser].tables[d.key + '/' + t.name]).length : 0) + '/' + tbls.length + ' 테이블 허용',
+        tables: tbls.map(t => ({
+          name: t.name, checked: !!perms[st.adminUser].tables[d.key + '/' + t.name], disabled: !dbOn,
+          onToggle: () => this.toggleTablePerm(st.adminUser, d.key, t.name),
+          style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', borderRadius: '6px', opacity: dbOn ? '1' : '0.45' },
+        })),
+      };
+    });
+    const clsOrder = ['pii', 'boolean', 'datetime', 'numeric', 'key', 'string'];
+    const defClassSections = clsOrder.map(cls => ({
+      cls, label: this.classLabels[cls],
+      onAdd: () => this.setState({ defEditing: { id: null, name: '', cls, kind: 'filter', desc: '' } }),
+      defs: (st.constraintDefs || []).filter(d => d.cls === cls).map(d => ({
+        id: d.id, name: d.name, desc: d.desc,
+        kindLabel: (this.kindMeta[d.kind] || {}).label || '', kindColor: (this.kindMeta[d.kind] || {}).color || '',
+        preview: this.enforcePreview(d.kind, d.expr),
+        mappedCount: Object.values(st.colConstraints || {}).filter(ids => ids.includes(d.id)).length,
+        onEdit: () => this.setState({ defEditing: { ...d } }),
+        onDelete: () => this.deleteDef(d.id),
+      })),
+    }));
+    const catServer = this._serverByKey(st.catServer);
+    const catDbNames = Object.keys(catServer.databases);
+    const catTables = catServer.databases[st.catDb] || [];
+    const catColumns = this.columnsFor(st.catTable).map(c => {
+      const cls = this.colClass(c);
+      const key = st.catDb + '/' + st.catTable + '/' + c.name;
+      const ids = (st.colConstraints || {})[key] || [];
+      return {
+        name: c.name, type: c.type, classLabel: this.classLabels[cls], isPii: c.isPii,
+        mapped: ids.map(id => this.defById(id)).filter(Boolean).map(d => ({ id: d.id, name: d.name, onRemove: () => this.removeMapping(key, d.id) })),
+        empty: ids.length === 0,
+        onAddOpen: () => this.setState({ mapModalKey: key, mapModalSel: [...ids] }),
+      };
+    });
+    const de = st.defEditing;
+    const mapCol = st.mapModalKey ? st.mapModalKey.split('/')[2] : '';
+    const mapColMeta = st.mapModalKey ? this.columnsFor(st.mapModalKey.split('/')[1]).find(c => c.name === mapCol) : null;
+    const mapClass = mapColMeta ? this.colClass(mapColMeta) : 'string';
+    const mapChoices = (st.constraintDefs || []).filter(d => d.cls === mapClass).map(d => ({
+      id: d.id, name: d.name, desc: d.desc, checked: st.mapModalSel.includes(d.id),
+      onToggle: () => this.setState(s => ({ mapModalSel: s.mapModalSel.includes(d.id) ? s.mapModalSel.filter(x => x !== d.id) : [...s.mapModalSel, d.id] })),
+      style: { display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '10px 12px', borderRadius: '8px', cursor: 'pointer', border: st.mapModalSel.includes(d.id) ? '1px solid var(--color-primary-border)' : '1px solid var(--color-border-secondary)', background: st.mapModalSel.includes(d.id) ? 'var(--color-primary-bg)' : '#fff' },
+    }));
+    const titles = {
+      databases: ['데이터베이스', '탐색'],
+      editor: ['쿼리 에디터', '쿼리'],
+      queries: ['저장된 쿼리', '쿼리'],
+      approvals: ['승인 요청', '거버넌스'],
+      rules: ['규칙 관리', '거버넌스'],
+      catalog: ['제약 카탈로그', '거버넌스'],
+      admin: ['접근 권한 관리', '관리'],
+    };
+
+    return {
+      navItems: this.navItems, screen: st.screen, go: this.go,
+      pageTitle: titles[st.screen][0], crumb: titles[st.screen][1],
+      hoverRow: { background: 'var(--color-fill-tertiary)' },
+      hoverSuggest: { background: 'var(--color-fill-tertiary)' },
+      hoverChip: { borderColor: 'var(--color-primary)', color: 'var(--color-primary)' },
+      hoverTableRow: { background: 'var(--color-fill-quaternary)' },
+      hoverDanger: { color: 'var(--color-error)' },
+
+      isDatabases: st.screen === 'databases', isEditor: st.screen === 'editor',
+      isQueries: st.screen === 'queries', isApprovals: st.screen === 'approvals', isRules: st.screen === 'rules', isAdmin: st.screen === 'admin', isCatalog: st.screen === 'catalog',
+
+      // databases
+      dbList, dbCount: this.databases.length, currentDbName: curDb ? curDb.name : '',
+      tableList, currentTableName: st.tableName, colCount: cols.length, currentColumns: cols, currentIndexes,
+      tableComment: this.tableComments[st.tableName] || '설명 없음',
+      commentColumns: dbColsList.filter(c => c.comment).map(c => ({ name: c.name, comment: c.comment })),
+      selColComment: (selColMeta && selColMeta.comment) ? selColMeta.comment : '코멘트 없음',
+      tableMetaChips: Object.entries(this.tableMetaByName[st.tableName] || this.genericTableMeta).map(([k, v], i) => ({ id: i, k, v })),
+      selColName, selColClassLabel: this.classLabels[this.colClass(selColMeta)], selColPii: !!(selColMeta && selColMeta.isPii),
+      selColConstraints, selColHasConstraints: selColConstraints.length > 0, selColEmpty: selColConstraints.length === 0,
+      onMapSelCol: () => { if (currentTableAccessible) this.setState({ mapModalKey: selKey, mapModalSel: [...selIds] }); },
+      canEditCurrent: currentTableAccessible, cannotEditCurrent: !currentTableAccessible,
+      dbOpenConstraint: st.dbOpenConstraint, dbOpenIndex: st.dbOpenIndex,
+      toggleDbConstraint: () => this.setState(s => ({ dbOpenConstraint: !s.dbOpenConstraint })),
+      toggleDbIndex: () => this.setState(s => ({ dbOpenIndex: !s.dbOpenIndex })),
+      dbConstraintCaret: st.dbOpenConstraint ? 'rotate(180deg)' : 'none',
+      dbIndexCaret: st.dbOpenIndex ? 'rotate(180deg)' : 'none',
+      selColCountLabel: selColConstraints.length ? selColConstraints.length + '개' : '없음',
+      selColCountColor: selColConstraints.length ? 'var(--color-primary)' : 'var(--color-text-quaternary)',
+      indexCountLabel: currentIndexes.length + '개',
+      piiColumns: dbColsList.filter(c => c.isPii).map(c => ({ name: c.name, type: c.type })),
+      hasPiiCols: dbColsList.some(c => c.isPii), noPiiCols: !dbColsList.some(c => c.isPii),
+      piiCountLabel: (dbColsList.filter(c => c.isPii).length || 0) ? dbColsList.filter(c => c.isPii).length + '개' : '없음',
+      piiCountColor: dbColsList.some(c => c.isPii) ? 'var(--red-6)' : 'var(--color-text-quaternary)',
+      currentTableAccessible, currentTableLocked: !currentTableAccessible, currentUserName: (this.users.find(u => u.id === st.currentUserId) || {}).name,
+      adminUserList, adminUserName: adminSel.name, adminUserRole: adminSel.role, adminUserInitial: adminSel.initial, adminUserColor: adminSel.color, adminDbs,
+
+      // catalog
+      catalogTabs: [{ k: 'defs', l: '제약 정의' }, { k: 'map', l: '컬럼 매핑' }].map(t => ({ label: t.l, onClick: () => this.setState({ catalogTab: t.k }), style: this.tabStyle(st.catalogTab === t.k) })),
+      isCatDefs: st.catalogTab === 'defs', isCatMap: st.catalogTab === 'map',
+      defClassSections,
+      catServer: st.catServer, catDb: st.catDb, catTable: st.catTable,
+      catServerOptions: this.servers.map(s => ({ label: s.vendor + ' · ' + s.key, value: s.key })),
+      catDbOptions: catDbNames.map(d => ({ label: d, value: d })),
+      catTableOptions: catTables.map(t => ({ label: t, value: t })),
+      setCatServer: (v) => { const s = this._serverByKey(v); const db = Object.keys(s.databases)[0]; this.setState({ catServer: v, catDb: db, catTable: s.databases[db][0] }); },
+      setCatDb: (v) => this.setState({ catDb: v, catTable: (catServer.databases[v] || [''])[0] }),
+      setCatTable: (v) => this.setState({ catTable: v }),
+      catColumns,
+      // def modal
+      defModalOpen: !!de, defEditingName: de ? de.name : '', defEditingDesc: de ? de.desc : '',
+      defEditingClassLabel: de ? this.classLabels[de.cls] : '', defEditingIsNew: de ? !de.id : true,
+      defEditingKind: de ? de.kind : 'filter',
+      defKindOptions: Object.keys(this.kindMeta).map(k => ({ label: this.kindMeta[k].label, value: k })),
+      onDefKind: (v) => this.setState(s => ({ defEditing: { ...s.defEditing, kind: v } })),
+      defEditingExpr: de ? (de.expr || '') : '',
+      onDefExpr: (e) => this.setState(s => ({ defEditing: { ...s.defEditing, expr: e.target.value } })),
+      defEditingKindAction: de ? ((this.kindMeta[de.kind] || {}).action || '') : '',
+      defEditingPreview: de ? this.enforcePreview(de.kind, de.expr) : '',
+      onDefName: (e) => this.setState(s => ({ defEditing: { ...s.defEditing, name: e.target.value } })),
+      onDefDesc: (e) => this.setState(s => ({ defEditing: { ...s.defEditing, desc: e.target.value } })),
+      saveDef: () => this.saveDef(), cancelDef: () => this.setState({ defEditing: null }),
+      // map modal
+      mapModalOpen: !!st.mapModalKey, mapModalCol: mapCol, mapModalClassLabel: this.classLabels[mapClass], mapChoices,
+      saveMap: () => this.saveMap(), cancelMap: () => this.setState({ mapModalKey: null, mapModalSel: [] }),
+      stopProp: (e) => e.stopPropagation(),
+      queryThisTable: () => { if (this.state.perms && !(this.state.perms[this.state.currentUserId].dbs[this.state.dbKey] && this.state.perms[this.state.currentUserId].tables[this.state.dbKey + '/' + this.state.tableName])) return; this.setState({ screen: 'editor' }); },
+
+      // editor
+      queryName: st.queryName, onQueryName: (e) => this.setState({ queryName: e.target.value }),
+      vendorOptions: [{ label: 'MySQL', value: 'mysql' }, { label: 'PostgreSQL', value: 'postgresql' }, { label: 'Trino', value: 'trino' }],
+      editorVendor: st.editorVendor, editorVendorLabel: vendorLabels[st.editorVendor],
+      onVendor: (v) => this.setState({ editorVendor: v }),
+      connOptions: [{ label: 'prod-main', value: 'mysql-prod' }, { label: 'analytics-dw', value: 'pg-analytics' }, { label: 'data-lake', value: 'trino-lake' }],
+      connKey: st.connKey, onConn: (v) => this.setState({ connKey: v }),
+      sql: st.sql, onSqlChange: (e) => this.setState({ sql: e.target.value }),
+      highlightedCode: React.createElement('code', { dangerouslySetInnerHTML: { __html: this.highlight(st.sql) } }),
+      codeLines,
+      showSuggest: st.showSuggest, toggleSuggest: () => this.setState(s => ({ showSuggest: !s.showSuggest })), suggestions,
+      runRuleCheck: () => this.setState({ bottomTab: 'rulecheck' }),
+      runQuery: () => this.setState({ bottomTab: 'result' }),
+      bottomTabs, isRuleCheckTab: st.bottomTab === 'rulecheck', isResultTab: st.bottomTab === 'result', isMsgTab: st.bottomTab === 'messages',
+      ruleResults, resultRows,
+      aiOpen: st.aiOpen, toggleAi: () => this.setState(s => ({ aiOpen: !s.aiOpen })),
+      aiList, promptChips, aiInput: st.aiInput, onAiInput: (e) => this.setState({ aiInput: e.target.value }), sendAi: () => this.sendAi(),
+      promptItems: [
+        { key: 'p1', label: '최근 30일 마케팅 동의자', icon: 'bulb' },
+        { key: 'p2', label: '주문 금액 상위 100명', icon: 'fire' },
+        { key: 'p3', label: '이탈 위험 고객 세그먼트', icon: 'thunderbolt' },
+      ],
+      onPromptClick: (it) => this.sendAi(it.label),
+      onAiInputVal: (v) => this.setState({ aiInput: v }),
+      onAiSubmit: (text) => this.sendAi(text),
+
+      // saved queries
+      savedQueries: savedPage, savedPager,
+      qSearch: st.qSearch, onQSearch: (e) => this.setState({ qSearch: e.target.value, qPage: 1 }),
+      qStatus: st.qStatus, onQStatus: (v) => this.setState({ qStatus: v, qPage: 1 }),
+      qVendor: st.qVendor, onQVendor: (v) => this.setState({ qVendor: v, qPage: 1 }),
+      qAuthor: st.qAuthor, onQAuthor: (v) => this.setState({ qAuthor: v, qPage: 1 }),
+      qRule: st.qRule, onQRule: (v) => this.setState({ qRule: v, qPage: 1 }),
+      qStatusOptions: [{ label: '상태 전체', value: 'all' }, { label: '승인됨', value: 'approved' }, { label: '승인 대기', value: 'pending' }, { label: '초안', value: 'draft' }, { label: '반려됨', value: 'rejected' }],
+      qVendorOptions: [{ label: '벤더 전체', value: 'all' }, { label: 'MySQL', value: 'MySQL' }, { label: 'PostgreSQL', value: 'PostgreSQL' }, { label: 'Trino', value: 'Trino' }],
+      qAuthorOptions: [{ label: '작성자 전체', value: 'all' }].concat(Array.from(new Set(savedAll.map(q => q.author))).map(a => ({ label: a, value: a }))),
+      qRuleOptions: [{ label: '규칙 검사 전체', value: 'all' }, { label: '통과', value: 'passed' }, { label: '실패', value: 'failed' }],
+      goNewQuery: () => this.setState({ screen: 'editor' }),
+      detailQuery: st.detailQuery, detailOpen: !!st.detailQuery,
+      closeDetail: () => this.setState({ detailQuery: null }),
+      stopProp: (e) => e.stopPropagation(),
+      openDetailInEditor: () => st.detailQuery && this.setState({ screen: 'editor', queryName: st.detailQuery.name, sql: st.detailQuery.sql, detailQuery: null }),
+      detailSqlCode: st.detailQuery ? React.createElement('code', { dangerouslySetInnerHTML: { __html: this.highlight(st.detailQuery.sql) } }) : null,
+
+      // approvals
+      apprTabs, isApprList: st.apprTab === 'list', isApprNew: st.apprTab === 'new',
+      approvals: apprPage, apprPager,
+      apprSearch: st.apprSearch, onApprSearch: (e) => this.setState({ apprSearch: e.target.value, apprPage: 1 }),
+      apprStatus: st.apprStatus, onApprStatus: (v) => this.setState({ apprStatus: v, apprPage: 1 }),
+      apprRequester: st.apprRequester, onApprRequester: (v) => this.setState({ apprRequester: v, apprPage: 1 }),
+      apprApprover: st.apprApprover, onApprApprover: (v) => this.setState({ apprApprover: v, apprPage: 1 }),
+      apprStatusOptions: [{ label: '상태 전체', value: 'all' }, { label: '승인 대기', value: 'pending' }, { label: '승인됨', value: 'approved' }, { label: '반려됨', value: 'rejected' }, { label: '요청 취소됨', value: 'cancelled' }],
+      apprRequesterOptions: [{ label: '요청자 전체', value: 'all' }].concat(Array.from(new Set(allApprovals.map(a => a.requester))).map(x => ({ label: x, value: x }))),
+      apprApproverOptions: [{ label: '승인자 전체', value: 'all' }].concat(Array.from(new Set(allApprovals.map(a => a.approver))).map(x => ({ label: x, value: x }))),
+      reqTableList, hasSelectedTables: st.reqTables.length > 0, noSelectedTables: st.reqTables.length === 0, reqApproverList, addApprover: () => this.addApprover(), reqCheckList,
+      cancelReq: () => this.setState({ apprTab: 'list' }), submitReq: () => this.submitReq(),
+
+      // rules
+      ruleList, ruleName: curRule ? curRule.name : '',
+      severityColor: curRule && curRule.severity === 'error' ? 'red' : 'gold',
+      severityLabel: curRule && curRule.severity === 'error' ? '차단 (오류)' : '경고',
+      scopeOptions: [{ label: '단일 테이블', value: 'single' }, { label: '다중 테이블 조인', value: 'multi' }, { label: '전역 규칙', value: 'global' }],
+      ruleScope: st.ruleScope, setRuleScope: (v) => this.setState({ ruleScope: v }),
+      ruleServer: st.ruleServer, setRuleServer: (v) => this.setState({ ruleServer: v }),
+      serverOptions: this.servers.map(s => ({ label: s.vendor + ' · ' + s.key, value: s.key })),
+      serverHost: this._serverByKey(st.ruleServer).host,
+      serverCluster: this._serverByKey(st.ruleServer).cluster,
+      serverNodes: this._serverByKey(st.ruleServer).nodes,
+      ruleScopeGlobal: st.ruleScope === 'global',
+      ruleScopeScoped: st.ruleScope !== 'global',
+      ruleTreeEl: this.buildRuleTree(tree),
+      ruleSummaryEl: this.buildRuleSummary(tree, curRule),
+      irTabs: [{ k: 'summary', l: '규칙 설정' }, { k: 'ir', l: '규칙 트리' }].map(t => ({
+        label: t.l, onClick: () => this.setState({ irTab: t.k }), style: this.tabStyleSm(st.irTab === t.k),
+      })),
+      isSummaryTab: st.irTab === 'summary', isIrTab: st.irTab === 'ir',
+      ruleInvalid: this.hasEmptyGroup(tree),
+      ruleValid: !this.hasEmptyGroup(tree),
+      ruleInvalidMsg: '조건이 하나도 없는 그룹이 있습니다',
+      ruleModeHint: st.ruleMode === 'advanced' ? '조건 트리' : '조건 목록',
+      modeTabs: [{ k: 'basic', l: '기본' }, { k: 'advanced', l: '어드밴스드' }].map(m => ({
+        label: m.l, onClick: () => this.setState({ ruleMode: m.k }),
+        style: { padding: '5px 14px', fontSize: '12px', cursor: 'pointer', fontWeight: st.ruleMode === m.k ? 600 : 400, background: st.ruleMode === m.k ? 'var(--color-primary)' : '#fff', color: st.ruleMode === m.k ? '#fff' : 'var(--color-text-secondary)' },
+      })),
+      ruleIr: JSON.stringify(ruleIrObj, null, 2),
+      ruleIrTree: this.jsonTree(ruleIrObj),
+    };
+  }
+
+  tabStyle(active) {
+    return { padding: '10px 4px', marginRight: '28px', fontSize: '14px', cursor: 'pointer', borderBottom: active ? '2px solid var(--color-primary)' : '2px solid transparent', color: active ? 'var(--color-primary)' : 'var(--color-text)', fontWeight: active ? '500' : '400' };
+  }
+  tabStyleSm(active) {
+    return { padding: '10px 14px', fontSize: '13px', cursor: 'pointer', borderBottom: active ? '2px solid var(--color-primary)' : '2px solid transparent', color: active ? 'var(--color-primary)' : 'var(--color-text-secondary)', fontWeight: active ? '500' : '400' };
+  }
+  pager(total, page, size, setPage) {
+    const pages = Math.max(1, Math.ceil(total / size));
+    const cur = Math.min(Math.max(1, page), pages);
+    const numBase = { minWidth: '32px', height: '32px', padding: '0 6px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: '6px', border: '1px solid var(--color-border)', cursor: 'pointer', fontSize: '14px', background: '#fff', color: 'var(--color-text)' };
+    const numActive = { ...numBase, borderColor: 'var(--color-primary)', color: 'var(--color-primary)', fontWeight: '500' };
+    const nums = [];
+    for (let i = 1; i <= pages; i++) nums.push({ n: i, style: i === cur ? numActive : numBase, onClick: () => setPage(i) });
+    const arrow = (dis) => ({ ...numBase, cursor: dis ? 'not-allowed' : 'pointer', color: dis ? 'var(--color-text-disabled)' : 'var(--color-text)' });
+    return {
+      cur, rangeText: '총 ' + total + '건 · ' + cur + '/' + pages + ' 페이지', nums,
+      prevStyle: arrow(cur <= 1), nextStyle: arrow(cur >= pages),
+      onPrev: () => { if (cur > 1) setPage(cur - 1); },
+      onNext: () => { if (cur < pages) setPage(cur + 1); },
+    };
+  }
+  sendAi(t) {
+    const text = (t || this.state.aiInput || '').trim();
+    if (!text) return;
+    const sql = this.mockSql(text);
+    this.setState(s => ({ aiInput: '', aiMessages: [...s.aiMessages, { role: 'user', text }, { role: 'assistant', text: '승인된 요건과 규칙을 반영해 아래 쿼리를 제안합니다. 조회 컬럼은 요청서에 포함된 테이블로 제한했어요.', sql }] }));
+  }
+  submitReq() {
+    const n = 1044 + this.state.extraReqs.length;
+    const reqs = this.businessReqs.filter(b => this.state.reqChecks[b.key]).map(b => b.label.split(' ')[0]);
+    const tbls = this.reqTableOptions.filter(o => this.state.reqTables.includes(o.id)).map(o => o.db + '.' + o.table);
+    const approver = this.state.reqApprovers.map((a, i) => (i + 1) + '차 ' + a.name).join(' → ');
+    const newReq = { id: 'REQ-' + n, purpose: '신규 쿼리 작성 요청', requester: '김도현', approver, status: 'pending', reqs: reqs.length ? reqs : ['일반'], date: '2026-07-24', tables: tbls };
+    this.setState(s => ({ extraReqs: [newReq, ...s.extraReqs], apprTab: 'list' }));
+  }
+  // ---- rule tree helpers ----
+  updateTree(mut) {
+    this.setState(s => {
+      const trees = { ...s.ruleTrees };
+      const t = JSON.parse(JSON.stringify(trees[s.ruleKey]));
+      mut(t);
+      trees[s.ruleKey] = t;
+      return { ruleTrees: trees };
+    });
+  }
+  findNode(node, id) {
+    if (node.id === id) return node;
+    if (node.children) for (const c of node.children) { const f = this.findNode(c, id); if (f) return f; }
+    return null;
+  }
+  removeFrom(node, id) {
+    if (node.children) {
+      node.children = node.children.filter(c => c.id !== id);
+      node.children.forEach(c => this.removeFrom(c, id));
+    }
+  }
+  setCombinator(id, m) { this.updateTree(t => { const n = this.findNode(t, id); if (n) n.combinator = m; }); }
+  setCondField(id, field, val) { this.updateTree(t => { const n = this.findNode(t, id); if (n) n[field] = val; }); }
+  removeNode(id) { this.updateTree(t => this.removeFrom(t, id)); }
+  addCond(groupId) {
+    const nid = 'c' + Date.now();
+    const server = this._serverByKey(this.state.ruleServer);
+    const firstDb = Object.keys(server.databases)[0];
+    const structured = this.state.ruleScope !== 'global';
+    this.updateTree(t => { const g = this.findNode(t, groupId); if (g) g.children.push(structured
+      ? { type: 'cond', id: nid, op: 'requires', db: firstDb, table: '', column: '', value: '' }
+      : { type: 'cond', id: nid, op: 'requires', subject: 'SELECT statement', value: '제약 조건을 입력하세요' }); });
+    this.setState({ expandedCond: nid });
+  }
+  addGroup(groupId) {
+    const server = this._serverByKey(this.state.ruleServer);
+    const firstDb = Object.keys(server.databases)[0];
+    this.updateTree(t => { const g = this.findNode(t, groupId); if (g) g.children.push({ id: 'g' + Date.now(), combinator: 'any', children: [{ type: 'cond', id: 'c' + (Date.now() + 1), op: 'requires', db: firstDb, table: '', column: '', value: '' }] }); });
+  }
+  buildRuleSummary(root, curRule) {
+    const NS = this._ns();
+    const h = React.createElement;
+    const st = this.state;
+    const scopeMap = { single: '단일 테이블', multi: '다중 테이블 조인', global: '전역 규칙' };
+    const meta = (op) => this.opMeta[op] || {};
+    const opText = (op) => (meta(op).label || op).split(' · ').pop();
+    const condSentence = (node) => h('div', { key: node.id, style: { display: 'flex', alignItems: 'baseline', gap: '8px', padding: '7px 0' } }, [
+      h('span', { key: 'd', style: { flex: 'none', width: '5px', height: '5px', borderRadius: '50%', background: 'var(--color-text-quaternary)', transform: 'translateY(-2px)' } }),
+      h('span', { key: 't', style: { fontSize: '13px', lineHeight: '1.6', color: 'var(--color-text)' } }, [
+        h('span', { key: 's', style: { fontFamily: 'ui-monospace,SFMono-Regular,Consolas,Menlo,monospace', color: 'var(--geekblue-7)' } }, this.condSubject(node)),
+        h('span', { key: 'o', style: { margin: '0 6px', color: meta(node.op).color ? 'var(--purple-7)' : 'var(--color-text-secondary)', fontWeight: 500 } }, opText(node.op)),
+        h('span', { key: 'v', style: { color: 'var(--color-text-secondary)' } }, this.condValueLabel(node)),
+      ]),
+    ]);
+    const groupBlock = (node, depth) => {
+      const isOr = node.combinator === 'any';
+      const lead = depth === 0
+        ? (isOr ? '아래 조건 중 하나라도 만족하면' : '아래 조건을 모두 만족해야')
+        : (isOr ? '다음 중 하나라도 (OR)' : '다음을 모두 (AND)');
+      const kids = node.children.map(ch => ch.children ? groupBlock(ch, depth + 1) : condSentence(ch));
+      return h('div', { key: node.id, style: depth === 0 ? {} : { borderLeft: '2px solid ' + (isOr ? 'var(--purple-3)' : 'var(--blue-3)'), paddingLeft: '12px', margin: '6px 0 6px 4px' } }, [
+        h('div', { key: 'lead', style: { fontSize: '12px', fontWeight: 600, color: isOr ? 'var(--purple-7)' : 'var(--color-text-secondary)', marginBottom: '4px' } }, lead + (depth === 0 ? ' 합니다:' : ':')),
+        h('div', { key: 'kids' }, kids),
+      ]);
+    };
+    const chip = (label, val) => h('div', { key: label, style: { display: 'flex', flexDirection: 'column', gap: '3px' } }, [
+      h('span', { key: 'l', style: { fontSize: '11px', color: 'var(--color-text-tertiary)' } }, label),
+      h('span', { key: 'v', style: { fontSize: '13px', color: 'var(--color-text)', fontWeight: 500 } }, val),
+    ]);
+    const server = this._serverByKey(st.ruleServer);
+    const usedTables = Array.from(new Set(this._collectLeaves(root, []).filter(n => n.table).map(n => n.db + '.' + n.table)));
+    const serverEl = h('div', { key: 'srv', style: { display: 'flex', flexDirection: 'column', gap: '5px' } }, [
+      h('span', { key: 'l', style: { fontSize: '11px', color: 'var(--color-text-tertiary)' } }, '대상 서버'),
+      st.ruleScope === 'global'
+        ? h('span', { key: 'g', style: { fontSize: '13px', color: 'var(--color-text)', fontWeight: 500 } }, '전체 서버 (전역)')
+        : h('div', { key: 's', style: { display: 'flex', flexDirection: 'column', gap: '2px' } }, [
+            h('span', { key: 'v', style: { fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' } }, [h(NS.Tag, { key: 'tg', color: server.vendorColor }, server.vendor), h('span', { key: 'h', style: { fontFamily: 'ui-monospace,SFMono-Regular,Consolas,Menlo,monospace', color: 'var(--color-text)' } }, server.host)]),
+            h('span', { key: 'c', style: { fontSize: '11px', color: 'var(--color-text-tertiary)' } }, server.cluster + ' · ' + server.nodes),
+          ]),
+    ]);
+    const tablesEl = h('div', { key: 'tbl', style: { display: 'flex', flexDirection: 'column', gap: '5px', gridColumn: '1 / -1' } }, [
+      h('span', { key: 'l', style: { fontSize: '11px', color: 'var(--color-text-tertiary)' } }, '조인 대상 테이블'),
+      usedTables.length
+        ? h('div', { key: 't', style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } }, usedTables.map((q, i) => h('span', { key: i, style: { fontFamily: 'ui-monospace,SFMono-Regular,Consolas,Menlo,monospace', fontSize: '12px', background: 'var(--gray-3)', borderRadius: '4px', padding: '2px 8px', color: 'var(--color-text)' } }, q)))
+        : h('span', { key: 'n', style: { fontSize: '12px', color: 'var(--color-text-tertiary)' } }, st.ruleScope === 'global' ? '해당 없음' : '테이블 미지정'),
+    ]);
+    const onViol = (curRule && curRule.severity === 'error') ? '위반 시 쿼리를 차단합니다' : '위반 시 경고를 표시합니다';
+    return h('div', {}, [
+      h('div', { key: 'meta', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', paddingBottom: '16px', marginBottom: '16px', borderBottom: '1px solid var(--color-split)' } }, [
+        chip('적용 범위', scopeMap[st.ruleScope] || '—'),
+        serverEl,
+        tablesEl,
+      ]),
+      h('div', { key: 'body' }, groupBlock(root, 0)),
+      h('div', { key: 'viol', style: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--color-split)', fontSize: '12px', color: (curRule && curRule.severity === 'error') ? 'var(--color-error)' : 'var(--gold-7)' } }, [
+        h(NS.Icon, { key: 'i', name: (curRule && curRule.severity === 'error') ? 'close-circle' : 'exclamation-circle' }),
+        h('span', { key: 't' }, onViol),
+      ]),
+    ]);
+  }
+  buildRuleTree(root) {
+    return this.state.ruleMode === 'advanced' ? this.buildAdvanced(root) : this.buildBasic(root);
+  }
+  _ns() { return window.AntDesignSystem_b19dda || {}; }
+  _field(label, ctrl) {
+    const h = React.createElement;
+    return h('div', { key: label }, [
+      h('label', { key: 'l', style: { display: 'block', fontSize: '12px', color: 'var(--color-text-tertiary)', marginBottom: '6px' } }, label),
+      ctrl,
+    ]);
+  }
+  condSubject(node) {
+    if (node.db || node.table) return [node.db, node.table, node.column].filter(Boolean).join('.');
+    return node.subject || '';
+  }
+  _serverByKey(key) { return this.servers.find(s => s.key === key) || this.servers[0]; }
+  saveDef() {
+    const de = this.state.defEditing;
+    if (!de || !de.name.trim()) return;
+    this.setState(s => {
+      let defs = s.constraintDefs.slice();
+      if (de.id) defs = defs.map(d => d.id === de.id ? { ...de, name: de.name.trim() } : d);
+      else defs = [...defs, { id: 'd_' + Date.now(), cls: de.cls, kind: de.kind || 'filter', name: de.name.trim(), desc: de.desc, expr: de.expr || '' }];
+      return { constraintDefs: defs, defEditing: null };
+    });
+  }
+  deleteDef(id) {
+    this.setState(s => {
+      const cc = {};
+      Object.keys(s.colConstraints).forEach(k => { cc[k] = s.colConstraints[k].filter(x => x !== id); });
+      return { constraintDefs: s.constraintDefs.filter(d => d.id !== id), colConstraints: cc };
+    });
+  }
+  saveMap() {
+    this.setState(s => ({ colConstraints: { ...s.colConstraints, [s.mapModalKey]: [...s.mapModalSel] }, mapModalKey: null, mapModalSel: [] }));
+  }
+  removeMapping(key, id) {
+    this.setState(s => ({ colConstraints: { ...s.colConstraints, [key]: (s.colConstraints[key] || []).filter(x => x !== id) } }));
+  }
+  setCondPart(id, part, val) {
+    this.updateTree(t => {
+      const n = this.findNode(t, id);
+      if (!n) return;
+      n[part] = val;
+      if (part === 'db') { n.table = ''; n.column = ''; n.value = ''; }
+      if (part === 'table') { n.column = ''; n.value = ''; }
+      if (part === 'column') { n.value = ''; }
+    });
+  }
+  _condRow(node) {
+    const NS = this._ns();
+    const h = React.createElement;
+    const meta = this.opMeta[node.op] || {};
+    const open = this.state.expandedCond === node.id;
+    const opOptions = Object.keys(this.opMeta).map(k => ({ label: this.opMeta[k].label, value: k }));
+    const structured = !!(node.db || node.table) || this.state.ruleScope !== 'global';
+    const server = this._serverByKey(this.state.ruleServer);
+    const dbOptions = Object.keys(server.databases).map(d => ({ label: d, value: d }));
+    const tableOptions = ((server.databases[node.db] || [])).map(tb => ({ label: tb, value: tb }));
+    const columnList = node.table ? this.columnsFor(node.table) : [];
+    const columnOptions = columnList.map(c => ({ label: c.name + '  ·  ' + c.type, value: c.name }));
+    const cInfo = this.constraintOptionsFor(node.db, node.table, node.column);
+    const constraintDisabled = !node.column || cInfo.options.length === 0;
+    const noMapping = node.column && cInfo.options.length === 0;
+    const subjectEditor = structured
+      ? h('div', { key: 'subj', style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' } }, [
+          this._field('데이터베이스', h(NS.Select, { options: dbOptions, value: node.db || undefined, placeholder: '선택', onChange: (v) => this.setCondPart(node.id, 'db', v) })),
+          this._field('테이블', h(NS.Select, { options: tableOptions, value: node.table || undefined, placeholder: node.db ? '선택' : '먼저 DB 선택', onChange: (v) => this.setCondPart(node.id, 'table', v) })),
+          h('div', { key: 'col', style: { gridColumn: '1 / -1' } }, this._field('컬럼', h(NS.Select, { options: columnOptions, value: node.column || undefined, placeholder: node.table ? '컬럼 선택' : '먼저 테이블 선택', onChange: (v) => this.setCondPart(node.id, 'column', v) }))),
+        ])
+      : this._field('대상 (Subject)', h(NS.Input, { value: node.subject || '', onChange: (e) => this.setCondField(node.id, 'subject', e.target.value), placeholder: '예: SELECT statement' }));
+    const constraintEditor = structured
+      ? h('div', { key: 'con' }, [
+          h('label', { key: 'l', style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--color-text-tertiary)', marginBottom: '6px' } }, [
+            '제약 조건',
+            node.column && cInfo.type ? h(NS.Tag, { key: 'ty', color: 'default' }, cInfo.type) : null,
+          ]),
+          h(NS.Select, { options: cInfo.options, value: node.value || undefined, disabled: constraintDisabled, placeholder: !node.column ? '먼저 컬럼을 선택하세요' : (noMapping ? '매핑된 제약 없음' : '제약 선택'), onChange: (v) => this.setCondField(node.id, 'value', v) }),
+          noMapping ? h('div', { key: 'hint', style: { fontSize: '11px', color: 'var(--gold-7)', marginTop: '6px' } }, '이 컬럼에 매핑된 제약이 없습니다 · 제약 카탈로그 → 컬럼 매핑에서 등록하세요') : null,
+        ])
+      : this._field('제약 조건 (Constraint)', h(NS.Input, { value: node.value, onChange: (e) => this.setCondField(node.id, 'value', e.target.value) }));
+    const subjText = this.condSubject(node);
+    return h('div', { key: node.id, style: { background: 'var(--gray-2)', border: '1px solid ' + (open ? 'var(--color-primary-border)' : 'var(--color-border-secondary)'), borderRadius: '8px', overflow: open ? 'visible' : 'hidden', position: 'relative', zIndex: open ? 5 : 1 } }, [
+      h('div', { key: 'hd', onClick: () => this.setState(s => ({ expandedCond: s.expandedCond === node.id ? null : node.id })), style: { display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', cursor: 'pointer' } }, [
+        h(NS.Tag, { key: 't', color: meta.color || '' }, (meta.label || node.op).split(' · ').pop()),
+        h('span', { key: 's', style: { fontFamily: 'ui-monospace,SFMono-Regular,Consolas,Menlo,monospace', fontSize: '13px', color: 'var(--geekblue-7)' } }, subjText || '(대상 미지정)'),
+        h('span', { key: 'v', style: { flex: 1, minWidth: 0, fontSize: '12px', color: 'var(--color-text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, open ? '' : '· ' + this.condValueLabel(node)),
+        h('span', { key: 'd', onClick: (e) => { e.stopPropagation(); this.removeNode(node.id); }, style: { flex: 'none', cursor: 'pointer', color: 'var(--color-text-tertiary)', display: 'inline-flex' } }, h(NS.Icon, { name: 'delete' })),
+        h('span', { key: 'c', style: { flex: 'none', display: 'inline-flex', color: 'var(--color-text-tertiary)', transition: 'transform .15s', transform: open ? 'rotate(180deg)' : 'none' } }, h(NS.Icon, { name: 'down' })),
+      ]),
+      open && h('div', { key: 'bd', style: { padding: '14px', borderTop: '1px solid var(--color-border-secondary)', background: '#fff', display: 'flex', flexDirection: 'column', gap: '12px' } }, [
+        this._field('연산자 (Operator)', h(NS.Select, { options: opOptions, value: node.op, onChange: (v) => this.setCondField(node.id, 'op', v) })),
+        subjectEditor,
+        constraintEditor,
+      ]),
+    ]);
+  }
+  _collectLeaves(node, acc) {
+    if (node.children) node.children.forEach(c => this._collectLeaves(c, acc));
+    else acc.push(node);
+    return acc;
+  }
+  _hasGroups(node) {
+    return !!(node.children && node.children.some(c => c.children));
+  }
+  hasEmptyGroup(node) {
+    if (node.children) {
+      if (node.children.length === 0) return true;
+      return node.children.some(c => c.children && this.hasEmptyGroup(c));
+    }
+    return false;
+  }
+  buildBasic(root) {
+    const NS = this._ns();
+    const h = React.createElement;
+    const leaves = this._collectLeaves(root, []);
+    const items = [];
+    leaves.forEach((lf, i) => {
+      if (i > 0) items.push(h('div', { key: 'j' + i, style: { display: 'flex', justifyContent: 'center', padding: '7px 0' } }, h('span', { style: { fontSize: '11px', fontWeight: 600, color: 'var(--color-text-tertiary)', background: 'var(--gray-3)', border: '1px solid var(--color-border-secondary)', borderRadius: '100px', padding: '2px 12px' } }, 'AND')));
+      items.push(this._condRow(lf));
+    });
+    const hint = this._hasGroups(root) ? h('div', { key: 'hint', style: { display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', marginBottom: '14px', background: 'var(--purple-1)', border: '1px solid var(--purple-3)', borderRadius: '8px', fontSize: '12px', color: 'var(--purple-7)' } }, [
+      h(NS.Icon, { key: 'i', name: 'exclamation-circle' }),
+      h('span', { key: 't' }, 'OR 그룹은 어드밴스드 모드에서 편집하세요') ]) : null;
+    return h('div', {}, [
+      hint,
+      h('div', { key: 'list', style: { display: 'flex', flexDirection: 'column' } }, items),
+      h('div', { key: 'add', style: { marginTop: '16px' } }, h(NS.Button, { type: 'dashed', block: true, iconName: 'plus', onClick: () => this.addCond(root.id) }, '조건 추가')),
+    ]);
+  }
+  buildAdvanced(root) {
+    const NS = this._ns();
+    const h = React.createElement;
+    const group = (node, depth) => {
+      const isOr = node.combinator === 'any';
+      const rail = isOr ? 'var(--purple-4)' : 'var(--blue-4)';
+      const badgeStyle = { fontSize: '11px', fontWeight: 600, color: isOr ? 'var(--purple-7)' : 'var(--color-text-tertiary)', background: isOr ? 'var(--purple-1)' : 'var(--gray-3)', border: '1px solid ' + (isOr ? 'var(--purple-3)' : 'var(--color-border-secondary)'), borderRadius: '100px', padding: '2px 12px' };
+      const items = [];
+      node.children.forEach((ch, i) => {
+        if (i > 0) items.push(h('div', { key: 'j' + i, style: { display: 'flex', justifyContent: 'center', padding: '7px 0' } }, h('span', { style: badgeStyle }, isOr ? 'OR' : 'AND')));
+        items.push(ch.children ? group(ch, depth + 1) : this._condRow(ch));
+      });
+      const combToggle = h('div', { key: 'ct', style: { display: 'flex', border: '1px solid var(--color-border)', borderRadius: '6px', overflow: 'hidden' } },
+        [['all', 'AND'], ['any', 'OR']].map(([m, lbl]) => h('span', { key: m, onClick: () => this.setCombinator(node.id, m),
+          style: { padding: '3px 11px', fontSize: '11px', fontWeight: node.combinator === m ? 600 : 400, cursor: 'pointer', background: node.combinator === m ? (m === 'any' ? 'var(--purple-6)' : 'var(--color-primary)') : '#fff', color: node.combinator === m ? '#fff' : 'var(--color-text-secondary)' } }, lbl)));
+      return h('div', { key: node.id, style: { borderLeft: '3px solid ' + rail, borderRadius: '2px 8px 8px 2px', background: depth === 0 ? 'transparent' : 'rgba(0,0,0,.015)', padding: depth === 0 ? '2px 0 2px 14px' : '12px 12px 12px 14px', marginBottom: depth === 0 ? 0 : '2px' } }, [
+        h('div', { key: 'gh', style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' } }, [
+          h('span', { key: 'lb', style: { fontSize: '12px', fontWeight: 500, color: isOr ? 'var(--purple-7)' : 'var(--color-text-secondary)' } }, depth === 0 ? '루트 그룹' : (isOr ? 'OR 그룹' : 'AND 그룹')),
+          combToggle,
+          h('span', { key: 'sp', style: { flex: 1 } }),
+          h(NS.Button, { key: 'ac', size: 'small', type: 'dashed', iconName: 'plus', onClick: () => this.addCond(node.id) }, '조건'),
+          h(NS.Button, { key: 'ag', size: 'small', type: 'dashed', iconName: 'plus', onClick: () => this.addGroup(node.id) }, '그룹'),
+          depth > 0 && h('span', { key: 'rm', onClick: () => this.removeNode(node.id), style: { cursor: 'pointer', color: 'var(--color-text-tertiary)', display: 'inline-flex' } }, h(NS.Icon, { name: 'delete' })),
+        ]),
+        h('div', { key: 'ch', style: { display: 'flex', flexDirection: 'column' } }, items),
+      ]);
+    };
+    return group(root, 0);
+  }
+  addApprover() {
+    this.setState(s => {
+      const pool = this.approverPool;
+      const next = pool[s.reqApprovers.length % pool.length];
+      return { reqApprovers: [...s.reqApprovers, { ...next, id: 'ap' + Date.now() }] };
+    });
+  }
+  setCondOpUnused() {}
+}
+</script>
+</body>
+</html>

@@ -110,6 +110,99 @@ export type Purpose = z.infer<typeof purposeSchema>;
 export const schemaDictSchema = z.record(z.string(), z.array(z.string()));
 export type SchemaDict = z.infer<typeof schemaDictSchema>;
 
+// ---------- 규칙 (spec 004 §3·§7) ----------
+
+export const ruleScopeSchema = z.enum(["SINGLE", "MULTI", "GLOBAL"]);
+export type RuleScope = z.infer<typeof ruleScopeSchema>;
+
+/** 조건 단위 severity (§3.1). 목록 요약은 "NONE"도 가능. */
+export const ruleSeveritySchema = z.enum(["BLOCK", "WARN"]);
+export type RuleSeverity = z.infer<typeof ruleSeveritySchema>;
+
+export const ruleOpSchema = z.enum([
+  "requires",
+  "blocks",
+  "joins",
+  "must_be_within",
+  "must_be_masked",
+]);
+export type RuleOp = z.infer<typeof ruleOpSchema>;
+
+/**
+ * 조건 leaf (§3.1). `node:"cond"`으로 판별. `judged`는 백엔드가 계산해 함께 직렬화하는
+ * 읽기 전용 플래그(requires/blocks/joins=true) — 저장 시엔 보내지 않는다.
+ */
+export const ruleConditionSchema = z.object({
+  node: z.literal("cond"),
+  op: ruleOpSchema,
+  severity: ruleSeveritySchema,
+  table: z.string().nullish(),
+  column: z.string().nullish(),
+  defId: idSchema.nullish(),
+  mappingId: idSchema.nullish(),
+  refTable: z.string().nullish(),
+  refColumn: z.string().nullish(),
+  subject: z.string().nullish(),
+  value: z.string().nullish(),
+  judged: z.boolean().optional(),
+});
+export type RuleCondition = z.infer<typeof ruleConditionSchema>;
+
+/** 그룹 노드 — 재귀(그룹은 그룹/조건을 자식으로). z.lazy로 자기참조 (§3.1). */
+export interface RuleGroup {
+  node: "group";
+  combinator: "all" | "any";
+  children: RuleTreeNode[];
+}
+export type RuleTreeNode = RuleGroup | RuleCondition;
+
+export const ruleGroupSchema: z.ZodType<RuleGroup> = z.lazy(() =>
+  z.object({
+    node: z.literal("group"),
+    combinator: z.enum(["all", "any"]),
+    children: z.array(ruleNodeSchema),
+  }),
+);
+export const ruleNodeSchema: z.ZodType<RuleTreeNode> = z.lazy(() =>
+  z.union([ruleGroupSchema, ruleConditionSchema]),
+);
+
+/** 목록 항목 (§7). enforced=판정 조건 보유 여부, corrupt=tree_json 파싱 실패. */
+export const ruleDtoSchema = z.object({
+  id: idSchema,
+  name: z.string(),
+  scope: ruleScopeSchema,
+  server: z.string().nullish(),
+  severity: z.enum(["BLOCK", "WARN", "NONE"]),
+  hits: z.number(),
+  enabled: z.boolean(),
+  enforced: z.boolean(),
+  corrupt: z.boolean(),
+});
+export type RuleDto = z.infer<typeof ruleDtoSchema>;
+
+/** 상세 (§7). 파싱 실패 시 tree=null + corrupt=true. */
+export const ruleDetailSchema = z.object({
+  id: idSchema,
+  name: z.string(),
+  scope: ruleScopeSchema,
+  server: z.string().nullish(),
+  enabled: z.boolean(),
+  tree: ruleGroupSchema.nullable(),
+  corrupt: z.boolean(),
+});
+export type RuleDetail = z.infer<typeof ruleDetailSchema>;
+
+export const ruleTestResultSchema = z.object({ message: z.string() });
+
+export interface RuleInput {
+  name: string;
+  scope: RuleScope;
+  server?: string | null;
+  enabled?: boolean;
+  tree: RuleGroup;
+}
+
 // ---------- 요청 타입 ----------
 
 export interface LintInput {
@@ -355,4 +448,38 @@ export function deletePurpose(id: Id): Promise<void> {
 
 export function getSchemaDict(): Promise<SchemaDict> {
   return request(schemaDictSchema, "/catalog/schema");
+}
+
+// ---------- 규칙 (spec 004 §7) ----------
+
+export function listRules(): Promise<RuleDto[]> {
+  return request(z.array(ruleDtoSchema), "/rules");
+}
+
+export function getRule(id: Id): Promise<RuleDetail> {
+  return request(ruleDetailSchema, `/rules/${id}`);
+}
+
+/** 201 RuleDetail | 400 {message}(매핑 안 된 defId·빈 그룹·requires 판정불가·op/severity 오류) */
+export function createRule(input: RuleInput): Promise<RuleDetail> {
+  return request(ruleDetailSchema, "/rules", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateRule(id: Id, input: RuleInput): Promise<RuleDetail> {
+  return request(ruleDetailSchema, `/rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteRule(id: Id): Promise<void> {
+  return requestVoid(`/rules/${id}`, { method: "DELETE" });
+}
+
+/** 테스트 실행 — 이번 스펙에서는 스텁 메시지만 반환 (§2). */
+export function testRule(id: Id): Promise<{ message: string }> {
+  return request(ruleTestResultSchema, `/rules/${id}/test`, { method: "POST" });
 }

@@ -37,6 +37,16 @@ CREATE TABLE IF NOT EXISTS constraint_mapping (
     CONSTRAINT uq_mapping UNIQUE (column_id, def_id, purpose_code)
 );
 
+CREATE TABLE IF NOT EXISTS rule (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name          VARCHAR(128) NOT NULL,
+    scope         VARCHAR(16) NOT NULL,
+    server        VARCHAR(64) NULL,
+    enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+    tree_json     TEXT NOT NULL,
+    hit_count     BIGINT NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS saved_query (
     id               BIGINT AUTO_INCREMENT PRIMARY KEY,
     name             VARCHAR(100) NOT NULL,

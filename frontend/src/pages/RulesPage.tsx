@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { App, Button, Input, Select, Tag } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { App, Alert, Button, Input, Select, Spin, Tag } from "antd";
 import {
   AppstoreOutlined,
   CheckOutlined,
@@ -8,32 +8,46 @@ import {
   DownOutlined,
   ExclamationCircleOutlined,
   PlusOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import { MONO_FONT } from "../theme";
+import { opMeta, servers } from "../mock/design";
 import {
-  columnsFor,
-  condValueLabel,
-  constraintOptionsFor,
-  opMeta,
-  ruleTrees as seedRuleTrees,
-  rulesMeta,
-  servers,
-} from "../mock/design";
-import type { RuleCondNode, RuleTree, Server } from "../mock/design";
+  apiErrorMessage,
+  createRule,
+  deleteRule,
+  getRule,
+  listDefs,
+  listMappings,
+  listRules,
+  listTables,
+  testRule,
+  updateRule,
+  type CatalogTable,
+  type ConstraintDef,
+  type ConstraintMapping,
+  type Id,
+  type RuleDetail,
+  type RuleDto,
+  type RuleGroup,
+  type RuleInput,
+  type RuleOp,
+  type RuleScope,
+  type RuleSeverity,
+  type RuleTreeNode,
+} from "../api/client";
 
 /**
- * 규칙 관리 (Rule Management) — antd port of dc.html lines 558–640 (3-pane layout)
- * + condition rows / inline edit form (~1900–1960) + AND/OR tree + advanced rail
- * (~1857–2014) + IR summary (~1796–1855) + JSON tree (~1209–1255).
+ * 규칙 관리 (Rule Management) — spec 004 §8 실 연결.
  *
- * STUB screen: everything is local React state seeded from src/mock/design.ts.
- * Save / test / add / delete only raise an antd message — no backend (spec 004).
+ * spec 003의 로컬 스텁 3단 레이아웃(목록 · 빌더 · IR 트리)을 유지하되 데이터 소스를
+ * `/api/rules`로 전환한다. 조건 편집의 제약 select는 `/api/catalog/mappings`(컬럼 필터)
+ * 실데이터, joins는 refTable/refColumn select, must_be_*는 "판정 미구현" 배지.
+ * 저장/삭제/추가는 실 API, 테스트 실행은 백엔드 스텁 메시지.
  */
 
 // ---------------------------------------------------------------------------
-// Color tokens — the design HTML uses antd CSS variables (var(--color-*),
-// var(--purple-7), …) that this app does not define, so they are resolved to
-// their antd-default hex/rgba values here (dc.html tokens + .dev reference).
+// Color tokens (dc.html tokens → antd-default hex/rgba). spec 003과 동일.
 // ---------------------------------------------------------------------------
 const C = {
   text: "rgba(0,0,0,0.88)",
@@ -63,26 +77,110 @@ const C = {
 };
 
 // ---------------------------------------------------------------------------
-// Tree model — condition leaves + AND/OR groups (groups may nest groups).
+// Editor tree — client-side model with stable ids for React manipulation.
+// Maps to/from the backend discriminated tree (node:"group"|"cond").
 // ---------------------------------------------------------------------------
-type CondNode = RuleCondNode;
-interface GroupNode {
+interface EditorCond {
+  kind: "cond";
+  id: string;
+  op: RuleOp;
+  severity: RuleSeverity;
+  table?: string;
+  column?: string;
+  defId?: Id;
+  mappingId?: Id;
+  refTable?: string;
+  refColumn?: string;
+  subject?: string;
+  value?: string;
+}
+interface EditorGroup {
+  kind: "group";
   id: string;
   combinator: "all" | "any";
-  children: TreeNode[];
+  children: EditorNode[];
 }
-type TreeNode = CondNode | GroupNode;
+type EditorNode = EditorCond | EditorGroup;
 
-const isGroup = (n: TreeNode): n is GroupNode =>
-  (n as GroupNode).children !== undefined;
+const isGroup = (n: EditorNode): n is EditorGroup => n.kind === "group";
 
-type Scope = "single" | "multi" | "global";
+interface Draft {
+  id: Id | null;
+  name: string;
+  scope: RuleScope;
+  server: string | null;
+  enabled: boolean;
+  tree: EditorGroup;
+  corrupt: boolean;
+}
+
 type Mode = "basic" | "advanced";
 type IrTab = "summary" | "ir";
 
+let UID = 0;
+const nid = (p: string): string => `${p}${Date.now()}_${++UID}`;
+
+const JUDGED_OPS: RuleOp[] = ["requires", "blocks", "joins"];
+const isJudgedOp = (op: RuleOp): boolean => JUDGED_OPS.includes(op);
+const isDeferredOp = (op: RuleOp): boolean =>
+  op === "must_be_within" || op === "must_be_masked";
+
+const clean = (v?: string): string | undefined =>
+  v && v.trim() !== "" ? v : undefined;
+
+// backend → editor
+function fromApi(node: RuleTreeNode): EditorNode {
+  if (node.node === "group") {
+    return {
+      kind: "group",
+      id: nid("g"),
+      combinator: node.combinator,
+      children: node.children.map(fromApi),
+    };
+  }
+  return {
+    kind: "cond",
+    id: nid("c"),
+    op: node.op,
+    severity: node.severity,
+    table: node.table ?? undefined,
+    column: node.column ?? undefined,
+    defId: node.defId ?? undefined,
+    mappingId: node.mappingId ?? undefined,
+    refTable: node.refTable ?? undefined,
+    refColumn: node.refColumn ?? undefined,
+    subject: node.subject ?? undefined,
+    value: node.value ?? undefined,
+  };
+}
+
+// editor → backend (drops client ids, empties → undefined)
+function toApi(node: EditorNode): RuleTreeNode {
+  if (isGroup(node)) {
+    return {
+      node: "group",
+      combinator: node.combinator,
+      children: node.children.map(toApi),
+    };
+  }
+  return {
+    node: "cond",
+    op: node.op,
+    severity: node.severity,
+    table: clean(node.table),
+    column: clean(node.column),
+    defId: node.defId ?? undefined,
+    mappingId: node.mappingId ?? undefined,
+    refTable: clean(node.refTable),
+    refColumn: clean(node.refColumn),
+    subject: clean(node.subject),
+    value: clean(node.value),
+  };
+}
+
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
-function findNode(node: TreeNode, id: string): TreeNode | null {
+function findNode(node: EditorNode, id: string): EditorNode | null {
   if (node.id === id) return node;
   if (isGroup(node)) {
     for (const c of node.children) {
@@ -92,24 +190,20 @@ function findNode(node: TreeNode, id: string): TreeNode | null {
   }
   return null;
 }
-
-function removeFrom(node: TreeNode, id: string): void {
+function removeFrom(node: EditorNode, id: string): void {
   if (isGroup(node)) {
     node.children = node.children.filter((c) => c.id !== id);
     node.children.forEach((c) => removeFrom(c, id));
   }
 }
-
-function collectLeaves(node: TreeNode, acc: CondNode[]): CondNode[] {
-  if (isGroup(node)) node.children.forEach((c) => collectLeaves(c, acc));
+function collectConds(node: EditorNode, acc: EditorCond[] = []): EditorCond[] {
+  if (isGroup(node)) node.children.forEach((c) => collectConds(c, acc));
   else acc.push(node);
   return acc;
 }
-
-const hasGroups = (node: TreeNode): boolean =>
+const hasGroups = (node: EditorNode): boolean =>
   isGroup(node) && node.children.some((c) => isGroup(c));
-
-function hasEmptyGroup(node: TreeNode): boolean {
+function hasEmptyGroup(node: EditorNode): boolean {
   if (isGroup(node)) {
     if (node.children.length === 0) return true;
     return node.children.some((c) => isGroup(c) && hasEmptyGroup(c));
@@ -117,42 +211,74 @@ function hasEmptyGroup(node: TreeNode): boolean {
   return false;
 }
 
-function condSubject(node: CondNode): string {
-  if (node.db || node.table)
-    return [node.db, node.table, node.column].filter(Boolean).join(".");
-  return node.subject || "";
+/** 판정 조건이 재귀적으로 0개면 미강제(표시 전용) — §4.1 C3. */
+function isEnforced(node: EditorNode): boolean {
+  return collectConds(node).some((c) => isJudgedOp(c.op));
+}
+/** 표시용 파생 severity(미충족 leaf 최댓값 근사): 판정 조건 중 BLOCK 있으면 BLOCK. */
+function derivedSeverity(node: EditorNode): "BLOCK" | "WARN" | "NONE" {
+  const judged = collectConds(node).filter((c) => isJudgedOp(c.op));
+  if (judged.length === 0) return "NONE";
+  return judged.some((c) => c.severity === "BLOCK") ? "BLOCK" : "WARN";
 }
 
-const serverByKey = (key: string): Server =>
-  servers.find((s) => s.key === key) || servers[0];
+const emptyCond = (scope: RuleScope): EditorCond =>
+  scope === "GLOBAL"
+    ? {
+        kind: "cond",
+        id: nid("c"),
+        op: "must_be_masked",
+        severity: "WARN",
+        subject: "SELECT statement",
+        value: "",
+      }
+    : {
+        kind: "cond",
+        id: nid("c"),
+        op: "requires",
+        severity: "BLOCK",
+      };
+const starterGroup = (scope: RuleScope): EditorGroup => ({
+  kind: "group",
+  id: nid("g"),
+  combinator: "all",
+  children: [emptyCond(scope)],
+});
 
-// scope → [label, Tag color] for the rule list (dc.html line 1475)
-const scopeTag: Record<Scope, [string, string]> = {
-  single: ["단일 테이블", "green"],
-  multi: ["다중 테이블 조인", "cyan"],
-  global: ["전역 규칙", "gold"],
+// ---------------------------------------------------------------------------
+const SCOPE_LABEL: Record<RuleScope, string> = {
+  SINGLE: "단일 테이블",
+  MULTI: "다중 테이블 조인",
+  GLOBAL: "전역 규칙",
 };
-const scopeName: Record<Scope, string> = {
-  single: "단일 테이블",
-  multi: "다중 테이블 조인",
-  global: "전역 규칙",
+const SCOPE_COLOR: Record<RuleScope, string> = {
+  SINGLE: "green",
+  MULTI: "cyan",
+  GLOBAL: "gold",
 };
-
-const scopeOptions = [
-  { label: "단일 테이블", value: "single" },
-  { label: "다중 테이블 조인", value: "multi" },
-  { label: "전역 규칙", value: "global" },
+const SCOPE_OPTIONS = (Object.keys(SCOPE_LABEL) as RuleScope[]).map((k) => ({
+  label: SCOPE_LABEL[k],
+  value: k,
+}));
+const SEV_DOT: Record<string, string> = {
+  BLOCK: C.error,
+  WARN: C.gold6,
+  NONE: C.textQuaternary,
+};
+const OP_OPTIONS = (Object.keys(opMeta) as RuleOp[]).map((k) => ({
+  label: opMeta[k].label,
+  value: k,
+}));
+const SEVERITY_OPTIONS = [
+  { label: "차단 (BLOCK)", value: "BLOCK" },
+  { label: "경고 (WARN)", value: "WARN" },
 ];
 const serverOptions = servers.map((s) => ({
   label: s.vendor + " · " + s.key,
   value: s.key,
 }));
-const opOptions = (Object.keys(opMeta) as (keyof typeof opMeta)[]).map((k) => ({
-  label: opMeta[k].label,
-  value: k,
-}));
-
-const STUB_MSG = "규칙 관리는 다음 단계(spec 004)에서 백엔드와 연결됩니다";
+const serverByKey = (key: string | null) =>
+  servers.find((s) => s.key === key) || servers[0];
 
 const fieldLabel: React.CSSProperties = {
   display: "block",
@@ -161,34 +287,124 @@ const fieldLabel: React.CSSProperties = {
   marginBottom: 6,
 };
 
-// ---------------------------------------------------------------------------
+// ===========================================================================
 export default function RulesPage() {
   const { message } = App.useApp();
-  const stub = () => message.info(STUB_MSG);
 
-  const [trees, setTrees] = useState<Record<string, GroupNode>>(() =>
-    clone(seedRuleTrees as Record<string, RuleTree>) as Record<string, GroupNode>,
-  );
-  const [ruleKey, setRuleKey] = useState("r2");
-  const [ruleScope, setRuleScope] = useState<Scope>("multi");
-  const [ruleServer, setRuleServer] = useState("mysql-prod");
+  // catalog + rules
+  const [loading, setLoading] = useState(true);
+  const [rules, setRules] = useState<RuleDto[]>([]);
+  const [tables, setTables] = useState<CatalogTable[]>([]);
+  const [defs, setDefs] = useState<ConstraintDef[]>([]);
+  const [mappings, setMappings] = useState<ConstraintMapping[]>([]);
+
+  // editor
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [selectedId, setSelectedId] = useState<Id | null>(null);
   const [ruleMode, setRuleMode] = useState<Mode>("basic");
   const [irTab, setIrTab] = useState<IrTab>("summary");
-  const [expandedCond, setExpandedCond] = useState<string | null>("c1");
+  const [expandedCond, setExpandedCond] = useState<string | null>(null);
   const [irCollapsed, setIrCollapsed] = useState<Record<string, boolean>>({});
   const [hoverRule, setHoverRule] = useState<string | null>(null);
+  const [buildError, setBuildError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  const curRule = rulesMeta.find((r) => r.key === ruleKey);
-  const tree = trees[ruleKey];
-  const server = serverByKey(ruleServer);
-  const invalid = hasEmptyGroup(tree);
+  const defById = useMemo(() => {
+    const m = new Map<string, ConstraintDef>();
+    defs.forEach((d) => m.set(String(d.id), d));
+    return m;
+  }, [defs]);
 
-  // --- tree mutation --------------------------------------------------------
-  const updateTree = (mut: (t: GroupNode) => void) =>
-    setTrees((prev) => {
-      const t = clone(prev[ruleKey]);
+  // ---- load ---------------------------------------------------------------
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [rl, tl, dl, ml] = await Promise.all([
+          listRules(),
+          listTables(),
+          listDefs(),
+          listMappings(),
+        ]);
+        if (!alive) return;
+        setRules(rl);
+        setTables(tl);
+        setDefs(dl);
+        setMappings(ml);
+        if (rl.length) {
+          const d = await getRule(rl[0].id);
+          if (alive) applyDetail(d);
+        } else {
+          startDraft();
+        }
+      } catch (e) {
+        if (alive) message.error(apiErrorMessage(e) ?? "규칙을 불러오지 못했습니다");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function applyDetail(d: RuleDetail) {
+    const tree = d.tree ? (fromApi(d.tree) as EditorGroup) : starterGroup(d.scope);
+    setSelectedId(d.id);
+    setDraft({
+      id: d.id,
+      name: d.name,
+      scope: d.scope,
+      server: d.server ?? null,
+      enabled: d.enabled,
+      tree,
+      corrupt: d.corrupt,
+    });
+    setBuildError(null);
+    setExpandedCond(null);
+  }
+
+  function startDraft() {
+    setSelectedId(null);
+    setDraft({
+      id: null,
+      name: "새 규칙",
+      scope: "SINGLE",
+      server: servers[0].key,
+      enabled: true,
+      tree: starterGroup("SINGLE"),
+      corrupt: false,
+    });
+    setBuildError(null);
+    setExpandedCond(null);
+  }
+
+  async function openRule(dto: RuleDto) {
+    try {
+      const d = await getRule(dto.id);
+      applyDetail(d);
+    } catch (e) {
+      message.error(apiErrorMessage(e) ?? "규칙 상세를 불러오지 못했습니다");
+    }
+  }
+
+  // ---- tree mutation ------------------------------------------------------
+  const updateTree = (mut: (t: EditorGroup) => void) =>
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const t = clone(prev.tree);
       mut(t);
-      return { ...prev, [ruleKey]: t };
+      return { ...prev, tree: t };
+    });
+
+  const patchDraft = (patch: Partial<Draft>) =>
+    setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
+
+  const updateCond = (id: string, patch: Partial<EditorCond>) =>
+    updateTree((t) => {
+      const n = findNode(t, id);
+      if (n && n.kind === "cond") Object.assign(n, patch);
     });
 
   const setCombinator = (id: string, m: "all" | "any") =>
@@ -197,193 +413,318 @@ export default function RulesPage() {
       if (n && isGroup(n)) n.combinator = m;
     });
 
-  const setCondField = (id: string, field: keyof CondNode, val: string) =>
-    updateTree((t) => {
-      const n = findNode(t, id);
-      if (n && !isGroup(n)) (n as unknown as Record<string, unknown>)[field] = val;
-    });
-
-  const setCondPart = (id: string, part: "db" | "table" | "column", val: string) =>
-    updateTree((t) => {
-      const n = findNode(t, id);
-      if (!n || isGroup(n)) return;
-      n[part] = val;
-      if (part === "db") {
-        n.table = "";
-        n.column = "";
-        n.value = "";
-      }
-      if (part === "table") {
-        n.column = "";
-        n.value = "";
-      }
-      if (part === "column") n.value = "";
-    });
-
   const removeNode = (id: string) => updateTree((t) => removeFrom(t, id));
 
   const addCond = (groupId: string) => {
-    const nid = "c" + Date.now();
-    const firstDb = Object.keys(server.databases)[0];
-    const structured = ruleScope !== "global";
+    const c = emptyCond(draft?.scope ?? "SINGLE");
     updateTree((t) => {
       const g = findNode(t, groupId);
-      if (g && isGroup(g))
-        g.children.push(
-          structured
-            ? { type: "cond", id: nid, op: "requires", db: firstDb, table: "", column: "", value: "" }
-            : { type: "cond", id: nid, op: "requires", subject: "SELECT statement", value: "제약 조건을 입력하세요" },
-        );
+      if (g && isGroup(g)) g.children.push(c);
     });
-    setExpandedCond(nid);
+    setExpandedCond(c.id);
   };
 
-  const addGroup = (groupId: string) => {
-    const firstDb = Object.keys(server.databases)[0];
+  const addGroup = (groupId: string) =>
     updateTree((t) => {
       const g = findNode(t, groupId);
       if (g && isGroup(g))
         g.children.push({
-          id: "g" + Date.now(),
+          kind: "group",
+          id: nid("g"),
           combinator: "any",
-          children: [
-            { type: "cond", id: "c" + (Date.now() + 1), op: "requires", db: firstDb, table: "", column: "", value: "" },
-          ],
+          children: [emptyCond(draft?.scope ?? "SINGLE")],
         });
     });
-  };
+
+  const setOp = (id: string, op: RuleOp) =>
+    updateCond(id, {
+      op,
+      ...(op === "joins"
+        ? { defId: undefined, mappingId: undefined }
+        : { refTable: undefined, refColumn: undefined }),
+    });
 
   const toggleIr = (path: string) =>
     setIrCollapsed((c) => ({ ...c, [path]: !c[path] }));
 
-  const selectRule = (r: (typeof rulesMeta)[number]) => {
-    setRuleKey(r.key);
-    setRuleScope(r.scope);
-    setRuleServer(r.server || "mysql-prod");
-    setExpandedCond(null);
+  // ---- catalog helpers ----------------------------------------------------
+  const tableOptions = tables.map((t) => ({ label: t.name, value: t.name }));
+  const columnsOf = (tableName?: string) =>
+    tables.find((t) => t.name === tableName)?.columns ?? [];
+  const columnId = (tableName?: string, colName?: string): Id | undefined =>
+    columnsOf(tableName).find((c) => c.name === colName)?.id;
+  const mappingsForColumn = (
+    tableName?: string,
+    colName?: string,
+  ): ConstraintMapping[] => {
+    const cid = columnId(tableName, colName);
+    if (cid == null) return [];
+    return mappings.filter((m) => String(m.columnId) === String(cid));
+  };
+  const defName = (defId?: Id): string => {
+    if (defId == null) return "";
+    return defById.get(String(defId))?.name ?? `defId=${defId}`;
   };
 
-  // --- IR object (dc.html lines 1486–1496) ----------------------------------
-  const ruleIrObj = useMemo(() => {
-    const irFromNode = (node: TreeNode): unknown =>
-      isGroup(node)
-        ? { match: node.combinator, conditions: node.children.map(irFromNode) }
-        : { op: node.op, subject: condSubject(node), constraint: condValueLabel(node) };
-    return {
-      rule: ruleKey + ":" + (curRule ? curRule.name : ""),
-      scope:
-        ruleScope === "single" ? "single_table" : ruleScope === "multi" ? "multi_table" : "global",
-      server: ruleScope === "global" ? null : ruleServer,
-      ...(irFromNode(tree) as Record<string, unknown>),
-      severity: curRule ? curRule.severity : "error",
-      on_violation: curRule && curRule.severity === "error" ? "block" : "warn",
+  const condSubjectText = (c: EditorCond): string => {
+    if (draft?.scope === "GLOBAL") return c.subject || "";
+    return [c.table, c.column].filter(Boolean).join(".");
+  };
+  const condConstraintLabel = (c: EditorCond): string => {
+    if (c.op === "joins")
+      return c.refTable && c.refColumn
+        ? `${c.refTable}.${c.refColumn}`
+        : "(조인 대상 미지정)";
+    if (draft?.scope === "GLOBAL") return c.value || "";
+    if (c.defId != null) return defName(c.defId);
+    return c.value || "";
+  };
+
+  // ---- persistence --------------------------------------------------------
+  async function save() {
+    if (!draft) return;
+    if (hasEmptyGroup(draft.tree)) return;
+    const input: RuleInput = {
+      name: draft.name.trim() || "새 규칙",
+      scope: draft.scope,
+      server: draft.scope === "GLOBAL" ? null : draft.server,
+      enabled: draft.enabled,
+      tree: toApi(draft.tree) as RuleGroup,
     };
-  }, [tree, ruleKey, ruleScope, ruleServer, curRule]);
+    setSaving(true);
+    setBuildError(null);
+    try {
+      const saved =
+        draft.id == null
+          ? await createRule(input)
+          : await updateRule(draft.id, input);
+      message.success("규칙을 저장했습니다");
+      const rl = await listRules();
+      setRules(rl);
+      const dto = rl.find((r) => String(r.id) === String(saved.id));
+      if (dto) await openRule(dto);
+      else applyDetail(saved);
+    } catch (e) {
+      const m = apiErrorMessage(e) ?? "규칙 저장에 실패했습니다";
+      setBuildError(m);
+      message.error(m);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!draft || draft.id == null) {
+      startDraft();
+      return;
+    }
+    try {
+      await deleteRule(draft.id);
+      message.success("규칙을 삭제했습니다");
+      const rl = await listRules();
+      setRules(rl);
+      if (rl.length) await openRule(rl[0]);
+      else startDraft();
+    } catch (e) {
+      message.error(apiErrorMessage(e) ?? "규칙 삭제에 실패했습니다");
+    }
+  }
+
+  async function runTest() {
+    if (!draft || draft.id == null) {
+      message.info("먼저 규칙을 저장한 뒤 테스트를 실행할 수 있습니다");
+      return;
+    }
+    try {
+      const r = await testRule(draft.id);
+      message.info(r.message);
+    } catch (e) {
+      message.error(apiErrorMessage(e) ?? "테스트 실행에 실패했습니다");
+    }
+  }
+
+  // ---- live IR object (backend tree shape) --------------------------------
+  const ruleIrObj = useMemo(() => {
+    if (!draft) return {};
+    return {
+      rule: `${draft.id ?? "new"}:${draft.name}`,
+      scope: draft.scope,
+      server: draft.scope === "GLOBAL" ? null : draft.server,
+      enabled: draft.enabled,
+      enforced: isEnforced(draft.tree),
+      severity: derivedSeverity(draft.tree),
+      ...(toApi(draft.tree) as unknown as Record<string, unknown>),
+    };
+  }, [draft]);
 
   // =========================================================================
-  // Condition row (dc.html _condRow, lines 1906–1953)
+  // Condition row
   // =========================================================================
-  function CondRow(node: CondNode) {
+  function CondRow(node: EditorCond): React.ReactNode {
     const meta = opMeta[node.op] || { label: node.op, color: "" };
     const open = expandedCond === node.id;
-    const structured = !!(node.db || node.table) || ruleScope !== "global";
-    const dbOptions = Object.keys(server.databases).map((d) => ({ label: d, value: d }));
-    const tableOptions = (server.databases[node.db || ""] || []).map((tb) => ({
-      label: tb,
-      value: tb,
-    }));
-    const columnList = node.table ? columnsFor(node.table) : [];
-    const columnOptions = columnList.map((c) => ({
-      label: c.name + "  ·  " + c.type,
-      value: c.name,
-    }));
-    const cInfo = constraintOptionsFor(node.db || "", node.table || "", node.column || "");
-    const constraintDisabled = !node.column || cInfo.options.length === 0;
-    const noMapping = !!node.column && cInfo.options.length === 0;
-    const subjText = condSubject(node);
+    const global = draft?.scope === "GLOBAL";
+    const deferred = isDeferredOp(node.op);
+    const subjText = condSubjectText(node);
 
-    const subjectEditor = structured ? (
+    const colMappings = mappingsForColumn(node.table, node.column);
+    const selMapping =
+      node.mappingId != null
+        ? colMappings.find((m) => String(m.id) === String(node.mappingId))
+        : colMappings.find((m) => String(m.defId) === String(node.defId));
+    const noMapping = !!node.column && colMappings.length === 0;
+
+    // --- subject / target editor ---
+    const subjectEditor = global ? (
+      <div>
+        <label style={fieldLabel}>대상 (Subject)</label>
+        <Input
+          value={node.subject || ""}
+          placeholder="예: SELECT statement"
+          onChange={(e) => updateCond(node.id, { subject: e.target.value })}
+        />
+      </div>
+    ) : (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <div>
-          <label style={fieldLabel}>데이터베이스</label>
-          <Select
-            style={{ width: "100%" }}
-            options={dbOptions}
-            value={node.db || undefined}
-            placeholder="선택"
-            onChange={(v) => setCondPart(node.id, "db", v)}
-          />
-        </div>
         <div>
           <label style={fieldLabel}>테이블</label>
           <Select
             style={{ width: "100%" }}
             options={tableOptions}
             value={node.table || undefined}
-            placeholder={node.db ? "선택" : "먼저 DB 선택"}
-            onChange={(v) => setCondPart(node.id, "table", v)}
+            placeholder="테이블 선택"
+            showSearch
+            optionFilterProp="label"
+            onChange={(v) =>
+              updateCond(node.id, {
+                table: v,
+                column: undefined,
+                defId: undefined,
+                mappingId: undefined,
+              })
+            }
           />
         </div>
-        <div style={{ gridColumn: "1 / -1" }}>
+        <div>
           <label style={fieldLabel}>컬럼</label>
           <Select
             style={{ width: "100%" }}
-            options={columnOptions}
+            options={columnsOf(node.table).map((c) => ({
+              label: c.name + "  ·  " + c.type,
+              value: c.name,
+            }))}
             value={node.column || undefined}
             placeholder={node.table ? "컬럼 선택" : "먼저 테이블 선택"}
-            onChange={(v) => setCondPart(node.id, "column", v)}
+            showSearch
+            optionFilterProp="label"
+            onChange={(v) =>
+              updateCond(node.id, {
+                column: v,
+                defId: undefined,
+                mappingId: undefined,
+              })
+            }
           />
         </div>
       </div>
-    ) : (
-      <div>
-        <label style={fieldLabel}>대상 (Subject)</label>
-        <Input
-          value={node.subject || ""}
-          placeholder="예: SELECT statement"
-          onChange={(e) => setCondField(node.id, "subject", e.target.value)}
-        />
-      </div>
     );
 
-    const constraintEditor = structured ? (
-      <div>
-        <label
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-            color: C.textTertiary,
-            marginBottom: 6,
-          }}
-        >
-          제약 조건
-          {node.column && cInfo.type ? <Tag color="default">{cInfo.type}</Tag> : null}
-        </label>
-        <Select
-          style={{ width: "100%" }}
-          options={cInfo.options}
-          value={node.value || undefined}
-          disabled={constraintDisabled}
-          placeholder={!node.column ? "먼저 컬럼을 선택하세요" : noMapping ? "매핑된 제약 없음" : "제약 선택"}
-          onChange={(v) => setCondField(node.id, "value", v)}
-        />
-        {noMapping ? (
-          <div style={{ fontSize: 11, color: C.gold7, marginTop: 6 }}>
-            이 컬럼에 매핑된 제약이 없습니다 · 제약 카탈로그 → 컬럼 매핑에서 등록하세요
+    // --- constraint / ref editor ---
+    let detailEditor: React.ReactNode;
+    if (global) {
+      detailEditor = (
+        <div>
+          <label style={fieldLabel}>제약 조건 (Constraint)</label>
+          <Input
+            value={node.value || ""}
+            placeholder="제약 조건을 입력하세요"
+            onChange={(e) => updateCond(node.id, { value: e.target.value })}
+          />
+        </div>
+      );
+    } else if (node.op === "joins") {
+      detailEditor = (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div>
+            <label style={fieldLabel}>조인 대상 테이블 (refTable)</label>
+            <Select
+              style={{ width: "100%" }}
+              options={tableOptions}
+              value={node.refTable || undefined}
+              placeholder="테이블 선택"
+              showSearch
+              optionFilterProp="label"
+              onChange={(v) =>
+                updateCond(node.id, { refTable: v, refColumn: undefined })
+              }
+            />
           </div>
-        ) : null}
-      </div>
-    ) : (
-      <div>
-        <label style={fieldLabel}>제약 조건 (Constraint)</label>
-        <Input
-          value={node.value}
-          onChange={(e) => setCondField(node.id, "value", e.target.value)}
-        />
-      </div>
-    );
+          <div>
+            <label style={fieldLabel}>조인 대상 컬럼 (refColumn)</label>
+            <Select
+              style={{ width: "100%" }}
+              options={columnsOf(node.refTable).map((c) => ({
+                label: c.name + "  ·  " + c.type,
+                value: c.name,
+              }))}
+              value={node.refColumn || undefined}
+              placeholder={node.refTable ? "컬럼 선택" : "먼저 테이블 선택"}
+              showSearch
+              optionFilterProp="label"
+              onChange={(v) => updateCond(node.id, { refColumn: v })}
+            />
+          </div>
+        </div>
+      );
+    } else {
+      // requires / blocks / must_be_* : mapped-constraint select
+      detailEditor = (
+        <div>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: C.textTertiary,
+              marginBottom: 6,
+            }}
+          >
+            제약 조건 (매핑된 제약만)
+            {selMapping ? <Tag color="default">{selMapping.defKind}</Tag> : null}
+          </label>
+          <Select
+            style={{ width: "100%" }}
+            options={colMappings.map((m) => ({
+              value: String(m.id),
+              label:
+                m.defName +
+                (m.purposeCode ? " · " + m.purposeCode : "") +
+                "  ·  " +
+                m.defKind,
+            }))}
+            value={selMapping ? String(selMapping.id) : undefined}
+            disabled={!node.column || colMappings.length === 0}
+            placeholder={
+              !node.column
+                ? "먼저 컬럼을 선택하세요"
+                : noMapping
+                  ? "매핑된 제약 없음"
+                  : "제약 선택"
+            }
+            onChange={(v) => {
+              const m = colMappings.find((x) => String(x.id) === v);
+              if (m) updateCond(node.id, { defId: m.defId, mappingId: m.id });
+            }}
+          />
+          {noMapping ? (
+            <div style={{ fontSize: 11, color: C.gold7, marginTop: 6 }}>
+              이 컬럼에 매핑된 제약이 없습니다 · 제약 카탈로그 → 컬럼 매핑에서 등록하세요
+            </div>
+          ) : null}
+        </div>
+      );
+    }
 
     return (
       <div
@@ -398,7 +739,9 @@ export default function RulesPage() {
         }}
       >
         <div
-          onClick={() => setExpandedCond((cur) => (cur === node.id ? null : node.id))}
+          onClick={() =>
+            setExpandedCond((cur) => (cur === node.id ? null : node.id))
+          }
           style={{
             display: "flex",
             alignItems: "center",
@@ -408,9 +751,15 @@ export default function RulesPage() {
           }}
         >
           <Tag color={meta.color || undefined}>{meta.label}</Tag>
-          <span
-            style={{ fontFamily: MONO_FONT, fontSize: 13, color: C.geekblue7 }}
-          >
+          <Tag color={node.severity === "BLOCK" ? "red" : "gold"}>
+            {node.severity === "BLOCK" ? "차단" : "경고"}
+          </Tag>
+          {deferred ? (
+            <Tag icon={<WarningOutlined />} color="default">
+              판정 미구현
+            </Tag>
+          ) : null}
+          <span style={{ fontFamily: MONO_FONT, fontSize: 13, color: C.geekblue7 }}>
             {subjText || "(대상 미지정)"}
           </span>
           <span
@@ -424,14 +773,19 @@ export default function RulesPage() {
               whiteSpace: "nowrap",
             }}
           >
-            {open ? "" : "· " + condValueLabel(node)}
+            {open ? "" : "· " + condConstraintLabel(node)}
           </span>
           <span
             onClick={(e) => {
               e.stopPropagation();
               removeNode(node.id);
             }}
-            style={{ flex: "none", cursor: "pointer", color: C.textTertiary, display: "inline-flex" }}
+            style={{
+              flex: "none",
+              cursor: "pointer",
+              color: C.textTertiary,
+              display: "inline-flex",
+            }}
           >
             <DeleteOutlined />
           </span>
@@ -458,26 +812,47 @@ export default function RulesPage() {
               gap: 12,
             }}
           >
-            <div>
-              <label style={fieldLabel}>연산자 (Operator)</label>
-              <Select
-                style={{ width: "100%" }}
-                options={opOptions}
-                value={node.op}
-                onChange={(v) => setCondField(node.id, "op", v)}
-              />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div>
+                <label style={fieldLabel}>연산자 (Operator)</label>
+                <Select
+                  style={{ width: "100%" }}
+                  options={OP_OPTIONS}
+                  value={node.op}
+                  onChange={(v) => setOp(node.id, v as RuleOp)}
+                />
+              </div>
+              <div>
+                <label style={fieldLabel}>심각도 (Severity)</label>
+                <Select
+                  style={{ width: "100%" }}
+                  options={SEVERITY_OPTIONS}
+                  value={node.severity}
+                  onChange={(v) =>
+                    updateCond(node.id, { severity: v as RuleSeverity })
+                  }
+                />
+              </div>
             </div>
             {subjectEditor}
-            {constraintEditor}
+            {detailEditor}
+            {deferred ? (
+              <div style={{ fontSize: 11, color: C.gold7 }}>
+                이 조건은 등록·표시만 됩니다 — 이번 버전에서는 판정(강제)되지 않습니다.
+              </div>
+            ) : null}
           </div>
         )}
       </div>
     );
   }
 
-  // AND / OR join pill between two siblings (dc.html lines 1975 & 1996)
+  // AND / OR join pill between two siblings
   const joinBadge = (key: string, label: string, isOr: boolean) => (
-    <div key={key} style={{ display: "flex", justifyContent: "center", padding: "7px 0" }}>
+    <div
+      key={key}
+      style={{ display: "flex", justifyContent: "center", padding: "7px 0" }}
+    >
       <span
         style={{
           fontSize: 11,
@@ -494,9 +869,9 @@ export default function RulesPage() {
     </div>
   );
 
-  // --- basic mode (dc.html buildBasic 1969–1986) ----------------------------
-  function BuildBasic() {
-    const leaves = collectLeaves(tree, []);
+  // --- basic mode ----------------------------------------------------------
+  function BuildBasic(tree: EditorGroup): React.ReactNode {
+    const conds = collectConds(tree);
     return (
       <div>
         {hasGroups(tree) && (
@@ -519,7 +894,7 @@ export default function RulesPage() {
           </div>
         )}
         <div style={{ display: "flex", flexDirection: "column" }}>
-          {leaves.map((lf, i) => (
+          {conds.map((lf, i) => (
             <div key={lf.id}>
               {i > 0 && joinBadge("j" + i, "AND", false)}
               {CondRow(lf)}
@@ -527,7 +902,12 @@ export default function RulesPage() {
           ))}
         </div>
         <div style={{ marginTop: 16 }}>
-          <Button type="dashed" block icon={<PlusOutlined />} onClick={() => addCond(tree.id)}>
+          <Button
+            type="dashed"
+            block
+            icon={<PlusOutlined />}
+            onClick={() => addCond(tree.id)}
+          >
             조건 추가
           </Button>
         </div>
@@ -535,10 +915,17 @@ export default function RulesPage() {
     );
   }
 
-  // --- advanced mode (dc.html buildAdvanced 1987–2015) ----------------------
-  function Group(node: GroupNode, depth: number): React.ReactNode {
+  // --- advanced mode -------------------------------------------------------
+  function Group(node: EditorGroup, depth: number): React.ReactNode {
     const isOr = node.combinator === "any";
     const rail = isOr ? C.purple4 : C.blue4;
+    const mixedSeverity =
+      isOr &&
+      new Set(
+        node.children
+          .filter((c): c is EditorCond => c.kind === "cond")
+          .map((c) => c.severity),
+      ).size > 1;
     const combToggle = (
       <div
         style={{
@@ -548,7 +935,12 @@ export default function RulesPage() {
           overflow: "hidden",
         }}
       >
-        {([["all", "AND"], ["any", "OR"]] as const).map(([m, lbl]) => {
+        {(
+          [
+            ["all", "AND"],
+            ["any", "OR"],
+          ] as const
+        ).map(([m, lbl]) => {
           const on = node.combinator === m;
           return (
             <span
@@ -599,17 +991,36 @@ export default function RulesPage() {
             {depth === 0 ? "루트 그룹" : isOr ? "OR 그룹" : "AND 그룹"}
           </span>
           {combToggle}
+          {mixedSeverity ? (
+            <Tag icon={<WarningOutlined />} color="warning">
+              OR 그룹에 서로 다른 심각도 혼재
+            </Tag>
+          ) : null}
           <span style={{ flex: 1 }} />
-          <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={() => addCond(node.id)}>
+          <Button
+            size="small"
+            type="dashed"
+            icon={<PlusOutlined />}
+            onClick={() => addCond(node.id)}
+          >
             조건
           </Button>
-          <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={() => addGroup(node.id)}>
+          <Button
+            size="small"
+            type="dashed"
+            icon={<PlusOutlined />}
+            onClick={() => addGroup(node.id)}
+          >
             그룹
           </Button>
           {depth > 0 && (
             <span
               onClick={() => removeNode(node.id)}
-              style={{ cursor: "pointer", color: C.textTertiary, display: "inline-flex" }}
+              style={{
+                cursor: "pointer",
+                color: C.textTertiary,
+                display: "inline-flex",
+              }}
             >
               <DeleteOutlined />
             </span>
@@ -628,14 +1039,20 @@ export default function RulesPage() {
   }
 
   // =========================================================================
-  // IR — natural-language summary (dc.html buildRuleSummary 1796–1855)
+  // IR — natural-language summary
   // =========================================================================
-  function RuleSummary() {
-    const opText = (op: string) => (opMeta[op as keyof typeof opMeta]?.label || op).split(" · ").pop();
-    const condSentence = (node: CondNode) => (
+  function RuleSummary(d: Draft): React.ReactNode {
+    const tree = d.tree;
+    const opText = (op: RuleOp) => opMeta[op]?.label || op;
+    const condSentence = (node: EditorCond) => (
       <div
         key={node.id}
-        style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "7px 0" }}
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          padding: "7px 0",
+        }}
       >
         <span
           style={{
@@ -648,7 +1065,9 @@ export default function RulesPage() {
           }}
         />
         <span style={{ fontSize: 13, lineHeight: 1.6, color: C.text }}>
-          <span style={{ fontFamily: MONO_FONT, color: C.geekblue7 }}>{condSubject(node)}</span>
+          <span style={{ fontFamily: MONO_FONT, color: C.geekblue7 }}>
+            {condSubjectText(node) || "(대상 미지정)"}
+          </span>
           <span
             style={{
               margin: "0 6px",
@@ -658,11 +1077,22 @@ export default function RulesPage() {
           >
             {opText(node.op)}
           </span>
-          <span style={{ color: C.textSecondary }}>{condValueLabel(node)}</span>
+          <span style={{ color: C.textSecondary }}>
+            {condConstraintLabel(node)}
+          </span>
+          {isDeferredOp(node.op) ? (
+            <Tag
+              icon={<WarningOutlined />}
+              color="default"
+              style={{ marginLeft: 6 }}
+            >
+              판정 미구현
+            </Tag>
+          ) : null}
         </span>
       </div>
     );
-    const groupBlock = (node: TreeNode, depth: number): React.ReactNode => {
+    const groupBlock = (node: EditorNode, depth: number): React.ReactNode => {
       if (!isGroup(node)) return condSentence(node);
       const isOr = node.combinator === "any";
       const lead =
@@ -707,13 +1137,11 @@ export default function RulesPage() {
       </div>
     );
     const usedTables = Array.from(
-      new Set(
-        collectLeaves(tree, [])
-          .filter((n) => n.table)
-          .map((n) => n.db + "." + n.table),
-      ),
+      new Set(collectConds(tree).filter((n) => n.table).map((n) => n.table as string)),
     );
-    const isError = !!curRule && curRule.severity === "error";
+    const server = serverByKey(d.server);
+    const enforced = isEnforced(tree);
+    const sev = derivedSeverity(tree);
     return (
       <div>
         <div
@@ -726,17 +1154,22 @@ export default function RulesPage() {
             borderBottom: "1px solid " + C.split,
           }}
         >
-          {chip("적용 범위", scopeName[ruleScope] || "—")}
-          {/* server */}
+          {chip("적용 범위", SCOPE_LABEL[d.scope])}
           <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
             <span style={{ fontSize: 11, color: C.textTertiary }}>대상 서버</span>
-            {ruleScope === "global" ? (
-              <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>전체 서버 (전역)</span>
+            {d.scope === "GLOBAL" ? (
+              <span style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>
+                전체 서버 (전역)
+              </span>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <span style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                <span
+                  style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}
+                >
                   <Tag color={server.vendorColor}>{server.vendor}</Tag>
-                  <span style={{ fontFamily: MONO_FONT, color: C.text }}>{server.host}</span>
+                  <span style={{ fontFamily: MONO_FONT, color: C.text }}>
+                    {server.host}
+                  </span>
                 </span>
                 <span style={{ fontSize: 11, color: C.textTertiary }}>
                   {server.cluster + " · " + server.nodes}
@@ -744,11 +1177,15 @@ export default function RulesPage() {
               </div>
             )}
           </div>
-          {/* tables */}
           <div
-            style={{ display: "flex", flexDirection: "column", gap: 5, gridColumn: "1 / -1" }}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 5,
+              gridColumn: "1 / -1",
+            }}
           >
-            <span style={{ fontSize: 11, color: C.textTertiary }}>조인 대상 테이블</span>
+            <span style={{ fontSize: 11, color: C.textTertiary }}>대상 테이블</span>
             {usedTables.length ? (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {usedTables.map((q, i) => (
@@ -769,7 +1206,7 @@ export default function RulesPage() {
               </div>
             ) : (
               <span style={{ fontSize: 12, color: C.textTertiary }}>
-                {ruleScope === "global" ? "해당 없음" : "테이블 미지정"}
+                {d.scope === "GLOBAL" ? "해당 없음" : "테이블 미지정"}
               </span>
             )}
           </div>
@@ -784,18 +1221,40 @@ export default function RulesPage() {
             paddingTop: 14,
             borderTop: "1px solid " + C.split,
             fontSize: 12,
-            color: isError ? C.error : C.gold7,
+            color: !enforced
+              ? C.textTertiary
+              : sev === "BLOCK"
+                ? C.error
+                : C.gold7,
           }}
         >
-          {isError ? <CloseCircleOutlined /> : <ExclamationCircleOutlined />}
-          <span>{isError ? "위반 시 쿼리를 차단합니다" : "위반 시 경고를 표시합니다"}</span>
+          {!enforced ? (
+            <>
+              <ExclamationCircleOutlined />
+              <span>
+                {d.scope === "GLOBAL"
+                  ? "표시 전용 — 이 규칙은 이번 버전에서 강제되지 않습니다"
+                  : "이 규칙은 아무것도 차단/경고하지 않습니다 (판정 조건 없음)"}
+              </span>
+            </>
+          ) : sev === "BLOCK" ? (
+            <>
+              <CloseCircleOutlined />
+              <span>위반 시 쿼리를 차단합니다</span>
+            </>
+          ) : (
+            <>
+              <ExclamationCircleOutlined />
+              <span>위반 시 경고를 표시합니다</span>
+            </>
+          )}
         </div>
       </div>
     );
   }
 
   // =========================================================================
-  // IR — JSON tree viewer (dc.html jsonTree 1209–1255)
+  // IR — JSON tree viewer (dark #0b1220)
   // =========================================================================
   function JsonTree({ data }: { data: unknown }) {
     const J = {
@@ -807,9 +1266,12 @@ export default function RulesPage() {
     };
     const rows: React.ReactNode[] = [];
     const leaf = (v: unknown) => {
-      if (typeof v === "string") return <span style={{ color: J.str }}>{'"' + v + '"'}</span>;
-      if (typeof v === "number") return <span style={{ color: J.num }}>{String(v)}</span>;
-      if (typeof v === "boolean") return <span style={{ color: J.bool }}>{String(v)}</span>;
+      if (typeof v === "string")
+        return <span style={{ color: J.str }}>{'"' + v + '"'}</span>;
+      if (typeof v === "number")
+        return <span style={{ color: J.num }}>{String(v)}</span>;
+      if (typeof v === "boolean")
+        return <span style={{ color: J.bool }}>{String(v)}</span>;
       if (v === null) return <span style={{ color: J.type }}>null</span>;
       return <span>{String(v)}</span>;
     };
@@ -846,7 +1308,12 @@ export default function RulesPage() {
     const typeBadge = (t: string) => (
       <span style={{ color: J.type, fontSize: 11, marginLeft: 6 }}>{t}</span>
     );
-    const row = (indent: number, expandable: boolean, path: string, kids: React.ReactNode) => (
+    const row = (
+      indent: number,
+      expandable: boolean,
+      path: string,
+      kids: React.ReactNode,
+    ) => (
       <div
         key={"r" + path}
         style={{
@@ -880,17 +1347,15 @@ export default function RulesPage() {
               })}
             </span>,
             <span key="k">{keyLabel(k)}</span>,
-            <span key="t">
-              {k != null
-                ? typeBadge((isArr ? "Array" : "Object") + summary)
-                : typeBadge((isArr ? "Array" : "Object") + " " + summary)}
-            </span>,
+            <span key="t">{typeBadge((isArr ? "Array" : "Object") + " " + summary)}</span>,
           ]),
         );
         if (openC)
           keys.forEach((kk) =>
             walk(
-              isArr ? (d as unknown[])[kk as number] : (d as Record<string, unknown>)[kk as string],
+              isArr
+                ? (d as unknown[])[kk as number]
+                : (d as Record<string, unknown>)[kk as string],
               indent + 1,
               String(kk),
               path + "." + kk,
@@ -912,7 +1377,9 @@ export default function RulesPage() {
     };
     walk(data, 0, null, "$");
     return (
-      <div style={{ fontFamily: MONO_FONT, fontSize: 12.5, color: "#e6edf3" }}>{rows}</div>
+      <div style={{ fontFamily: MONO_FONT, fontSize: 12.5, color: "#e6edf3" }}>
+        {rows}
+      </div>
     );
   }
 
@@ -925,6 +1392,28 @@ export default function RulesPage() {
     flexDirection: "column",
     overflow: "hidden",
   };
+
+  if (loading) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          minHeight: 400,
+        }}
+      >
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  const tree = draft?.tree;
+  const invalid = !tree || hasEmptyGroup(tree);
+  const headerSev = draft ? derivedSeverity(draft.tree) : "NONE";
+  const headerEnforced = draft ? isEnforced(draft.tree) : false;
+  const server = serverByKey(draft?.server ?? null);
 
   return (
     <div
@@ -948,25 +1437,43 @@ export default function RulesPage() {
           }}
         >
           <span style={{ fontWeight: 600, fontSize: 14 }}>규칙 목록</span>
-          <Button size="small" type="text" icon={<PlusOutlined />} onClick={stub} />
+          <Button
+            size="small"
+            type="text"
+            icon={<PlusOutlined />}
+            onClick={startDraft}
+          />
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
-          {rulesMeta.map((r) => {
-            const sel = r.key === ruleKey;
-            const hovered = hoverRule === r.key && !sel;
-            const [scopeLabel, scopeColor] = scopeTag[r.scope];
+          {rules.length === 0 && (
+            <div
+              style={{
+                padding: 16,
+                fontSize: 12,
+                color: C.textTertiary,
+                textAlign: "center",
+              }}
+            >
+              등록된 규칙이 없습니다
+            </div>
+          )}
+          {rules.map((r) => {
+            const key = String(r.id);
+            const sel = selectedId != null && String(selectedId) === key;
+            const hovered = hoverRule === key && !sel;
             return (
               <div
-                key={r.key}
-                onClick={() => selectRule(r)}
-                onMouseEnter={() => setHoverRule(r.key)}
+                key={key}
+                onClick={() => openRule(r)}
+                onMouseEnter={() => setHoverRule(key)}
                 onMouseLeave={() => setHoverRule(null)}
                 style={{
                   padding: "10px 12px",
                   borderRadius: 6,
                   cursor: "pointer",
                   marginBottom: 4,
-                  border: "1px solid " + (sel ? C.primaryBorder : C.borderSecondary),
+                  border:
+                    "1px solid " + (sel ? C.primaryBorder : C.borderSecondary),
                   background: sel ? C.primaryBg : hovered ? C.fillTertiary : "#fff",
                 }}
               >
@@ -977,7 +1484,7 @@ export default function RulesPage() {
                       height: 8,
                       borderRadius: "50%",
                       flex: "none",
-                      background: r.severity === "error" ? C.error : C.gold6,
+                      background: SEV_DOT[r.severity] ?? C.textQuaternary,
                     }}
                   />
                   <span
@@ -996,12 +1503,19 @@ export default function RulesPage() {
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 8,
+                    gap: 6,
                     marginTop: 8,
                     paddingLeft: 16,
+                    flexWrap: "wrap",
                   }}
                 >
-                  <Tag color={scopeColor}>{scopeLabel}</Tag>
+                  <Tag color={SCOPE_COLOR[r.scope]}>{SCOPE_LABEL[r.scope]}</Tag>
+                  {r.corrupt ? <Tag color="error">손상</Tag> : null}
+                  {r.scope === "GLOBAL" ? (
+                    <Tag color="gold">표시 전용 (이번 버전 미강제)</Tag>
+                  ) : !r.enforced && !r.corrupt ? (
+                    <Tag color="default">강제 안 함</Tag>
+                  ) : null}
                   <span style={{ fontSize: 11, color: C.textTertiary }}>
                     {r.hits}회 위반 감지
                   </span>
@@ -1025,24 +1539,39 @@ export default function RulesPage() {
               marginBottom: 14,
             }}
           >
-            <span style={{ fontSize: 15, fontWeight: 600 }}>{curRule ? curRule.name : ""}</span>
-            <Tag color={curRule && curRule.severity === "error" ? "red" : "gold"}>
-              {curRule && curRule.severity === "error" ? "차단 (오류)" : "경고"}
-            </Tag>
+            <Input
+              value={draft?.name ?? ""}
+              placeholder="규칙 이름"
+              variant="borderless"
+              style={{ fontSize: 15, fontWeight: 600, padding: 0, flex: 1 }}
+              onChange={(e) => patchDraft({ name: e.target.value })}
+            />
+            {!headerEnforced ? (
+              <Tag color="default">강제 안 함</Tag>
+            ) : (
+              <Tag color={headerSev === "BLOCK" ? "red" : "gold"}>
+                {headerSev === "BLOCK" ? "차단" : "경고"}
+              </Tag>
+            )}
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
             <div style={{ minWidth: 220 }}>
               <label style={fieldLabel}>적용 범위</label>
               <Select
                 style={{ width: "100%" }}
-                options={scopeOptions}
-                value={ruleScope}
-                onChange={(v) => setRuleScope(v as Scope)}
+                options={SCOPE_OPTIONS}
+                value={draft?.scope}
+                onChange={(v) =>
+                  patchDraft({
+                    scope: v as RuleScope,
+                    server: v === "GLOBAL" ? null : (draft?.server ?? servers[0].key),
+                  })
+                }
               />
             </div>
             <div style={{ flex: 1, minWidth: 240 }}>
               <label style={fieldLabel}>대상 서버 (클러스터)</label>
-              {ruleScope === "global" ? (
+              {draft?.scope === "GLOBAL" ? (
                 <div
                   style={{
                     display: "flex",
@@ -1061,8 +1590,8 @@ export default function RulesPage() {
                   <Select
                     style={{ width: "100%" }}
                     options={serverOptions}
-                    value={ruleServer}
-                    onChange={(v) => setRuleServer(v)}
+                    value={draft?.server ?? undefined}
+                    onChange={(v) => patchDraft({ server: v })}
                   />
                   <div
                     style={{
@@ -1083,10 +1612,6 @@ export default function RulesPage() {
                     <span>·</span>
                     <span>{server.nodes}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: C.textQuaternary, marginTop: 6 }}>
-                    테이블은 각 조건의 <b>대상</b>에서 이 서버 내 데이터베이스·테이블로 선택합니다.
-                    서버 간 조인은 지원하지 않습니다.
-                  </div>
                 </div>
               )}
             </div>
@@ -1095,6 +1620,26 @@ export default function RulesPage() {
 
         {/* builder body */}
         <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+          {draft?.corrupt ? (
+            <Alert
+              type="error"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="손상된 규칙"
+              description="저장된 트리를 파싱할 수 없습니다. 아래에서 조건을 다시 구성해 저장하면 복구됩니다."
+            />
+          ) : null}
+          {buildError ? (
+            <Alert
+              type="error"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="규칙을 저장할 수 없습니다"
+              description={buildError}
+              closable
+              onClose={() => setBuildError(null)}
+            />
+          ) : null}
           <div
             style={{
               display: "flex",
@@ -1144,7 +1689,11 @@ export default function RulesPage() {
               </div>
             </div>
           </div>
-          {ruleMode === "advanced" ? Group(tree, 0) : <BuildBasic />}
+          {tree
+            ? ruleMode === "advanced"
+              ? Group(tree, 0)
+              : BuildBasic(tree)
+            : null}
         </div>
 
         {/* builder footer */}
@@ -1176,8 +1725,19 @@ export default function RulesPage() {
             <span />
           )}
           <div style={{ display: "flex", gap: 10 }}>
-            <Button onClick={stub}>테스트 실행</Button>
-            <Button type="primary" icon={<CheckOutlined />} disabled={invalid} onClick={stub}>
+            {draft?.id != null ? (
+              <Button danger icon={<DeleteOutlined />} onClick={remove}>
+                삭제
+              </Button>
+            ) : null}
+            <Button onClick={runTest}>테스트 실행</Button>
+            <Button
+              type="primary"
+              icon={<CheckOutlined />}
+              disabled={invalid}
+              loading={saving}
+              onClick={save}
+            >
               규칙 저장
             </Button>
           </div>
@@ -1210,7 +1770,9 @@ export default function RulesPage() {
                   padding: "10px 14px",
                   fontSize: 13,
                   cursor: "pointer",
-                  borderBottom: on ? "2px solid " + C.primary : "2px solid transparent",
+                  borderBottom: on
+                    ? "2px solid " + C.primary
+                    : "2px solid transparent",
                   color: on ? C.primary : C.textSecondary,
                   fontWeight: on ? 500 : 400,
                 }}
@@ -1222,7 +1784,7 @@ export default function RulesPage() {
         </div>
         {irTab === "summary" ? (
           <div style={{ flex: 1, overflow: "auto", padding: 18, background: "#fff" }}>
-            <RuleSummary />
+            {draft ? RuleSummary(draft) : null}
           </div>
         ) : (
           <div style={{ flex: 1, overflow: "auto", background: "#0b1220", padding: 16 }}>

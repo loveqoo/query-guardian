@@ -7,3 +7,4 @@
 - 005 spec 002 구현 — MySQL UNIQUE는 NULL 비중복(앱 검사 이중화 필수); columnRefs를 술어 모델과 분리하니 한 visitor로 전 절 커버; DTO 전문 위임=통합 수정 0건; 검토엔 "스펙 vs 구현 코드 대조" 고정 [UNIQUE NULL, columnRefs, 위임 계약, 검토 축]
 - 006 디자인 활용 실패 — 모델 우선·셸 5순위 순서는 합의됐어도 사용자 기대는 "내 디자인이 보이는 것"; 디자인 산출물엔 UI 컨버팅 선행이 기본값, 로직 없는 화면은 샘플 데이터 스텁으로라도 화면 먼저 일치 [디자인 충실도, UI 우선, 기대 관리]
 - 007 디자인 컨버팅 실행 — 원본이 antd 앱이면 "이식"이라 쉬움(먼저 통독 확인); 기반 직렬+화면 병렬=충돌 0; 내 브리프의 토큰 오지시(pending blue)가 전 화면 전파 → 위임 전 검토와 토큰 교차검증 [컨버팅, 병렬 위임, 토큰, 공유 상수]
+- 008 규칙 데이터화 구현 — IR 축을 판정별 분리(joinEqualities를 §6.1 top-level에 얹어 OUTER·OR 우회 위치만으로 차단); enum ordinal≠심각도(worstSeverity); 미강제는 배지 아닌 규칙 플래그(enforced); 위임은 파일 완결로 중단에 강하게 [규칙 엔진, joinEqualities, severity, enforced, 빈 순환]

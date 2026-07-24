@@ -17,6 +17,7 @@ class QueryService(
     private val lintService: LintService,
     private val repository: SavedQueryRepository,
     private val objectMapper: ObjectMapper,
+    private val ruleService: com.loveqoo.queryguardian.rules.RuleService,
 ) {
     /** 저장 게이트: BLOCK이면 BlockedException(→422). WARN은 저장하되 리포트에 남긴다 (spec §13.3). */
     fun save(request: SaveQueryRequest): QueryDto {
@@ -67,6 +68,9 @@ class QueryService(
     private fun gate(request: SaveQueryRequest): LintReportDto {
         require(request.name.isNotBlank() && request.name.length <= 100) { "이름은 1~100자여야 합니다" }
         val report = LintReportDto.from(lintService.lint(request.sql, request.purposeCode))
+        // 위반 통계 (spec 004 §7): 저장 시도에서 위반한 사용자 규칙의 hit 증가 (BLOCK/WARN 무관, 저장 성공/실패 무관)
+        val ruleIds = report.violations.mapNotNull { it.ruleId.removePrefix("rule/").toLongOrNull().takeIf { _ -> it.ruleId.startsWith("rule/") } }.toSet()
+        if (ruleIds.isNotEmpty()) ruleService.recordHits(ruleIds)
         if (report.blocked) throw BlockedException(report)
         return report
     }

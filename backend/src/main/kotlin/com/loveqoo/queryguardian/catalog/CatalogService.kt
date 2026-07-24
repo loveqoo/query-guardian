@@ -25,6 +25,7 @@ class CatalogService(
     private val mappings: ConstraintMappingRepository,
     private val parser: DialectParser,
     private val objectMapper: ObjectMapper,
+    private val ruleService: com.loveqoo.queryguardian.rules.RuleService,
 ) {
     // ---- tables ----
 
@@ -188,7 +189,14 @@ class CatalogService(
     }
 
     fun deleteMapping(id: Long) {
-        if (!mappings.existsById(id)) throw NotFoundException("매핑 $id 없음")
+        val mapping = mappings.findById(id).orElseThrow { NotFoundException("매핑 $id 없음") }
+        // 역참조 가드 (spec 004 C4): 이 (defId, 컬럼)을 참조하는 규칙 조건이 있으면 삭제 거부
+        val column = tables.findAll().flatMap { it.columns }.firstOrNull { it.id == mapping.columnId }
+        val table = tables.findAll().firstOrNull { t -> t.columns.any { it.id == mapping.columnId } }
+        if (column != null && table != null &&
+            ruleService.isReferencedByMapping(mapping.defId, table.name, column.name)) {
+            throw ConflictException("이 매핑을 참조하는 규칙 조건이 있어 삭제할 수 없습니다. 먼저 규칙 조건을 제거하세요.")
+        }
         mappings.deleteById(id)
     }
 

@@ -102,22 +102,12 @@ class RequirePredicateRule : Rule {
                     // 카탈로그 등록 술어가 지원 형태(= 리터럴 / IN 단일 리터럴)가 아니면 검증 불가 → fail-closed
                     Violation(id, severity, "테이블 ${table.name}의 필수 술어(${required.label})를 검증할 수 없습니다. 카탈로그 등록 형태를 확인하세요.")
                 } else {
-                    val satisfied = scope.whereConjuncts.any { satisfies(it, table.instanceKey, normalized) }
+                    val satisfied = scope.whereConjuncts.any { satisfiesRequiredForm(it, table.instanceKey, normalized) }
                     if (satisfied) null
                     else Violation(id, severity, "테이블 ${table.name}(${table.instanceKey})은(는) 필수 조건 `${required.label}` 이 WHERE에 필요합니다.")
                 }
             }
         }
-
-    private fun satisfies(conjunct: Predicate, table: String, required: RequiredForm): Boolean = when (conjunct) {
-        is Predicate.Comparison ->
-            conjunct.op == Op.EQ && conjunct.value == required.value &&
-                columnMatches(conjunct.column, table, required.column)
-        is Predicate.InList ->
-            conjunct.values?.singleOrNull() == required.value &&
-                columnMatches(conjunct.column, table, required.column)
-        else -> false // Or/Not/And/Raw는 충족 불가 (§6.1, §6.3)
-    }
 }
 
 /** 카탈로그 미등록 물리 테이블 경고 — 자동완성·의미 룰이 적용되지 않음을 사용자에게 알린다. CTE/파생 alias는 제외. */
@@ -145,3 +135,15 @@ internal fun columnMatches(column: ResolvedColumn, table: String, name: String):
     column.table != null &&
         column.table.equals(table, ignoreCase = true) &&
         column.column.equals(name, ignoreCase = true)
+
+/** 최상위 AND conjunct가 요구 술어(EQ 리터럴/IN 단일)를 충족하는가 (§6.1·§6.5). 사용자 규칙 requires도 재사용. */
+internal fun satisfiesRequiredForm(conjunct: Predicate, tableInstanceKey: String, required: RequiredForm): Boolean =
+    when (conjunct) {
+        is Predicate.Comparison ->
+            conjunct.op == Op.EQ && conjunct.value == required.value &&
+                columnMatches(conjunct.column, tableInstanceKey, required.column)
+        is Predicate.InList ->
+            conjunct.values?.singleOrNull() == required.value &&
+                columnMatches(conjunct.column, tableInstanceKey, required.column)
+        else -> false // Or/Not/And/Raw는 충족 불가 (§6.1, §6.3)
+    }

@@ -5,6 +5,10 @@ import com.loveqoo.queryguardian.ir.SelectScope
 
 enum class Severity { BLOCK, WARN }
 
+/** BLOCK을 가장 심각한 것으로 취급 (enum ordinal은 반대라 maxOf 사용 금지). */
+internal fun worstSeverity(severities: Collection<Severity>): Severity =
+    if (severities.any { it == Severity.BLOCK }) Severity.BLOCK else Severity.WARN
+
 data class Violation(val ruleId: String, val severity: Severity, val message: String)
 
 data class LintContext(val purposeCode: String?)
@@ -32,6 +36,12 @@ interface TableCatalog {
 
     /** 카탈로그에 등록된 테이블인가 — unknown-table 경고 룰이 사용. */
     fun exists(tableName: String): Boolean
+
+    /**
+     * 사용자 규칙 requires 조건의 술어 해석 (spec 004 §4.2). defId+컬럼(+mappingId)의 FILTER 정의를
+     * 치환·파싱해 판정 가능 정규형으로 반환. 매핑 사라짐(dangling)·판정 불가 형태면 null → 평가기가 fail-closed 처리.
+     */
+    fun resolveConditionPredicate(defId: Long, mappingId: Long?, columnName: String): RequiredForm?
 }
 
 /** [predicate]는 카탈로그의 predicate_sql을 DialectParser.parsePredicate로 파싱해 둔 것 (§6.5 구조 비교). */
@@ -43,6 +53,8 @@ class InMemoryTableCatalog(
     private val required: List<Entry> = emptyList(),
     private val blocked: Map<String, Set<String>> = emptyMap(),
     tables: Set<String> = emptySet(),
+    /** defId → requires 판정용 정규형 (테스트 시드). */
+    private val conditionPredicates: Map<Long, RequiredForm> = emptyMap(),
 ) : TableCatalog {
     data class Entry(val table: String, val purposeCode: String?, val predicate: RequiredPredicate)
 
@@ -63,4 +75,7 @@ class InMemoryTableCatalog(
             ?.value?.map { it.lowercase() }?.toSet() ?: emptySet()
 
     override fun exists(tableName: String): Boolean = known.contains(tableName.lowercase())
+
+    override fun resolveConditionPredicate(defId: Long, mappingId: Long?, columnName: String): RequiredForm? =
+        conditionPredicates[defId]
 }

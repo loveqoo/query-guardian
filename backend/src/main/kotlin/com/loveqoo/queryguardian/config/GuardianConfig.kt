@@ -10,6 +10,7 @@ import com.loveqoo.queryguardian.parser.DialectParser
 import com.loveqoo.queryguardian.parser.DruidMySqlParser
 import com.loveqoo.queryguardian.rules.RuleEngine
 import com.loveqoo.queryguardian.rules.TableCatalog
+import com.loveqoo.queryguardian.rules.UserRuleEvaluator
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -21,8 +22,14 @@ class GuardianConfig {
     fun dialectParser(): DialectParser = DruidMySqlParser()
 
     @Bean
-    fun ruleEngine(@Value("\${guardian.limit.max:1000}") maxLimit: Long): RuleEngine =
-        RuleEngine.withDefaultRules(maxLimit)
+    fun userRuleEvaluator(ruleService: com.loveqoo.queryguardian.rules.RuleService): UserRuleEvaluator =
+        UserRuleEvaluator { ruleService.activeUserRules() }
+
+    @Bean
+    fun ruleEngine(
+        @Value("\${guardian.limit.max:1000}") maxLimit: Long,
+        userRuleEvaluator: UserRuleEvaluator,
+    ): RuleEngine = RuleEngine.withDefaultRules(maxLimit, userRuleEvaluator)
 
     @Bean
     fun tableCatalog(

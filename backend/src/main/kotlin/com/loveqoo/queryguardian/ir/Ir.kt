@@ -27,7 +27,16 @@ data class SelectScope(
      * 술어 모델(whereConjuncts)과 달리 "어디에 어떤 형태로" 쓰였는지는 담지 않는다 — 참조 사실만.
      */
     val columnRefs: List<ColumnRef> = emptyList(),
+    /**
+     * 컬럼=컬럼 등식 (spec 004 §5) — joins 판정의 근거. §6.1과 동일하게 한정 수집한다:
+     * INNER 계열 JOIN ON + WHERE의 **최상위 AND conjunct**만. OUTER ON·OR/Not 하위는 제외
+     * (OUTER는 필터 무력화, OR은 세탁 — C1·C2). 양변 모두 컬럼으로 귀속된 `=`만 담긴다.
+     */
+    val joinEqualities: List<ColumnEquality> = emptyList(),
 )
+
+/** 컬럼=컬럼 등식. 방향 무관(a=b ≡ b=a). 어느 한쪽이라도 귀속 불가(table=null)면 joins는 fail-closed 미충족. */
+data class ColumnEquality(val left: ColumnRef, val right: ColumnRef)
 
 /**
  * 해석된 컬럼 참조. [table]은 resolver 체인으로 찾은 TableRef 자체 — 상관 서브쿼리가 바깥 테이블을

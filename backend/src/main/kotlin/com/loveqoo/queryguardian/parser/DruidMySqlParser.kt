@@ -29,6 +29,7 @@ import com.alibaba.druid.sql.ast.statement.SQLSubqueryTableSource
 import com.alibaba.druid.sql.ast.statement.SQLTableSource
 import com.alibaba.druid.sql.ast.statement.SQLUnionQuery
 import com.alibaba.druid.sql.visitor.SQLASTVisitorAdapter
+import com.loveqoo.queryguardian.ir.ColumnEquality
 import com.loveqoo.queryguardian.ir.ColumnRef
 import com.loveqoo.queryguardian.ir.Dialect
 import com.loveqoo.queryguardian.ir.Op
@@ -192,9 +193,11 @@ class DruidMySqlParser(
         val resolver = AliasResolver(tables, parentResolver)
         derivedSources.forEach { children += buildFromSelect(it.select, ScopeKind.DERIVED, resolver) }
 
+        // WHERE·INNER ON의 최상위 AND conjunct만 평탄화 (§6.1). 같은 경로에서 컬럼=컬럼 등식(joins 근거)도 수집 (§5).
         val conjuncts = mutableListOf<Predicate>()
-        block.where?.let { flattenAnd(it, conjuncts, resolver, children) }
-        innerOnExprs.forEach { flattenAnd(it, conjuncts, resolver, children) }
+        val joinEqualities = mutableListOf<ColumnEquality>()
+        block.where?.let { flattenAnd(it, conjuncts, resolver, children, joinEqualities) }
+        innerOnExprs.forEach { flattenAnd(it, conjuncts, resolver, children, joinEqualities) }
 
         val selectItems = mutableListOf<SelectItem>()
         for (item in block.selectList) {
@@ -215,7 +218,8 @@ class DruidMySqlParser(
         refExprs.forEach { collectColumnRefs(it, resolver, columnRefs) }
 
         val limit = block.limit?.rowCount?.let { (it as? SQLIntegerExpr)?.number?.toLong() }
-        return SelectScope(kind, tables, selectItems, conjuncts, limit, children, columnRefs = columnRefs)
+        return SelectScope(kind, tables, selectItems, conjuncts, limit, children,
+            columnRefs = columnRefs, joinEqualities = joinEqualities)
     }
 
     /**
@@ -291,19 +295,42 @@ class DruidMySqlParser(
 
     // ---- 술어 변환 ----
 
-    /** WHERE 전체를 받아 최상위 AND만 평탄화한다. OR/NOT 아래는 트리 그대로 보존 (§6.1). */
+    /**
+     * WHERE 전체를 받아 최상위 AND만 평탄화한다. OR/NOT 아래는 트리 그대로 보존 (§6.1).
+     * [joinEqs]가 null이 아니면(=최상위 경로) 이 conjunct들에서 컬럼=컬럼 등식을 수집한다 (§5).
+     * OR 하위의 중첩 AND(toPredicate 경유)는 joinEqs=null로 호출돼 수집되지 않는다 — OR-세탁 방지(C2).
+     */
     private fun flattenAnd(
         expr: SQLExpr,
         into: MutableList<Predicate>,
         resolver: AliasResolver,
         children: MutableList<SelectScope>,
+        joinEqs: MutableList<ColumnEquality>? = null,
     ) {
         if (expr is SQLBinaryOpExpr && expr.operator == SQLBinaryOperator.BooleanAnd) {
-            flattenAnd(expr.left, into, resolver, children)
-            flattenAnd(expr.right, into, resolver, children)
+            flattenAnd(expr.left, into, resolver, children, joinEqs)
+            flattenAnd(expr.right, into, resolver, children, joinEqs)
         } else {
+            if (joinEqs != null) columnEqualityOf(expr, resolver)?.let { joinEqs += it }
             into += toPredicate(expr, resolver, children)
         }
+    }
+
+    /** 양변이 모두 컬럼인 `=`이면 ColumnEquality. 그 외(컬럼=리터럴, 함수 래핑 등)는 null (§5). */
+    private fun columnEqualityOf(expr: SQLExpr, resolver: AliasResolver): ColumnEquality? {
+        if (expr !is SQLBinaryOpExpr || expr.operator != SQLBinaryOperator.Equality) return null
+        val left = toColumnRef(expr.left, resolver) ?: return null
+        val right = toColumnRef(expr.right, resolver) ?: return null
+        return ColumnEquality(left, right)
+    }
+
+    /** 단일 컬럼 표현식 → TableRef 귀속 컬럼 참조. 컬럼이 아니면 null. 귀속 불가 시 table=null. */
+    private fun toColumnRef(expr: SQLExpr, resolver: AliasResolver): ColumnRef? = when (expr) {
+        is SQLIdentifierExpr -> ColumnRef(resolver.resolveUnqualifiedRef(), norm(expr.name)!!)
+        is SQLPropertyExpr ->
+            if (expr.name == "*") null
+            else ColumnRef(qualifierOf(expr)?.let { resolver.resolveQualifiedRef(it) }, norm(expr.name)!!)
+        else -> null
     }
 
     private fun toPredicate(

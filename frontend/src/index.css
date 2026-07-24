@@ -6,6 +6,18 @@ body,
   min-height: 100vh;
 }
 
+/* Content entry animation (dc.html qgFade keyframe). */
+@keyframes qgFade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .cm-editor {
   border: 1px solid #d9d9d9;
   border-radius: 6px;

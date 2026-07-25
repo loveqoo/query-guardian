@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.loveqoo.queryguardian.api.BlockedException
 import com.loveqoo.queryguardian.api.ConflictException
+import com.loveqoo.queryguardian.api.ForbiddenException
 import com.loveqoo.queryguardian.api.LintReportDto
 import com.loveqoo.queryguardian.api.NotFoundException
 import com.loveqoo.queryguardian.api.QueryDto
@@ -104,17 +105,42 @@ class QueryService(
         return toDto(saved)
     }
 
-    fun list(): List<QuerySummaryDto> = repository.findAll().map {
-        QuerySummaryDto(it.id!!, it.name, it.dialect, it.purposeCode, it.requestId, it.reviewStatus,
-            it.reviewer, it.createdAt, it.updatedAt)
+    /**
+     * 목록은 **본인 것만** (STEWARD/ADMIN은 전체 — 검토가 그들의 일이다).
+     *
+     * 이 스코프가 없으면 로그인한 아무나 남의 쿼리 본문을 읽는다. SQL 본문에는 "누가 무엇을 조사하는지"와
+     * 조건에 쓴 상수가 담기므로 **열람 자체가 유출**이고, 실행을 막아도 그것은 막히지 않는다
+     * (spec 005 §5가 M2 선행 조건으로 예고한 지점, 결정 15).
+     */
+    fun list(actor: String, privileged: Boolean): List<QuerySummaryDto> =
+        repository.findAll()
+            .filter { privileged || ownerOf(it) == actor }
+            .map {
+                QuerySummaryDto(it.id!!, it.name, it.dialect, it.purposeCode, it.requestId, it.reviewStatus,
+                    it.reviewer, it.createdAt, it.updatedAt)
+            }
+
+    fun get(id: Long, actor: String, privileged: Boolean): QueryDto = toDto(visible(id, actor, privileged))
+
+    fun delete(id: Long, actor: String, privileged: Boolean) {
+        visible(id, actor, privileged) // 남의 쿼리를 지울 수도 없다
+        repository.deleteById(id)
     }
 
-    fun get(id: Long): QueryDto =
-        toDto(repository.findById(id).orElseThrow { NotFoundException("쿼리 $id 없음") })
+    /**
+     * 쿼리의 소유자 = **근거 승인 요청의 요청자**. 저장 게이트가 `requester == actor`를 강제하므로
+     * (ApprovalGate `REQUESTER_MISMATCH`) 이 정의가 저장 시점 행위자와 일치한다.
+     * 소유자를 별도 컬럼으로 복제하지 않는 이유: 두 값이 어긋날 여지를 만들지 않는다.
+     */
+    private fun ownerOf(query: SavedQuery): String? = approvalGate.findRequest(query.requestId)?.requester
 
-    fun delete(id: Long) {
-        if (!repository.existsById(id)) throw NotFoundException("쿼리 $id 없음")
-        repository.deleteById(id)
+    /** 없으면 404, 남의 것이면 403. 존재 여부를 숨기지 않는다 — id는 순번이므로 숨겨도 의미가 없다. */
+    internal fun visible(id: Long, actor: String, privileged: Boolean): SavedQuery {
+        val query = repository.findById(id).orElseThrow { NotFoundException("쿼리 $id 없음") }
+        if (!privileged && ownerOf(query) != actor) {
+            throw ForbiddenException("본인이 저장한 쿼리만 조회할 수 있습니다")
+        }
+        return query
     }
 
     // ---- 게이트 (spec 005 §4 — 실행 순서: 룰 422 → 승인 403) ----

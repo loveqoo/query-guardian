@@ -176,6 +176,28 @@ INSERT IGNORE INTO demo_table_map (logical_name, physical_name) VALUES
     ('marketing_consents', 'demo_marketing_consents'),
     ('user_events', 'demo_user_events');
 
+-- 실행 감사 (spec 008 §6) — append-only. 원본·재작성 SQL은 **TEXT**(VARCHAR면 잘려 사후 검증이 불가능하다).
+-- **결과 행은 저장하지 않는다**(불변식) — 감사 기록이 또 다른 유출원이 되면 안 된다.
+-- error_detail은 SQLState·vendor code·정제 메시지만 담고 STEWARD/ADMIN에게만 노출한다
+-- (MySQL 오류 메시지는 데이터 값을 에코한다: `Truncated incorrect ... value: '...'`).
+CREATE TABLE IF NOT EXISTS execution_event (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    query_id      BIGINT NOT NULL,
+    actor         VARCHAR(64) NOT NULL,
+    outcome       VARCHAR(16) NOT NULL,
+    original_sql  TEXT NOT NULL,
+    rewritten_sql TEXT NULL,
+    applied_json  TEXT NULL,
+    row_count     INT NULL,
+    elapsed_ms    BIGINT NULL,
+    truncated     BOOLEAN NOT NULL DEFAULT FALSE,
+    error_code    VARCHAR(32) NULL,
+    error_detail  TEXT NULL,
+    at            DATETIME(6) NOT NULL,
+    KEY idx_execution_query (query_id),
+    KEY idx_execution_actor (actor)
+);
+
 CREATE TABLE IF NOT EXISTS permission_change_event (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     target_user_id  VARCHAR(64) NOT NULL,

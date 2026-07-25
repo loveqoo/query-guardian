@@ -44,12 +44,25 @@ class QueryController(
     ): QueryDto = queryService.review(id, auth.requireRole(http, Role.STEWARD, Role.ADMIN).id, request)
 
     @GetMapping
-    fun list(): List<QuerySummaryDto> = queryService.list()
+    fun list(http: HttpServletRequest): List<QuerySummaryDto> {
+        val me = auth.currentUser(http)
+        return queryService.list(me.id, privileged(me))
+    }
 
     @GetMapping("/{id}")
-    fun get(@PathVariable id: Long): QueryDto = queryService.get(id)
+    fun get(@PathVariable id: Long, http: HttpServletRequest): QueryDto {
+        val me = auth.currentUser(http)
+        return queryService.get(id, me.id, privileged(me))
+    }
+
+    /** STEWARD·ADMIN은 검토가 업무이므로 전체를 본다. 그 외는 본인 것만 (spec 008 결정 15). */
+    private fun privileged(user: com.loveqoo.queryguardian.auth.AppUser): Boolean =
+        user.role == Role.STEWARD || user.role == Role.ADMIN
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    fun delete(@PathVariable id: Long) = queryService.delete(id)
+    fun delete(@PathVariable id: Long, http: HttpServletRequest) {
+        val me = auth.currentUser(http)
+        queryService.delete(id, me.id, privileged(me))
+    }
 }

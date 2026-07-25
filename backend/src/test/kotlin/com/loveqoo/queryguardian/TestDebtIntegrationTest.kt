@@ -222,4 +222,40 @@ class TestDebtIntegrationTest {
         val review = postAs("/api/queries/$queryId/review", "u4", mapOf("decision" to "APPROVED"))
         assertEquals(HttpStatus.CONFLICT, review.statusCode, "현재 BLOCK인데 검토 승인이 통과함")
     }
+
+    /**
+     * spec 008 M2-1 (결정 15): 읽기 경로 스코프. 이 테스트 전까지 **로그인한 아무나 남의 쿼리 본문을 읽을 수
+     * 있었다** — SQL 본문에는 조사 대상과 조건 상수가 담기므로 열람 자체가 유출이고, 실행 차단으로는 막히지 않는다.
+     */
+    @Test
+    @Order(8)
+    fun `T7 남의 저장 쿼리는 조회할 수 없다`() {
+        // u1이 자기 승인 요청으로 쿼리를 저장한다 (users.id는 T6이 차단 규칙을 추가했으므로 피한다)
+        val req = postAs("/api/approvals", "u1", mapOf(
+            "purposeTitle" to "읽기 스코프 테스트", "purposeCode" to "marketing",
+            "tables" to listOf(mapOf("tableName" to "marketing_consents")),
+            "ruleIds" to emptyList<Long>(), "businessReqs" to emptyList<String>(),
+            "approvers" to listOf(mapOf("step" to 1, "approverId" to "ap1")),
+        ))
+        val reqId = ((req.body!!["summary"] as Map<*, *>)["id"] as Number).toLong()
+        postAs("/api/approvals/$reqId/approve", "ap1")
+
+        val saved = postAs("/api/queries", "u1", mapOf(
+            "name" to "u1의 쿼리", "dialect" to "MYSQL", "requestId" to reqId,
+            "sql" to "SELECT user_id FROM marketing_consents WHERE consent_yn = 'Y' LIMIT 10"))
+        assertEquals(HttpStatus.CREATED, saved.statusCode)
+        val queryId = (saved.body!!["id"] as Number).toLong()
+
+        // 다른 분석가(u2)는 조회·삭제 모두 403
+        assertEquals(HttpStatus.FORBIDDEN, client.getAs("/api/queries/$queryId", "u2").statusCode)
+        assertEquals(HttpStatus.FORBIDDEN, client.deleteAs("/api/queries/$queryId", "u2").statusCode)
+
+        // 목록에도 남의 것이 없다
+        val u2List = client.getListAs("/api/queries", "u2").body!!.filterIsInstance<Map<*, *>>()
+        assertTrue(u2List.none { (it["id"] as Number).toLong() == queryId }, "목록에 남의 쿼리가 보인다: $u2List")
+
+        // 본인과 STEWARD(검토자)는 볼 수 있다
+        assertEquals(HttpStatus.OK, client.getAs("/api/queries/$queryId", "u1").statusCode)
+        assertEquals(HttpStatus.OK, client.getAs("/api/queries/$queryId", "ap1").statusCode)
+    }
 }

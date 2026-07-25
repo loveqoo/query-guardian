@@ -1,5 +1,6 @@
 package com.loveqoo.queryguardian.api
 
+import com.loveqoo.queryguardian.audit.AuditCode
 import java.time.Instant
 
 // ---- 요청 ----
@@ -68,7 +69,12 @@ data class ApprovalEventDto(
 
 /** 승인 차단 응답 (spec 005 §7 — 룰 차단 422와 구분되는 403). */
 data class ApprovalBlockedDto(
-    val code: String, // NO_REQUEST | NOT_APPROVED | REQUESTER_MISMATCH | TABLES_NOT_COVERED
+    /**
+     * 실제로 나올 수 있는 값은 넷: `NO_REQUEST` · `NOT_APPROVED` · `REQUESTER_MISMATCH` · `TABLES_NOT_COVERED`.
+     * 타입은 [AuditCode](21종)이지만 **이 DTO의 정의역은 그 부분집합**이다 — 프론트가 좁게 분기하는 근거이므로
+     * 목록을 남긴다. JSON에서는 Jackson이 이름 문자열로 직렬화한다 — **경계에서만 문자열**(spec 010 I13).
+     */
+    val code: AuditCode,
     val message: String,
     val requestId: Long? = null,
     val requestStatus: String? = null,
@@ -87,7 +93,11 @@ data class BusinessReqDto(val code: String, val label: String, val description: 
 
 /** 데이터 권한 차단 — 역할 부족(ErrorResponse)과 구분되는 코드 포함 403. */
 data class AccessBlockedDto(
-    val code: String, // TABLES_NOT_PERMITTED | TABLES_UNKNOWN | REQUESTER_MISMATCH
+    /**
+     * 실제로 나올 수 있는 값은 셋: `TABLES_NOT_PERMITTED` · `TABLES_UNKNOWN` · `REQUESTER_MISMATCH`.
+     * 타입은 [AuditCode](21종)이지만 **이 DTO의 정의역은 그 부분집합**이다 — 프론트가 좁게 분기하는 근거다.
+     */
+    val code: AuditCode,
     val message: String,
     val deniedTables: List<String> = emptyList(),
 )

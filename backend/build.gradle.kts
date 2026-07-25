@@ -31,6 +31,9 @@ dependencies {
     testImplementation("org.testcontainers:mysql")
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("com.tngtech.archunit:archunit-junit5:1.4.2")
+    // Kotlin 비널 파라미터에 Mockito 매처를 쓰려면 필요하다 — `Mockito.any()`는 null을 반환해
+    // 코틀린이 스텁 호출 시점에 널 검사로 터진다(spec 010 P0 A0 테스트).
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.4.0")
 }
 
 kotlin {

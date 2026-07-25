@@ -31,7 +31,7 @@ class ApiExceptionHandler {
     @ExceptionHandler(com.loveqoo.queryguardian.exec.ExecutionFailure::class)
     fun onExecutionFailure(e: com.loveqoo.queryguardian.exec.ExecutionFailure) =
         ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
-            .body(mapOf("code" to e.kind.name, "message" to e.kind.userMessage))
+            .body(mapOf("code" to e.kind.auditCode.name, "message" to e.kind.userMessage))
 
     @ExceptionHandler(BlockedException::class)
     fun blocked(e: BlockedException): ResponseEntity<LintReportDto> =

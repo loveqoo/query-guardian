@@ -36,7 +36,22 @@ class ArchIsolationTest {
             "..queryguardian.parser..", "..queryguardian.catalog..", "..queryguardian.rules..",
             "..queryguardian.auth..", "..queryguardian.exec..", "..queryguardian.approval..",
             "..queryguardian.api..", "..queryguardian.lint..", "..queryguardian.query..",
-            "..queryguardian.config..",
+            "..queryguardian.config..", "..queryguardian.audit..",
+        )
+
+    /**
+     * spec 010 I13·P0: `audit`은 **결말의 공용 어휘**다 — `ir`이 SQL의 공용 어휘인 것과 같은 자리다.
+     * 게이트·권한·승인·실행이 모두 이 어휘를 말해야 하므로, 이것이 어느 한 계층을 의존하기 시작하면
+     * 그 방향이 곧 순환으로 되돌아온다. 어휘는 아무 것도 몰라야 모두가 쓸 수 있다.
+     */
+    @ArchTest
+    val auditVocabularyDependsOnNothing: ArchRule = noClasses()
+        .that().resideInAnyPackage("..queryguardian.audit..")
+        .should().dependOnClassesThat().resideInAnyPackage(
+            "..queryguardian.parser..", "..queryguardian.catalog..", "..queryguardian.rules..",
+            "..queryguardian.auth..", "..queryguardian.exec..", "..queryguardian.approval..",
+            "..queryguardian.api..", "..queryguardian.lint..", "..queryguardian.query..",
+            "..queryguardian.config..", "..queryguardian.ir..",
         )
 
     /**

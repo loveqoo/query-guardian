@@ -1,6 +1,8 @@
 package com.loveqoo.queryguardian.exec
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.loveqoo.queryguardian.audit.AuditCode
+import com.loveqoo.queryguardian.audit.ExecutionOutcome
 import com.loveqoo.queryguardian.ir.AppliedRewrite
 import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
@@ -9,13 +11,6 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
-
-/**
- * 실행 시도의 결말. **차단·오류도 기록한다** — 시도 자체가 감사 대상이다(spec 008 §6).
- * [PREVIEW]는 실행 없이 재작성만 보여준 경우다 — 데이터는 나가지 않지만 **어떤 강제식이 적용되는지**가
- * 노출되므로(카탈로그 오라클) 누가 무엇을 미리 봤는지는 남긴다.
- */
-enum class ExecutionOutcome { SUCCESS, BLOCKED, ERROR, PREVIEW }
 
 @Table("execution_event")
 data class ExecutionEvent(
@@ -32,7 +27,7 @@ data class ExecutionEvent(
     val effectiveLimit: Long? = null,
     val configuredCap: Long? = null,
     val moreRowsExist: Boolean? = null,
-    /** 사용자에게 보여줄 분류 코드(TIMEOUT·SQL_ERROR·게이트 코드). */
+    /** 사용자에게 보여줄 분류 코드. 값 집합은 [AuditCode]가 닫는다 — 여기가 String인 것은 저장 경계이기 때문이다. */
     val errorCode: String? = null,
     /** 원문 — STEWARD/ADMIN 전용. MySQL 오류는 데이터 값을 에코하므로 일반 사용자에게 주지 않는다. */
     val errorDetail: String? = null,
@@ -75,7 +70,7 @@ class ExecutionAudit(
         rewrittenSql: String? = null,
         applied: List<AppliedRewrite>? = null,
         result: ExecutionResult? = null,
-        errorCode: String? = null,
+        errorCode: AuditCode? = null,
         errorDetail: String? = null,
     ): ExecutionEvent = repository.save(
         ExecutionEvent(
@@ -91,7 +86,7 @@ class ExecutionAudit(
             effectiveLimit = result?.effectiveLimit,
             configuredCap = result?.configuredCap,
             moreRowsExist = result?.moreRowsExist,
-            errorCode = errorCode,
+            errorCode = errorCode?.name,
             errorDetail = errorDetail,
             at = Instant.now(),
         )

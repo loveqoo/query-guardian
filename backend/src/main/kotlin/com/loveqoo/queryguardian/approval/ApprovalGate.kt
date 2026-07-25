@@ -1,6 +1,7 @@
 package com.loveqoo.queryguardian.approval
 
 import com.loveqoo.queryguardian.api.ApprovalBlockedDto
+import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.SelectScope
 import org.springframework.stereotype.Component
@@ -21,11 +22,11 @@ class ApprovalGate(private val approvals: ApprovalService) {
     fun check(requestId: Long?, actor: String, ir: QueryIR): ApprovalRequest {
         if (requestId == null) {
             throw ApprovalBlockedException(ApprovalBlockedDto(
-                "NO_REQUEST", "승인된 요청을 선택해야 쿼리를 저장할 수 있습니다."))
+                AuditCode.NO_REQUEST, "승인된 요청을 선택해야 쿼리를 저장할 수 있습니다."))
         }
         val request = approvals.findEntity(requestId)
             ?: throw ApprovalBlockedException(ApprovalBlockedDto(
-                "NO_REQUEST", "승인 요청 $requestId 를 찾을 수 없습니다.", requestId))
+                AuditCode.NO_REQUEST, "승인 요청 $requestId 를 찾을 수 없습니다.", requestId))
 
         // 차단 응답에 **요청의 상태를 담을지**는 열람 자격에 따른다. 예전에는 무조건 담아서,
         // `GET /api/approvals/{id}`가 404로 숨기는 요청의 존재·상태·단계를 이 403 본문이 확정해 줬다
@@ -37,12 +38,12 @@ class ApprovalGate(private val approvals: ApprovalService) {
         if (request.status != RequestStatus.APPROVED) {
             val detail = if (mayKnow) " (현재 ${request.status})" else ""
             throw ApprovalBlockedException(ApprovalBlockedDto(
-                "NOT_APPROVED", "승인되지 않은 요청입니다$detail.", knownId, knownStatus))
+                AuditCode.NOT_APPROVED, "승인되지 않은 요청입니다$detail.", knownId, knownStatus))
         }
         // 신원 검사 — 스텁 identity이므로 접근 통제가 아님 (§5)
         if (request.requester != actor) {
             throw ApprovalBlockedException(ApprovalBlockedDto(
-                "REQUESTER_MISMATCH", "본인이 요청한 승인만 사용할 수 있습니다.", knownId, knownStatus))
+                AuditCode.REQUESTER_MISMATCH, "본인이 요청한 승인만 사용할 수 있습니다.", knownId, knownStatus))
         }
 
         val approved = request.tables.map { it.tableName.lowercase() }.toSet()
@@ -50,7 +51,7 @@ class ApprovalGate(private val approvals: ApprovalService) {
         val uncovered = (used - approved).sorted()
         if (uncovered.isNotEmpty()) {
             throw ApprovalBlockedException(ApprovalBlockedDto(
-                "TABLES_NOT_COVERED",
+                AuditCode.TABLES_NOT_COVERED,
                 "승인 범위에 없는 테이블을 참조했습니다: ${uncovered.joinToString(", ")}",
                 requestId, request.status.name, uncovered))
         }

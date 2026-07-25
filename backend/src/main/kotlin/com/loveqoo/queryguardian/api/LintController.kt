@@ -2,6 +2,7 @@ package com.loveqoo.queryguardian.api
 
 import com.loveqoo.queryguardian.api.AccessBlockedDto
 import com.loveqoo.queryguardian.approval.ApprovalGate
+import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.auth.AccessBlockedException
 import com.loveqoo.queryguardian.auth.AccessControl
 import com.loveqoo.queryguardian.auth.AuthService
@@ -46,7 +47,7 @@ class LintController(
         val approval = request.requestId?.let { approvalGate.findRequest(it) }
         if (approval != null && approval.requester != user.id) {
             throw AccessBlockedException(AccessBlockedDto(
-                "REQUESTER_MISMATCH", "본인이 요청한 승인만 사용할 수 있습니다."))
+                AuditCode.REQUESTER_MISMATCH, "본인이 요청한 승인만 사용할 수 있습니다."))
         }
         return LintReportDto.from(lintService.lint(request.sql, approval?.purposeCode))
     }

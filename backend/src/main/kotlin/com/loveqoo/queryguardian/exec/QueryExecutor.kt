@@ -1,5 +1,6 @@
 package com.loveqoo.queryguardian.exec
 
+import com.loveqoo.queryguardian.audit.AuditCode
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import org.springframework.beans.factory.annotation.Value
@@ -35,10 +36,11 @@ class ExecutionFailure(
     /** 감사용 원문(SQLState·vendor code 포함). 사용자 응답에 넣지 않는다. */
     val detail: String,
 ) : RuntimeException(kind.userMessage) {
-    enum class Kind(val userMessage: String) {
-        TIMEOUT("쿼리가 제한 시간 안에 끝나지 않았습니다"),
-        SQL_ERROR("쿼리 실행 중 오류가 발생했습니다"),
-        CONNECTION("실행 대상 데이터베이스에 연결할 수 없습니다"),
+    /** 감사 코드를 **이름 규약이 아니라 필드로** 짝지운다 — `kind.name`이 우연히 맞는 것에 기대지 않는다. */
+    enum class Kind(val userMessage: String, val auditCode: AuditCode) {
+        TIMEOUT("쿼리가 제한 시간 안에 끝나지 않았습니다", AuditCode.TIMEOUT),
+        SQL_ERROR("쿼리 실행 중 오류가 발생했습니다", AuditCode.SQL_ERROR),
+        CONNECTION("실행 대상 데이터베이스에 연결할 수 없습니다", AuditCode.CONNECTION),
     }
 }
 

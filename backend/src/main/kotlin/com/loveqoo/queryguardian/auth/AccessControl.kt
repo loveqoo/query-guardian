@@ -1,6 +1,7 @@
 package com.loveqoo.queryguardian.auth
 
 import com.loveqoo.queryguardian.api.AccessBlockedDto
+import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.catalog.CatalogTableRepository
 import org.springframework.stereotype.Component
 
@@ -43,14 +44,14 @@ class AccessControl(
         val unknown = referenced.filterNot { registered.contains(it.lowercase()) }.sorted()
         if (unknown.isNotEmpty()) {
             throw AccessBlockedException(AccessBlockedDto(
-                "TABLES_UNKNOWN",
+                AuditCode.TABLES_UNKNOWN,
                 "카탈로그에 등록되지 않은 테이블이라 권한을 판정할 수 없습니다: ${unknown.joinToString(", ")}",
                 unknown))
         }
         val denied = referenced.filterNot { isTableAllowed(userId, it) }.sorted()
         if (denied.isNotEmpty()) {
             throw AccessBlockedException(AccessBlockedDto(
-                "TABLES_NOT_PERMITTED",
+                AuditCode.TABLES_NOT_PERMITTED,
                 "접근 권한이 없는 테이블입니다: ${denied.joinToString(", ")}",
                 denied))
         }

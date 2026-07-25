@@ -65,4 +65,10 @@ class FalsePositiveSuiteTest {
         assertTrue(!report.blocked)
         assertTrue(report.violations.any { it.ruleId == "require-limit" && it.severity == Severity.WARN })
     }
+
+    /** 파생 테이블 본문이 UNION인 정상 쿼리 — codex 검토가 찾은 오차단(NO_PHYSICAL_TABLE). */
+    @Test
+    fun `파생 UNION은 정상 쿼리다`() {
+        assertNotBlocked("SELECT d.c FROM (SELECT id AS c FROM users UNION ALL SELECT id AS c FROM users) d LIMIT 10")
+    }
 }

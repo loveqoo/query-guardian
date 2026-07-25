@@ -112,4 +112,23 @@ class BypassSuiteTest {
             "require-partition-key",
         )
     }
+
+    /**
+     * 파생 테이블의 본문이 **UNION**이면 그 스코프가 IR에서 통째로 사라졌다(collectTables의 else 분기).
+     * "미수집이면 귀속 불가라 fail-closed"라고 적혀 있었지만, 스코프가 사라지면 그 안의 BLOCK 컬럼도
+     * 함께 사라진다 — spec 001 §6.2 스코프 은닉의 정확한 사례다.
+     */
+    @Test
+    fun `파생 테이블 본문이 UNION이어도 스코프는 숨겨지지 않는다`() {
+        assertBlockedBy(
+            "SELECT d.c FROM (SELECT ssn AS c FROM users UNION ALL SELECT ssn AS c FROM users) d LIMIT 10",
+            "no-blocked-column",
+        )
+        // 바깥에 물리 테이블이 따로 있으면 0-테이블 검사도 발화하지 않아 완전히 조용히 통과했다
+        assertBlockedBy(
+            "SELECT u.id FROM users u JOIN (SELECT ssn AS c FROM users UNION ALL SELECT ssn AS c FROM users) d " +
+                "ON u.id = d.c LIMIT 10",
+            "no-blocked-column",
+        )
+    }
 }

@@ -30,6 +30,7 @@ import com.alibaba.druid.sql.ast.statement.SQLSelectStatement
 import com.alibaba.druid.sql.ast.statement.SQLSubqueryTableSource
 import com.alibaba.druid.sql.ast.statement.SQLTableSource
 import com.alibaba.druid.sql.ast.statement.SQLUnionQuery
+import com.alibaba.druid.sql.ast.statement.SQLUnionQueryTableSource
 import com.alibaba.druid.sql.ast.statement.SQLWithSubqueryClause
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlSelectQueryBlock
 import com.alibaba.druid.sql.dialect.mysql.visitor.MySqlASTVisitorAdapter
@@ -355,10 +356,17 @@ class DruidMySqlParser(
 
         // FROM: 테이블 수집을 먼저 끝내야 resolver가 완성된다. 파생 테이블 스코프는 resolver 완성 후에 만든다.
         val derivedSources = mutableListOf<SQLSubqueryTableSource>()
+        val unionSources = mutableListOf<SQLUnionQueryTableSource>()
+        val unsupportedSources = mutableListOf<String>()
         val isCte: (String) -> Boolean = { name -> parentResolver?.isCte(name) ?: false }
-        block.from?.let { collectTables(it, tables, derivedSources, innerOnExprs, allOnExprs, isCte) }
+        block.from?.let {
+            collectTables(it, tables, derivedSources, unionSources, unsupportedSources, innerOnExprs, allOnExprs, isCte)
+        }
         val resolver = AliasResolver(tables, parentResolver)
         derivedSources.forEach { children += buildFromSelect(it.select, ScopeKind.DERIVED, resolver) }
+        // 파생 테이블 본문이 UNION인 경우(`FROM (SELECT … UNION ALL SELECT …) d`)도 스코프로 등록한다.
+        // 버리면 그 안의 BLOCK 컬럼·거버넌스 테이블이 IR에서 사라져 룰이 발화하지 않는다 (§6.2).
+        unionSources.forEach { children += buildFromQuery(it.union, ScopeKind.DERIVED, resolver) }
 
         // WHERE·INNER ON의 최상위 AND conjunct만 평탄화 (§6.1). 같은 경로에서 컬럼=컬럼 등식(joins 근거)도 수집 (§5).
         val conjuncts = mutableListOf<Predicate>()
@@ -386,6 +394,9 @@ class DruidMySqlParser(
 
         val limit = block.limit?.rowCount?.let { (it as? SQLIntegerExpr)?.number?.toLong() }
         return SelectScope(kind, tables, selectItems, conjuncts, limit, children,
+            // 모르는 FROM 형태는 **차단**한다. 조용히 버리면 그 스코프의 위반이 함께 사라진다(스코프 은닉).
+            unverifiable = unsupportedSources.takeIf { it.isNotEmpty() }
+                ?.let { "지원하지 않는 FROM 형태: ${it.distinct().joinToString(", ")}" },
             columnRefs = columnRefs, joinEqualities = joinEqualities)
     }
 
@@ -423,6 +434,8 @@ class DruidMySqlParser(
         source: SQLTableSource,
         tables: MutableList<TableRef>,
         derived: MutableList<SQLSubqueryTableSource>,
+        unions: MutableList<SQLUnionQueryTableSource>,
+        unsupported: MutableList<String>,
         innerOnExprs: MutableList<SQLExpr>,
         allOnExprs: MutableList<SQLExpr>,
         isCte: (String) -> Boolean,
@@ -439,8 +452,8 @@ class DruidMySqlParser(
                 tables += TableRef(normalized, norm(source.alias), physical = !isCte(normalized))
             }
             is SQLJoinTableSource -> {
-                collectTables(source.left, tables, derived, innerOnExprs, allOnExprs, isCte)
-                collectTables(source.right, tables, derived, innerOnExprs, allOnExprs, isCte)
+                collectTables(source.left, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, isCte)
+                collectTables(source.right, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, isCte)
                 val condition = source.condition
                 if (condition != null) {
                     // 컬럼 참조 수집은 조인 종류 불문(§5.1). WHERE 동치 인정은 INNER 계열만(§6.1).
@@ -456,7 +469,13 @@ class DruidMySqlParser(
                 // alias가 우연히 거버넌스 테이블명과 겹쳐도 오차단하지 않는다. (본문은 자식 스코프로 검사됨)
                 source.alias?.let { a -> norm(a)!!.let { tables += TableRef(it, it, physical = false) } }
             }
-            else -> { /* UNION table source 등 희귀 케이스: 테이블 미수집 → 귀속 불가 fail-closed */ }
+            is SQLUnionQueryTableSource -> {
+                unions += source
+                // alias는 파생 테이블과 같은 취급 — 물리 테이블이 아니다(본문은 자식 스코프로 검사된다)
+                source.alias?.let { a -> norm(a)!!.let { tables += TableRef(it, it, physical = false) } }
+            }
+            // 미지원 FROM 형태는 조용히 버리지 않는다 — 버리면 그 스코프의 위반이 사라진다(스코프 은닉).
+            else -> unsupported += source.javaClass.simpleName
         }
     }
 

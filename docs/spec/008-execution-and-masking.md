@@ -104,8 +104,22 @@ CTE에 물리 테이블과 **같은 이름**을 붙이면 그 본문의 물리 �
 (SELECT id, ssn FROM demo_users) …`가 실제 ssn 반환 실측). → CTE 가시 범위를 "앞서 정의된 CTE만"으로
 바로잡고(RECURSIVE면 자기 이름 포함) `BypassSuiteTest`에 회귀 고정.
 
+**3차 검토(타사 모델, 정합성 축)**
+공격 축은 위 2차가 완주했으므로 타사 모델에는 **왕복 정합성과 오탐**만 맡겼다(첫 시도는 우회 탐색 프레이밍이
+해당 모델의 안전 필터에 걸려 거부됐다 — 검증 채널마다 요청 형태를 맞춰야 한다).
+- **왕복 정합성 성립**: 160개 입력(산술·리터럴·캐릭터셋 도입자·헥스/비트·인용 식별자·CTE·UNION·윈도우·
+  `INTERVAL`·`COLLATE`·JSON 연산자·`CAST`·정렬·프린터 정규화 등)에서 `checkHygiene(sql)` 통과 ⟹
+  `checkHygiene(print(parse(sql)))` 통과의 반례 **0건**. §3.0.3의 전제가 확인됐다.
+  → 축약 코퍼스를 `parser/HygieneRoundTripTest`로 **영구 회귀**로 고정(Druid를 쓰므로 parser 테스트 패키지).
+- **CRITICAL(오탐이 물고 있던 우회)**: 파생 테이블 본문이 UNION이면(`FROM (SELECT … UNION ALL SELECT …) d`)
+  `collectTables`가 `SQLUnionQueryTableSource`를 **조용히 버려** 그 스코프가 IR에서 사라졌다. 주석엔
+  "미수집이면 fail-closed"라고 적혀 있었지만, 스코프가 사라지면 **그 안의 BLOCK 컬럼도 사라진다** —
+  바깥에 물리 테이블이 하나라도 있으면 0-테이블 검사조차 발화하지 않아 완전히 조용히 통과했다(spec 001 §6.2).
+  → UNION 테이블 소스를 자식 스코프로 등록하고, **미지원 FROM 형태는 `unverifiable`로 차단**한다.
+
 **남은 부채(M1·M2에서)**: 문형 검사를 화이트리스트로 전환(현재는 아는 나쁜 것 열거라 MySQL 신문법마다
-구멍), 파서 executor 상한, 물리명 삽입 시 백틱 인용, `demo_table_map` 관리 UI(대소문자 구분 환경).
+구멍), 파서 executor 상한, 물리명 삽입 시 백틱 인용, `demo_table_map` 관리 UI(대소문자 구분 환경),
+실행 커넥션 `sql_mode` 고정을 스캐너 전제와 하나의 계약 테스트로 묶기.
 
 ## 3. 재작성 엔진 (SqlRewriter)
 

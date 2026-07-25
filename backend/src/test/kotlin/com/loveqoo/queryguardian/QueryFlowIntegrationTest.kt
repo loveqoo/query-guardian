@@ -206,26 +206,26 @@ class QueryFlowIntegrationTest {
     }
 
     /**
-     * spec 008 §2.6: 위생 위반은 **저장 게이트에서** 막힌다.
-     * 실행 주석 안의 UNION은 룰 층이 볼 수 없으므로(§2.5-2), 위생 게이트가 없으면 이 쿼리는 저장·승인까지 통과한다.
+     * spec 008 §2.6: 형식 위반은 **저장 게이트에서** 막힌다.
+     * 실행 주석 안의 UNION은 룰 층이 볼 수 없으므로(§2.5-2), 형식 검사가 없으면 이 쿼리는 저장·승인까지 통과한다.
      */
     @Test
     @Order(6)
-    fun `위생 위반 SQL은 저장되지 않는다`() {
+    fun `형식 위반 SQL은 저장되지 않는다`() {
         val hidden = postAs("/api/queries", "u1", mapOf(
             "name" to "주석에 숨긴 UNION", "dialect" to "MYSQL", "requestId" to requestId,
             "sql" to "SELECT id FROM user_events WHERE event_date = '2026-01-01' AND consent_yn = 'Y' " +
                 "LIMIT 10 /*!50000 UNION SELECT ssn FROM users */"))
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, hidden.statusCode)
         assertTrue(
-            hidden.body!!["violations"].toString().contains("hygiene/comment-not-allowed"),
-            "위생 위반으로 차단되어야 함: ${hidden.body}",
+            hidden.body!!["violations"].toString().contains("form/comment-not-allowed"),
+            "형식 위반으로 차단되어야 함: ${hidden.body}",
         )
 
         val qualified = post("/api/lint", mapOf(
             "dialect" to "MYSQL", "sql" to "SELECT id FROM otherdb.user_events LIMIT 10"))
         assertEquals(true, qualified.body!!["blocked"])
-        assertTrue(qualified.body!!["violations"].toString().contains("hygiene/schema-qualifier"))
+        assertTrue(qualified.body!!["violations"].toString().contains("form/schema-qualifier"))
     }
 
     /**

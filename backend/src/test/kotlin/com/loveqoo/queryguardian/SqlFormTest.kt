@@ -1,42 +1,42 @@
 package com.loveqoo.queryguardian
 
-import com.loveqoo.queryguardian.parser.HygieneCode
+import com.loveqoo.queryguardian.parser.FormCode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * spec 008 §2.6 위생 게이트 프로브 스위트.
+ * spec 008 §2.6 형식 검사 프로브 스위트.
  *
  * 적대 검토가 druid 하네스로 **실측한** 우회 형태들을 그대로 입력으로 쓴다(learning 003: 파서 "표현" 결함은
  * 계약 테스트로 안 잡힌다 — 실제 파서에 실제 문자열을 넣어야 한다). 오탐 축(리터럴 안의 `--`)도 같이 고정한다.
  */
-class SqlHygieneTest {
+class SqlFormTest {
 
-    private fun codes(sql: String): Set<HygieneCode> =
-        Fixtures.parser.checkHygiene(sql).map { it.code }.toSet()
+    private fun codes(sql: String): Set<FormCode> =
+        Fixtures.parser.checkForm(sql).map { it.code }.toSet()
 
-    private fun assertHygiene(sql: String, expected: HygieneCode) {
-        assertTrue(expected in codes(sql), "[$expected] 위생 위반이어야 함: $sql → ${codes(sql)}")
+    private fun assertForm(sql: String, expected: FormCode) {
+        assertTrue(expected in codes(sql), "[$expected] 형식 위반이어야 함: $sql → ${codes(sql)}")
     }
 
     // ---- 주석 (CRITICAL 1·2) ----
 
     /**
-     * 실행 주석은 IR에서 **보이지 않는데** MySQL은 실행한다 — 위생 게이트가 없으면 평문 ssn이 반환된다.
-     * 이 테스트는 "차단됨"뿐 아니라 **BLOCK 룰이 발화하지 못한다는 사실**까지 고정한다(위생 게이트의 존재 이유).
+     * 실행 주석은 IR에서 **보이지 않는데** MySQL은 실행한다 — 형식 검사가 없으면 평문 ssn이 반환된다.
+     * 이 테스트는 "차단됨"뿐 아니라 **BLOCK 룰이 발화하지 못한다는 사실**까지 고정한다(형식 검사의 존재 이유).
      */
     @Test
-    fun `MySQL 실행 주석에 숨긴 UNION은 위생 게이트만이 잡는다`() {
+    fun `MySQL 실행 주석에 숨긴 UNION은 형식 검사만이 잡는다`() {
         val sql = "SELECT email FROM users /*!50000 UNION SELECT ssn FROM users */ LIMIT 10"
-        assertHygiene(sql, HygieneCode.COMMENT_NOT_ALLOWED)
+        assertForm(sql, FormCode.COMMENT_NOT_ALLOWED)
 
         val report = Fixtures.lint(sql)
         assertTrue(report.blocked, "차단되어야 함: $report")
         assertTrue(
-            report.violations.any { it.ruleId == "hygiene/comment-not-allowed" },
-            "위생 위반으로 차단되어야 함: $report",
+            report.violations.any { it.ruleId == "form/comment-not-allowed" },
+            "형식 위반으로 차단되어야 함: $report",
         )
         // 근본 사실: 룰 층은 주석 안의 ssn을 못 본다. 이 단정이 깨지는 날(파서가 주석을 파싱)엔 게이트를 재설계한다.
         assertFalse(
@@ -47,9 +47,9 @@ class SqlHygieneTest {
 
     @Test
     fun `후행 주석은 주입될 LIMIT을 삼키므로 거부한다`() {
-        assertHygiene("SELECT id FROM user_events WHERE event_date = '2026-01-01' -- 코멘트", HygieneCode.COMMENT_NOT_ALLOWED)
-        assertHygiene("SELECT id FROM user_events WHERE event_date = '2026-01-01' # 코멘트", HygieneCode.COMMENT_NOT_ALLOWED)
-        assertHygiene("SELECT id /* 블록 */ FROM user_events", HygieneCode.COMMENT_NOT_ALLOWED)
+        assertForm("SELECT id FROM user_events WHERE event_date = '2026-01-01' -- 코멘트", FormCode.COMMENT_NOT_ALLOWED)
+        assertForm("SELECT id FROM user_events WHERE event_date = '2026-01-01' # 코멘트", FormCode.COMMENT_NOT_ALLOWED)
+        assertForm("SELECT id /* 블록 */ FROM user_events", FormCode.COMMENT_NOT_ALLOWED)
     }
 
     // ---- 오탐 금지: 리터럴 안의 주석 문자 ----
@@ -66,7 +66,7 @@ class SqlHygieneTest {
     }
 
     @Test
-    fun `정상 쿼리는 위생 위반이 없다`() {
+    fun `정상 쿼리는 형식 위반이 없다`() {
         assertEquals(emptySet(), codes("SELECT COUNT(*) FROM user_events WHERE event_date = '2026-01-01' LIMIT 10"))
         assertEquals(
             emptySet(),
@@ -84,34 +84,34 @@ class SqlHygieneTest {
         assertEquals(emptySet(), codes("SELECT id, 5--1 AS n FROM users"))
         assertEquals(emptySet(), codes("SELECT id FROM users WHERE id > --1"))
         // 실제 주석은 공백이 오므로 그대로 잡힌다
-        assertHygiene("SELECT id FROM users -- AND consent_yn = 'Y'", HygieneCode.COMMENT_NOT_ALLOWED)
-        assertHygiene("SELECT id FROM users WHERE id = 1 --", HygieneCode.COMMENT_NOT_ALLOWED)
+        assertForm("SELECT id FROM users -- AND consent_yn = 'Y'", FormCode.COMMENT_NOT_ALLOWED)
+        assertForm("SELECT id FROM users WHERE id = 1 --", FormCode.COMMENT_NOT_ALLOWED)
     }
 
     // ---- 스키마 한정자 (CRITICAL 5) ----
 
     @Test
     fun `스키마 한정자는 판정과 실행 대상을 분기시키므로 거부한다`() {
-        assertHygiene("SELECT ssn FROM otherdb.users LIMIT 10", HygieneCode.SCHEMA_QUALIFIER)
-        // 논리 `users` 권한으로 통과하던 형태 — 위생 게이트 없이는 카탈로그가 이 테이블을 users로 본다
-        assertHygiene("SELECT u.id FROM queryguardian.users u LIMIT 10", HygieneCode.SCHEMA_QUALIFIER)
+        assertForm("SELECT ssn FROM otherdb.users LIMIT 10", FormCode.SCHEMA_QUALIFIER)
+        // 논리 `users` 권한으로 통과하던 형태 — 형식 검사 없이는 카탈로그가 이 테이블을 users로 본다
+        assertForm("SELECT u.id FROM queryguardian.users u LIMIT 10", FormCode.SCHEMA_QUALIFIER)
     }
 
     // ---- 변수·0-테이블·금지 함수 (CRITICAL 5) ----
 
     @Test
     fun `변수 참조는 2단 유출 경로이므로 거부한다`() {
-        assertHygiene("SELECT id FROM users WHERE id = @v LIMIT 10", HygieneCode.VARIABLE_NOT_ALLOWED)
-        assertHygiene("SELECT @@version FROM users LIMIT 10", HygieneCode.VARIABLE_NOT_ALLOWED)
-        assertHygiene("SELECT id FROM users WHERE id = ? LIMIT 10", HygieneCode.VARIABLE_NOT_ALLOWED)
+        assertForm("SELECT id FROM users WHERE id = @v LIMIT 10", FormCode.VARIABLE_NOT_ALLOWED)
+        assertForm("SELECT @@version FROM users LIMIT 10", FormCode.VARIABLE_NOT_ALLOWED)
+        assertForm("SELECT id FROM users WHERE id = ? LIMIT 10", FormCode.VARIABLE_NOT_ALLOWED)
     }
 
     @Test
     fun `물리 테이블 0개 쿼리는 모든 테이블 게이트를 통과하므로 거부한다`() {
-        assertHygiene("SELECT @@version", HygieneCode.NO_PHYSICAL_TABLE)
-        assertHygiene("SELECT LOAD_FILE('/etc/passwd')", HygieneCode.NO_PHYSICAL_TABLE)
-        assertHygiene("WITH x AS (SELECT 1 AS a) SELECT a FROM x", HygieneCode.NO_PHYSICAL_TABLE)
-        assertHygiene("SELECT 1 FROM (SELECT 1 AS a) d", HygieneCode.NO_PHYSICAL_TABLE)
+        assertForm("SELECT @@version", FormCode.NO_PHYSICAL_TABLE)
+        assertForm("SELECT LOAD_FILE('/etc/passwd')", FormCode.NO_PHYSICAL_TABLE)
+        assertForm("WITH x AS (SELECT 1 AS a) SELECT a FROM x", FormCode.NO_PHYSICAL_TABLE)
+        assertForm("SELECT 1 FROM (SELECT 1 AS a) d", FormCode.NO_PHYSICAL_TABLE)
     }
 
     /**
@@ -120,9 +120,9 @@ class SqlHygieneTest {
      */
     @Test
     fun `FROM DUAL은 물리 테이블이 아니다`() {
-        assertHygiene("SELECT VERSION(), DATABASE(), CURRENT_USER() FROM DUAL", HygieneCode.NO_PHYSICAL_TABLE)
-        assertHygiene("SELECT 1 FROM `dual`", HygieneCode.NO_PHYSICAL_TABLE)
-        // 반대로 서브쿼리가 물리 테이블을 읽으면 테이블 기반 게이트가 헛돌지 않으므로 위생 위반이 아니다
+        assertForm("SELECT VERSION(), DATABASE(), CURRENT_USER() FROM DUAL", FormCode.NO_PHYSICAL_TABLE)
+        assertForm("SELECT 1 FROM `dual`", FormCode.NO_PHYSICAL_TABLE)
+        // 반대로 서브쿼리가 물리 테이블을 읽으면 테이블 기반 게이트가 헛돌지 않으므로 형식 위반이 아니다
         // (승인 커버·권한은 전 스코프 합집합을 보므로 users를 본다 — spec 005 C2)
         assertEquals(emptySet(), codes("SELECT (SELECT MAX(id) FROM users) FROM DUAL"))
     }
@@ -149,12 +149,12 @@ class SqlHygieneTest {
 
     @Test
     fun `금지 함수는 문형에서 막는다`() {
-        assertHygiene("SELECT LOAD_FILE('/etc/passwd')", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT id FROM users WHERE SLEEP(5) LIMIT 10", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT BENCHMARK(1000000, MD5('x')) FROM users", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT GET_LOCK('x', 10) FROM users", HygieneCode.BANNED_FUNCTION)
+        assertForm("SELECT LOAD_FILE('/etc/passwd')", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT id FROM users WHERE SLEEP(5) LIMIT 10", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT BENCHMARK(1000000, MD5('x')) FROM users", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT GET_LOCK('x', 10) FROM users", FormCode.BANNED_FUNCTION)
         // 서브쿼리 안에 숨겨도 잡힌다
-        assertHygiene("SELECT id FROM users WHERE id IN (SELECT SLEEP(5)) LIMIT 10", HygieneCode.BANNED_FUNCTION)
+        assertForm("SELECT id FROM users WHERE id IN (SELECT SLEEP(5)) LIMIT 10", FormCode.BANNED_FUNCTION)
     }
 
     /**
@@ -164,17 +164,17 @@ class SqlHygieneTest {
      */
     @Test
     fun `백틱으로 감싼 금지 함수명도 잡는다`() {
-        assertHygiene("SELECT `sleep`(5) FROM users", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT `load_file`('/etc/passwd') AS f FROM users", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT `get_lock`('x', 3600) AS g FROM users", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT `benchmark`(1000000, MD5('x')) FROM users", HygieneCode.BANNED_FUNCTION)
+        assertForm("SELECT `sleep`(5) FROM users", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT `load_file`('/etc/passwd') AS f FROM users", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT `get_lock`('x', 3600) AS g FROM users", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT `benchmark`(1000000, MD5('x')) FROM users", FormCode.BANNED_FUNCTION)
         // 대소문자·공백·한정자 변형
-        assertHygiene("SELECT LoAd_FiLe('/etc/passwd') FROM users", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT SLEEP (1) FROM users", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT mysql.SLEEP(1) FROM users", HygieneCode.BANNED_FUNCTION)
+        assertForm("SELECT LoAd_FiLe('/etc/passwd') FROM users", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT SLEEP (1) FROM users", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT mysql.SLEEP(1) FROM users", FormCode.BANNED_FUNCTION)
         // 잠금·행수 캐시 계열도 목록에 있다
-        assertHygiene("SELECT RELEASE_LOCK('x') FROM users", HygieneCode.BANNED_FUNCTION)
-        assertHygiene("SELECT FOUND_ROWS() FROM users", HygieneCode.BANNED_FUNCTION)
+        assertForm("SELECT RELEASE_LOCK('x') FROM users", FormCode.BANNED_FUNCTION)
+        assertForm("SELECT FOUND_ROWS() FROM users", FormCode.BANNED_FUNCTION)
         // 오탐 금지: 컬럼명이 sleep인 것은 함수가 아니다
         assertEquals(emptySet(), codes("SELECT sleep FROM users WHERE sleep > 1"))
     }
@@ -183,10 +183,10 @@ class SqlHygieneTest {
 
     @Test
     fun `잠금 문형은 읽기 전용 실행과 모순이므로 거부한다`() {
-        assertHygiene("SELECT id FROM users FOR UPDATE", HygieneCode.STATEMENT_FORM_NOT_ALLOWED)
-        assertHygiene("SELECT id FROM users LOCK IN SHARE MODE", HygieneCode.STATEMENT_FORM_NOT_ALLOWED)
-        assertHygiene("SELECT id FROM users FOR UPDATE SKIP LOCKED", HygieneCode.STATEMENT_FORM_NOT_ALLOWED)
-        assertHygiene("SELECT SQL_CALC_FOUND_ROWS id FROM users LIMIT 10", HygieneCode.STATEMENT_FORM_NOT_ALLOWED)
+        assertForm("SELECT id FROM users FOR UPDATE", FormCode.CLAUSE_NOT_ALLOWED)
+        assertForm("SELECT id FROM users LOCK IN SHARE MODE", FormCode.CLAUSE_NOT_ALLOWED)
+        assertForm("SELECT id FROM users FOR UPDATE SKIP LOCKED", FormCode.CLAUSE_NOT_ALLOWED)
+        assertForm("SELECT SQL_CALC_FOUND_ROWS id FROM users LIMIT 10", FormCode.CLAUSE_NOT_ALLOWED)
     }
 
     /**
@@ -196,17 +196,17 @@ class SqlHygieneTest {
      */
     @Test
     fun `FOR SHARE는 어휘로 잡는다`() {
-        assertHygiene("SELECT id FROM users FOR SHARE", HygieneCode.STATEMENT_FORM_NOT_ALLOWED)
-        assertHygiene("SELECT id FROM users WHERE id IN (SELECT id FROM users FOR SHARE)", HygieneCode.STATEMENT_FORM_NOT_ALLOWED)
-        assertHygiene("SELECT id FROM users UNION (SELECT id FROM users FOR SHARE)", HygieneCode.STATEMENT_FORM_NOT_ALLOWED)
+        assertForm("SELECT id FROM users FOR SHARE", FormCode.CLAUSE_NOT_ALLOWED)
+        assertForm("SELECT id FROM users WHERE id IN (SELECT id FROM users FOR SHARE)", FormCode.CLAUSE_NOT_ALLOWED)
+        assertForm("SELECT id FROM users UNION (SELECT id FROM users FOR SHARE)", FormCode.CLAUSE_NOT_ALLOWED)
         // 오탐 금지: 리터럴 안의 같은 문구는 문형이 아니다
         assertEquals(emptySet(), codes("SELECT id FROM users WHERE name = 'for share'"))
     }
 
     /**
-     * 검사 불가를 "위반 없음"으로 보고하면 위생을 독립 단계로 호출하는 경로(spec 008 §5)가 fail-open한다.
+     * 검사 불가를 "위반 없음"으로 보고하면 형식 검사를 독립 단계로 호출하는 경로(spec 008 §5)가 fail-open한다.
      * `INTO DUMPFILE`·`PROCEDURE ANALYSE`·`TABLE users`는 Druid가 파싱을 거부하는데, 이때 빈 목록을 돌려주면
-     * 그 문형들이 위생 게이트를 통과한 것으로 읽힌다(적대 검토 결함 5).
+     * 그 문형들이 형식 검사를 통과한 것으로 읽힌다(적대 검토 결함 5).
      */
     @Test
     fun `검사 불가는 위반 없음이 아니다`() {
@@ -219,14 +219,14 @@ class SqlHygieneTest {
             "SELECT FROM WHERE ((",
         )) {
             assertTrue(
-                HygieneCode.UNVERIFIABLE in codes(sql),
+                FormCode.UNVERIFIABLE in codes(sql),
                 "검사 불가는 UNVERIFIABLE로 보고되어야 함: $sql → ${codes(sql)}",
             )
         }
     }
 
     /**
-     * `INTO OUTFILE`은 파일 반출 경로다. Druid가 이를 SELECT 문으로 파싱하면 위생 위반으로,
+     * `INTO OUTFILE`은 파일 반출 경로다. Druid가 이를 SELECT 문으로 파싱하면 형식 위반으로,
      * 별도 문 타입으로 파싱하면 parse/not-select로 막힌다 — **어느 쪽이든 lint가 차단**하는 것이 계약이다.
      */
     @Test
@@ -239,11 +239,11 @@ class SqlHygieneTest {
             assertTrue(report.blocked, "차단되어야 함: $sql\n$report")
             assertTrue(
                 report.violations.any {
-                    it.ruleId == "hygiene/statement-form-not-allowed" ||
-                        it.ruleId == "hygiene/variable-not-allowed" ||
+                    it.ruleId == "form/clause-not-allowed" ||
+                        it.ruleId == "form/variable-not-allowed" ||
                         it.ruleId.startsWith("parse/")
                 },
-                "위생 또는 파스 위반으로 차단되어야 함: $sql\n$report",
+                "형식 검사 또는 파스 위반으로 차단되어야 함: $sql\n$report",
             )
         }
     }
@@ -254,13 +254,13 @@ class SqlHygieneTest {
      */
     @Test
     fun `LIMIT OFFSET은 행 상한을 무한 우회하므로 거부한다`() {
-        assertHygiene("SELECT id FROM users LIMIT 1000, 1000", HygieneCode.LIMIT_OFFSET_NOT_ALLOWED)
-        assertHygiene("SELECT id FROM users LIMIT 1000 OFFSET 1000", HygieneCode.LIMIT_OFFSET_NOT_ALLOWED)
+        assertForm("SELECT id FROM users LIMIT 1000, 1000", FormCode.LIMIT_OFFSET_NOT_ALLOWED)
+        assertForm("SELECT id FROM users LIMIT 1000 OFFSET 1000", FormCode.LIMIT_OFFSET_NOT_ALLOWED)
         // 서브쿼리·UNION 안에 숨겨도 잡힌다
-        assertHygiene("SELECT d.id FROM (SELECT id FROM users LIMIT 10 OFFSET 5) d", HygieneCode.LIMIT_OFFSET_NOT_ALLOWED)
-        assertHygiene(
+        assertForm("SELECT d.id FROM (SELECT id FROM users LIMIT 10 OFFSET 5) d", FormCode.LIMIT_OFFSET_NOT_ALLOWED)
+        assertForm(
             "SELECT id FROM users UNION ALL SELECT id FROM users LIMIT 5 OFFSET 5",
-            HygieneCode.LIMIT_OFFSET_NOT_ALLOWED,
+            FormCode.LIMIT_OFFSET_NOT_ALLOWED,
         )
         // 오탐 금지: OFFSET 없는 LIMIT은 정상
         assertEquals(emptySet(), codes("SELECT id FROM users LIMIT 100"))

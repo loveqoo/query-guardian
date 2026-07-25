@@ -62,10 +62,10 @@ class RewriteVerifier(private val parser: DialectParser) {
             is ParseResult.Success -> result.ir
         }
 
-        // ⑹ 위생 재검사 — 재작성 산출물도 위생 게이트를 통과해야 한다(왕복 정합성). 프린터가 만든
+        // ⑹ 형식 재검사 — 재작성 산출물도 형식 검사를 통과해야 한다(왕복 정합성). 프린터가 만든
         //    텍스트가 주석·변수처럼 읽히면 실행 시점에 의미가 달라진다.
-        if (inspected.hygiene.isNotEmpty()) {
-            problems += "재작성 결과가 위생 게이트에 걸립니다: ${inspected.hygiene.map { it.code }}"
+        if (inspected.formViolations.isNotEmpty()) {
+            problems += "재작성 결과가 형식 검사에 걸립니다: ${inspected.formViolations.map { it.code }}"
         }
 
         val scopes = allScopes(ir.root)

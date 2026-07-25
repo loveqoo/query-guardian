@@ -33,7 +33,7 @@ sealed interface DemoMapping {
     /** 미매핑 논리 테이블이 하나라도 있음 → `NO_DEMO_MAPPING`. */
     data class Incomplete(val unmapped: List<String>) : DemoMapping
 
-    /** 식별자 위생 위반 → `INVALID_PHYSICAL_NAME`. 컬럼·테이블명을 통한 injection의 근본 차단. */
+    /** 식별자 형식 위반 → `INVALID_PHYSICAL_NAME`. 컬럼·테이블명을 통한 injection의 근본 차단. */
     data class Invalid(val badNames: List<String>) : DemoMapping
 }
 
@@ -50,11 +50,11 @@ class DemoTableResolver(private val repository: DemoTableMapRepository) {
         resolve(repository.findAll().toList(), logicalTables)
 
     companion object {
-        /** spec 008 §3 식별자 위생 — MySQL 식별자 최대 64자, 인용 없이 안전한 문자만. */
+        /** spec 008 §3 식별자 형식 검사 — MySQL 식별자 최대 64자, 인용 없이 안전한 문자만. */
         val IDENTIFIER = Regex("^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
         /**
-         * [logicalTables]가 **모두** 매핑되고 양쪽 이름이 식별자 위생을 통과할 때만 [DemoMapping.Resolved].
+         * [logicalTables]가 **모두** 매핑되고 양쪽 이름이 식별자 형식 검사를 통과할 때만 [DemoMapping.Resolved].
          * 빈 집합은 거부한다 — 테이블 0개 쿼리는 모든 테이블 기반 게이트를 통과하기 때문
          * (§2.6 NO_PHYSICAL_TABLE과 같은 이유). 저장소 없이 검증할 수 있도록 순수 함수로 분리했다.
          */

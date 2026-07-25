@@ -100,24 +100,24 @@ class DruidMySqlParser(
         Thread(r, "druid-parse").apply { isDaemon = true }
     }
 
-    /** 기존 호출자 유지 — 파싱과 위생은 [inspect]에서 **한 번의 파싱으로** 함께 나온다. */
+    /** 기존 호출자 유지 — 파싱과 형식 검사는 [inspect]에서 **한 번의 파싱으로** 함께 나온다. */
     override fun parse(sql: String): ParseResult = inspect(sql).parse
 
     /**
-     * 단독 호출용 위생 검사. 파싱 실패·비-SELECT는 "검사 불가"이므로 [HygieneCode.UNVERIFIABLE]을 얹는다 —
-     * 빈 목록으로 돌려주면 위생을 독립 단계로 호출하는 경로(spec 008 §5)가 fail-open한다.
+     * 단독 호출용 형식 검사. 파싱 실패·비-SELECT는 "검사 불가"이므로 [FormCode.UNVERIFIABLE]을 얹는다 —
+     * 빈 목록으로 돌려주면 형식 검사를 독립 단계로 호출하는 경로(spec 008 §5)가 fail-open한다.
      */
-    override fun checkHygiene(sql: String): List<HygieneViolation> {
+    override fun checkForm(sql: String): List<FormViolation> {
         val result = inspect(sql)
-        val failure = result.parse as? ParseResult.Failure ?: return result.hygiene
-        return result.hygiene + HygieneViolation(
-            HygieneCode.UNVERIFIABLE,
+        val failure = result.parse as? ParseResult.Failure ?: return result.formViolations
+        return result.formViolations + FormViolation(
+            FormCode.UNVERIFIABLE,
             "형태를 검사할 수 없습니다: ${failure.message}",
         )
     }
 
     /**
-     * **파싱 1회**로 IR과 위생 위반을 함께 만든다.
+     * **파싱 1회**로 IR과 형식 위반을 함께 만든다.
      *
      * 파싱을 두 번 하면 (1) 두 결과가 갈라질 수 있고(타임아웃 레이스 실측됨) (2) 비용이 2배이며
      * (3) 취소되지 않은 파싱 스레드가 누적된다. 재작성(M1)이 3차 파싱을 더할 예정이라 지금 합친다.
@@ -125,10 +125,10 @@ class DruidMySqlParser(
     override fun inspect(sql: String): InspectResult {
         // ⑴ 어휘 층: 주석과, AST에 남지 않는 문형 키워드. AST 유무와 무관하게 항상 검사한다.
         val scan = SqlCommentScanner.scan(sql)
-        val lexical = mutableListOf<HygieneViolation>()
+        val lexical = mutableListOf<FormViolation>()
         scan.commentAt?.let { at ->
-            lexical += HygieneViolation(
-                HygieneCode.COMMENT_NOT_ALLOWED,
+            lexical += FormViolation(
+                FormCode.COMMENT_NOT_ALLOWED,
                 "SQL 주석은 허용되지 않습니다 (${at + 1}번째 문자). 실행 주석은 판정을 우회하고, " +
                     "후행 주석은 주입된 LIMIT을 삼킵니다",
             )
@@ -136,7 +136,7 @@ class DruidMySqlParser(
         // FOR SHARE(MySQL 8이 LOCK IN SHARE MODE를 대체한 현행 문법)는 Druid의 어떤 플래그에도 담기지 않으면서
         // 출력에는 보존된다 — 읽기 전용 트랜잭션에서도 실행되므로 DB 권한이 막아주지 않는다(적대 검토 결함 2).
         FOR_SHARE.find(scan.withoutLiterals)?.let {
-            lexical += HygieneViolation(HygieneCode.STATEMENT_FORM_NOT_ALLOWED, "허용되지 않는 문형입니다: FOR SHARE")
+            lexical += FormViolation(FormCode.CLAUSE_NOT_ALLOWED, "허용되지 않는 문형입니다: FOR SHARE")
         }
 
         if (sql.toByteArray(Charsets.UTF_8).size > maxSqlBytes) {
@@ -176,24 +176,24 @@ class DruidMySqlParser(
         val root = buildFromSelect(statement.select, ScopeKind.ROOT, parentResolver = null, registry = registry, injectable = true)
         return InspectResult(
             ParseResult.Success(QueryIR(root, sql)),
-            lexical + astHygiene(statement, root),
+            lexical + astFormChecks(statement, root),
             DruidParsedStatement(statement, registry.nodes.toMap()),
         )
     }
 
-    // ---- 위생 게이트 (spec 008 §2.6) ----
+    // ---- 형식 검사 (spec 008 §2.6) ----
 
-    /** AST·IR에서만 보이는 위생 위반. [root]는 같은 파싱에서 만든 IR이므로 판정-검사 분기가 없다. */
-    private fun astHygiene(statement: SQLSelectStatement, root: SelectScope): List<HygieneViolation> {
-        val out = mutableListOf<HygieneViolation>()
+    /** AST·IR에서만 보이는 형식 위반. [root]는 같은 파싱에서 만든 IR이므로 판정-검사 분기가 없다. */
+    private fun astFormChecks(statement: SQLSelectStatement, root: SelectScope): List<FormViolation> {
+        val out = mutableListOf<FormViolation>()
         val bannedFunctions = mutableSetOf<String>()
         val variables = mutableSetOf<String>()
         val schemaQualified = mutableSetOf<String>()
         val forms = mutableSetOf<String>()
         var limitOffset: String? = null
 
-        /** 문형 검사 — base·MySQL 블록 양쪽에서 호출된다. */
-        fun checkForm(x: SQLSelectQueryBlock) {
+        /** 절 단위 금지 검사 — base·MySQL 블록 양쪽에서 호출된다. */
+        fun checkClauses(x: SQLSelectQueryBlock) {
             if (x.into != null) forms += "INTO"
             if (x.isForUpdate) forms += "FOR UPDATE"
             if (x.hintsSize > 0) forms += "옵티마이저 힌트"
@@ -230,50 +230,50 @@ class DruidMySqlParser(
                 return true
             }
 
-            override fun visit(x: SQLSelectQueryBlock): Boolean { checkForm(x); return true }
+            override fun visit(x: SQLSelectQueryBlock): Boolean { checkClauses(x); return true }
 
-            override fun visit(x: MySqlSelectQueryBlock): Boolean { checkForm(x); return true }
+            override fun visit(x: MySqlSelectQueryBlock): Boolean { checkClauses(x); return true }
         }
 
         // AST를 완주하지 못하면(미지원 노드 등) 검사 결과를 신뢰할 수 없다 → 거부가 기본값 (fail-closed).
         try {
             statement.accept(visitor)
         } catch (e: Exception) {
-            return out + HygieneViolation(
-                HygieneCode.UNVERIFIABLE,
+            return out + FormViolation(
+                FormCode.UNVERIFIABLE,
                 "검사할 수 없는 문 형태입니다: ${e.message ?: e.javaClass.simpleName}",
             )
         }
 
         if (forms.isNotEmpty()) {
-            out += HygieneViolation(
-                HygieneCode.STATEMENT_FORM_NOT_ALLOWED,
+            out += FormViolation(
+                FormCode.CLAUSE_NOT_ALLOWED,
                 "허용되지 않는 문형입니다: ${forms.sorted().joinToString(", ")}",
             )
         }
         if (variables.isNotEmpty()) {
-            out += HygieneViolation(
-                HygieneCode.VARIABLE_NOT_ALLOWED,
+            out += FormViolation(
+                FormCode.VARIABLE_NOT_ALLOWED,
                 "변수·바인드 참조는 허용되지 않습니다: ${variables.sorted().joinToString(", ")}",
             )
         }
         if (schemaQualified.isNotEmpty()) {
-            out += HygieneViolation(
-                HygieneCode.SCHEMA_QUALIFIER,
+            out += FormViolation(
+                FormCode.SCHEMA_QUALIFIER,
                 "테이블에 스키마 한정자를 붙일 수 없습니다: ${schemaQualified.sorted().joinToString(", ")} " +
                     "(판정과 실행 대상이 달라집니다)",
             )
         }
         limitOffset?.let {
-            out += HygieneViolation(
-                HygieneCode.LIMIT_OFFSET_NOT_ALLOWED,
+            out += FormViolation(
+                FormCode.LIMIT_OFFSET_NOT_ALLOWED,
                 "LIMIT에 OFFSET을 쓸 수 없습니다: $it — OFFSET을 반복하면 행 상한을 무한 우회할 수 있고, " +
                     "감사에서 총 반출 행 수를 셀 수 없게 됩니다",
             )
         }
         if (bannedFunctions.isNotEmpty()) {
-            out += HygieneViolation(
-                HygieneCode.BANNED_FUNCTION,
+            out += FormViolation(
+                FormCode.BANNED_FUNCTION,
                 "금지된 함수입니다: ${bannedFunctions.sorted().joinToString(", ")}",
             )
         }
@@ -281,8 +281,8 @@ class DruidMySqlParser(
         // AST에서 CTE 이름을 전역 수집하면 `WITH user_events AS (SELECT ... FROM user_events)`처럼
         // 동명 CTE가 실제 물리 테이블까지 지워 정상 쿼리를 오차단한다(적대 검토 결함 3).
         if (physicalTables(root).isEmpty()) {
-            out += HygieneViolation(
-                HygieneCode.NO_PHYSICAL_TABLE,
+            out += FormViolation(
+                FormCode.NO_PHYSICAL_TABLE,
                 "물리 테이블을 참조하지 않는 쿼리는 실행할 수 없습니다 (테이블 기반 게이트를 통과해 버립니다)",
             )
         }
@@ -576,7 +576,7 @@ class DruidMySqlParser(
                 // spec 008 §2.8에서 UNION 테이블 소스에 대해 고친 것과 같은 결함이 다른 노드 타입으로 남아 있었다.
                 val name = when (val e = source.expr) {
                     is SQLIdentifierExpr -> e.name
-                    is SQLPropertyExpr -> e.name // schema.table → table (위생 게이트가 별도로 거부)
+                    is SQLPropertyExpr -> e.name // schema.table → table (형식 검사가 별도로 거부)
                     else -> null
                 }
                 if (name == null) {

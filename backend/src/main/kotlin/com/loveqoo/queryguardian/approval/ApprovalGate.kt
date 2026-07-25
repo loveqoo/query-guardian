@@ -27,14 +27,22 @@ class ApprovalGate(private val approvals: ApprovalService) {
             ?: throw ApprovalBlockedException(ApprovalBlockedDto(
                 "NO_REQUEST", "승인 요청 $requestId 를 찾을 수 없습니다.", requestId))
 
+        // 차단 응답에 **요청의 상태를 담을지**는 열람 자격에 따른다. 예전에는 무조건 담아서,
+        // `GET /api/approvals/{id}`가 404로 숨기는 요청의 존재·상태·단계를 이 403 본문이 확정해 줬다
+        // (적대 검토 D6). 남의 requestId를 넣어보는 것만으로 조직 내부 상태를 열거할 수 있었다.
+        val mayKnow = request.requester == actor || request.approvers.any { it.approverId == actor }
+        val knownId = if (mayKnow) requestId else null
+        val knownStatus = if (mayKnow) request.status.name else null
+
         if (request.status != RequestStatus.APPROVED) {
+            val detail = if (mayKnow) " (현재 ${request.status})" else ""
             throw ApprovalBlockedException(ApprovalBlockedDto(
-                "NOT_APPROVED", "승인되지 않은 요청입니다 (현재 ${request.status}).", requestId, request.status.name))
+                "NOT_APPROVED", "승인되지 않은 요청입니다$detail.", knownId, knownStatus))
         }
         // 신원 검사 — 스텁 identity이므로 접근 통제가 아님 (§5)
         if (request.requester != actor) {
             throw ApprovalBlockedException(ApprovalBlockedDto(
-                "REQUESTER_MISMATCH", "본인이 요청한 승인만 사용할 수 있습니다.", requestId, request.status.name))
+                "REQUESTER_MISMATCH", "본인이 요청한 승인만 사용할 수 있습니다.", knownId, knownStatus))
         }
 
         val approved = request.tables.map { it.tableName.lowercase() }.toSet()

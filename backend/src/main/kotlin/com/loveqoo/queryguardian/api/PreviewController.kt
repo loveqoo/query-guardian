@@ -25,6 +25,7 @@ class PreviewController(
     @PostMapping
     fun preview(http: HttpServletRequest, @RequestBody request: PreviewRewriteRequest): PreviewRewriteDto {
         request.dialect?.let { validation.validateDialect(it) }
+        validation.validateSql(request.sql)
         val me = auth.currentUser(http)
         val previewed = executionService.previewRewrite(request.sql, request.requestId, me.id)
         return PreviewRewriteDto(

@@ -28,16 +28,27 @@ class ApprovalController(
 
     @GetMapping
     fun list(
+        http: HttpServletRequest,
         @RequestParam(required = false) status: String?,
         @RequestParam(required = false) requester: String?,
-    ): List<ApprovalSummaryDto> = approvals.list(status, requester)
+    ): List<ApprovalSummaryDto> {
+        val me = auth.currentUser(http)
+        return approvals.list(status, requester, me.id, privileged(me))
+    }
 
     @GetMapping("/usable")
     fun usable(http: HttpServletRequest): List<ApprovalSummaryDto> =
         approvals.usable(auth.currentUser(http).id)
 
     @GetMapping("/{id}")
-    fun get(@PathVariable id: Long): ApprovalDetailDto = approvals.get(id)
+    fun get(@PathVariable id: Long, http: HttpServletRequest): ApprovalDetailDto {
+        val me = auth.currentUser(http)
+        return approvals.get(id, me.id, privileged(me))
+    }
+
+    /** 거버넌스 역할은 전건을 본다 — 심사·감독이 직무다. */
+    private fun privileged(me: com.loveqoo.queryguardian.auth.AppUser) =
+        me.role == Role.STEWARD || me.role == Role.ADMIN
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)

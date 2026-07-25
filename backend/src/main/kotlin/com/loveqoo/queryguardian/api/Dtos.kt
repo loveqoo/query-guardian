@@ -128,7 +128,14 @@ data class ExecutionResultDto(
     val rows: List<List<String?>>,
     val rowCount: Int,
     val elapsedMs: Long,
-    val truncated: Boolean,
+    /**
+     * [effectiveLimit] = 실제 적용된 상한, [configuredCap] = 거버넌스 설정 상한.
+     * 둘이 같을 때만 "상한 때문에 잘렸다"이고, 다르면 사용자가 스스로 좁힌 것이다(D5).
+     * [moreRowsExist]가 null이면 **확인하지 않음**(상한 0이면 초과 탐지용 1행조차 조회하지 않는다).
+     */
+    val effectiveLimit: Long?,
+    val configuredCap: Long?,
+    val moreRowsExist: Boolean?,
     val rewrittenSql: String,
     val applied: List<AppliedRewriteDto>,
 )
@@ -148,7 +155,9 @@ data class ExecutionEventDto(
     val outcome: String,
     val rowCount: Int?,
     val elapsedMs: Long?,
-    val truncated: Boolean,
+    val effectiveLimit: Long?,
+    val configuredCap: Long?,
+    val moreRowsExist: Boolean?,
     val errorCode: String?,
     val errorDetail: String?,
     val rewrittenSql: String?,

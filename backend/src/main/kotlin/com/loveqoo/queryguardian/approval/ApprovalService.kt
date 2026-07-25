@@ -32,13 +32,34 @@ class ApprovalService(
 
     // ---- 조회 ----
 
-    fun list(status: String?, requester: String?): List<ApprovalSummaryDto> =
+    /**
+     * 승인 요청 목록. **읽기 스코프는 서버가 정한다**(적대 검토 #6).
+     *
+     * `requester` 파라미터는 *좁히기* 용도일 뿐이라, 예전에는 그것을 비우면 남의 요청이 전부 보였다 —
+     * 요청에는 목적·대상 테이블·승인 라인이 들어 있어 조직 내부 정보다. 이제 비특권 사용자는
+     * **자기 요청 + 자기가 승인선에 든 요청**만 본다(§5의 저장 쿼리 스코프와 같은 축).
+     */
+    fun list(status: String?, requester: String?, actor: String, privileged: Boolean): List<ApprovalSummaryDto> =
         requests.findAll()
             .filter { status == null || it.status.name == status.uppercase() }
             .filter { requester == null || it.requester == requester }
+            .filter { privileged || involves(it, actor) }
             .map { toSummary(it) }
 
-    fun get(id: Long): ApprovalDetailDto {
+    /** 열람 자격: 요청자 본인 또는 승인선에 편성된 사람. STEWARD/ADMIN은 호출 전에 통과한다. */
+    private fun involves(r: ApprovalRequest, actor: String): Boolean =
+        r.requester == actor || r.approvers.any { it.approverId == actor }
+
+    fun get(id: Long, actor: String, privileged: Boolean): ApprovalDetailDto {
+        if (!privileged && !involves(load(id), actor)) {
+            // 존재 자체를 알려주지 않는다 — 403이면 "그 id는 있다"가 새어 나간다
+            throw NotFoundException("승인 요청 $id 없음")
+        }
+        return detailOf(id)
+    }
+
+    /** 스코프 검사를 건너뛰는 내부 조회 — 생성·승인·반려 직후 자기 결과를 돌려줄 때만 쓴다. */
+    private fun detailOf(id: Long): ApprovalDetailDto {
         val r = load(id)
         val eventDtos = events.findAll().filter { it.requestId == id }
             .sortedBy { it.at }
@@ -121,12 +142,12 @@ class ApprovalService(
             approvers = resolved,
         ))
         logEvent(saved.id!!, null, actor, ApprovalAction.SUBMIT, null)
-        return get(saved.id)
+        return detailOf(saved.id)
     }
 
     // ---- 전이 (원자적, C4) ----
 
-    fun approve(id: Long, actor: String, note: String?): ApprovalDetailDto = transition(id) { r ->
+    fun approve(id: Long, actor: String, note: String?): ApprovalDetailDto = transition(id, actor) { r ->
         val step = r.currentStep
         val approver = r.approvers.firstOrNull { indexStep(r, it) == step }
             ?: throw ConflictException("승인 단계 정보가 없습니다")
@@ -138,16 +159,18 @@ class ApprovalService(
             if (indexStep(r, it) == step) it.copy(decision = ApproverDecision.APPROVED, decidedAt = now) else it
         }
         val isLast = step >= r.approvers.size
-        logEvent(id, step, actor, ApprovalAction.APPROVE, note)
-        r.copy(
-            approvers = updatedApprovers,
-            currentStep = if (isLast) step else step + 1,
-            status = if (isLast) RequestStatus.APPROVED else RequestStatus.PENDING,
-            decidedAt = if (isLast) now else null,
+        Transition(
+            r.copy(
+                approvers = updatedApprovers,
+                currentStep = if (isLast) step else step + 1,
+                status = if (isLast) RequestStatus.APPROVED else RequestStatus.PENDING,
+                decidedAt = if (isLast) now else null,
+            ),
+            PendingEvent(step, ApprovalAction.APPROVE, note),
         )
     }
 
-    fun reject(id: Long, actor: String, note: String?): ApprovalDetailDto = transition(id) { r ->
+    fun reject(id: Long, actor: String, note: String?): ApprovalDetailDto = transition(id, actor) { r ->
         val step = r.currentStep
         val approver = r.approvers.firstOrNull { indexStep(r, it) == step }
             ?: throw ConflictException("승인 단계 정보가 없습니다")
@@ -155,37 +178,65 @@ class ApprovalService(
         if (approver.decision != ApproverDecision.PENDING) throw ConflictException("이미 결정된 단계입니다")
 
         val now = Instant.now()
-        logEvent(id, step, actor, ApprovalAction.REJECT, note)
-        r.copy(
-            approvers = r.approvers.map {
-                if (indexStep(r, it) == step) it.copy(decision = ApproverDecision.REJECTED, decidedAt = now) else it
-            },
-            status = RequestStatus.REJECTED, decidedAt = now,
+        Transition(
+            r.copy(
+                approvers = r.approvers.map {
+                    if (indexStep(r, it) == step) it.copy(decision = ApproverDecision.REJECTED, decidedAt = now) else it
+                },
+                status = RequestStatus.REJECTED, decidedAt = now,
+            ),
+            PendingEvent(step, ApprovalAction.REJECT, note),
         )
     }
 
-    fun cancel(id: Long, actor: String): ApprovalDetailDto = transition(id) { r ->
+    fun cancel(id: Long, actor: String): ApprovalDetailDto = transition(id, actor) { r ->
+        // transition이 열람 자격(요청자 또는 승인선)을 먼저 걸렀다. 취소는 그보다 좁다 — 요청자 본인만.
         if (r.requester != actor) throw ConflictException("요청자만 취소할 수 있습니다")
-        logEvent(id, r.currentStep, actor, ApprovalAction.CANCEL, null)
-        r.copy(status = RequestStatus.CANCELLED, decidedAt = Instant.now())
+        Transition(
+            r.copy(status = RequestStatus.CANCELLED, decidedAt = Instant.now()),
+            PendingEvent(r.currentStep, ApprovalAction.CANCEL, null),
+        )
     }
 
     /**
      * PENDING 상태에서만 전이하며, @Version 낙관적 잠금으로 동시 전이를 차단한다 (C4).
      * 경합 시 OptimisticLockingFailureException → 409.
+     *
+     * **자격 검사가 상태 검사보다 앞선다.** 예전에는 상태를 먼저 봐서, 아무 사용자가
+     * `POST /api/approvals/{id}/cancel`을 던지기만 해도 "없음(404)"·"PENDING(409 요청자만…)"·
+     * "이미 APPROVED(409)"로 **존재와 정확한 상태**를 얻었다 — `get`이 404로 숨기는 것을 이 경로가
+     * 그대로 흘렸다(적대 검토 D6). 자격 없는 행위자에게는 존재 자체를 알리지 않는다(404).
+     *
+     * **감사 이벤트는 저장이 성공한 뒤에 남긴다.** 예전에는 `mutate` 안에서 먼저 기록해서, 낙관적 잠금
+     * 경합으로 409가 되어도 `approval_event`는 별도 커밋으로 남았다 — **성립하지 않은 승인**이 감사에
+     * 기록됐다(적대 검토 D8).
      */
-    private fun transition(id: Long, mutate: (ApprovalRequest) -> ApprovalRequest): ApprovalDetailDto {
+    private fun transition(
+        id: Long,
+        actor: String,
+        mutate: (ApprovalRequest) -> Transition,
+    ): ApprovalDetailDto {
         val current = load(id)
+        if (!involves(current, actor)) {
+            throw NotFoundException("승인 요청 $id 없음")
+        }
         if (current.status != RequestStatus.PENDING) {
             throw ConflictException("이미 ${current.status} 상태인 요청입니다")
         }
+        val transition = mutate(current)
         try {
-            requests.save(mutate(current))
+            requests.save(transition.next)
         } catch (e: OptimisticLockingFailureException) {
             throw ConflictException("다른 사용자가 먼저 처리했습니다. 새로고침 후 다시 시도하세요.")
         }
-        return get(id)
+        transition.event?.let { logEvent(id, it.step, actor, it.action, it.note) }
+        return detailOf(id)
     }
+
+    /** 전이 결과 = 저장할 다음 상태 + **저장 성공 후에** 남길 감사 이벤트. */
+    private data class Transition(val next: ApprovalRequest, val event: PendingEvent?)
+
+    private data class PendingEvent(val step: Int?, val action: ApprovalAction, val note: String?)
 
     private fun load(id: Long): ApprovalRequest =
         requests.findById(id).orElseThrow { NotFoundException("승인 요청 $id 없음") }

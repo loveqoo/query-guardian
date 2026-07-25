@@ -297,6 +297,71 @@ MASK 매핑된 컬럼이 select-item에 **원본으로** 등장하면 위반. �
 검토 목적에는 `preview-rewrite`(실행 없이 재작성 SQL만)로 충분하다. `on_behalf_of` 컬럼은 두지 않는다
 (쓰지 않는 필드는 나중에 "허용해도 되겠지"의 근거가 된다).
 
+### 3.8 M2 구현 결과 (2026-07-25 — 검증 2라운드 반영)
+
+M2-1~M2-7 전부 구현. E2E가 디자인의 결과 표를 실제로 재현한다 — `j***@naver.com`이 나오고 **평문 이메일이
+응답 어디에도 없다**. 백엔드 테스트 233건 통과.
+
+**검증 1라운드(타사 모델)** — 반영 완료(커밋 `d8d693b`). 핵심은 **감사 계약 위반**이었다: 미리보기에서 승인
+게이트가 막은 두 경로가 403인데 `execution_event`가 0건이었다(`approvalGate.check`를 감사 래퍼 없이 호출).
+그 밖에 LIMIT `cap+1` 투명성 표기, 감사 실패 방향 분리(성공=fail-closed, 오류=원래 실패가 이김).
+
+**검증 2라운드(사내 적대 검토)** — 아래 7건을 이번 라운드에서 닫았다.
+
+| # | 결함 | 무엇이 위험했나 | 수정 |
+|---|---|---|---|
+| 1 | `QueryService.update`에 스코프 없음 (CRITICAL) | 남의 저장 쿼리를 **덮어쓸 수 있었다**. 소유권이 `request_id`로 정의되므로 그 컬럼 교체는 **소유권 이전**이었다 | `visible(id, actor, privileged)` + `requestId` 교체 거부 |
+| 2 | 감사 읽기가 저장 쿼리에 매달림 (HIGH) | 쿼리를 지우면 실행 기록이 404 — **행위자가 스스로 감사를 은닉**. PREVIEW 기록(`query_id` null)은 어떤 API로도 볼 수 없었다(write-only 감사) | `GET /api/executions`(STEWARD/ADMIN, `actor` 필터) — 대상 행의 생사와 무관한 경로 |
+| 3 | SQL 길이 무제한 (HIGH) | 파서 한계(65536 B) > 감사 TEXT 한계(65535 B). 그 사이 크기는 `REQUIRES_NEW` 감사 INSERT에서 죽어 **500 + 감사 0건** — 유일한 미기록 경로 | `validateSql` 60,000 B 상한을 파싱·감사 **앞에서** 적용 |
+| 4 | 실행 커넥션 `sql_mode` **치환** (MEDIUM) | 서버 기본값의 `ONLY_FULL_GROUP_BY`가 사라져, 검토자가 승인한 SQL이 실행 시점에 **다른 의미**로 돌았다(그룹당 임의 행) | 합집합으로 바꾸고 `NO_BACKSLASH_ESCAPES`만 제거(M0 스캐너 전제). 계약 테스트로 고정 |
+| 5 | 승인 요청 읽기 무제한 (MEDIUM) | `requester` 파라미터를 비우면 전건 — 목적·대상 테이블·승인 라인이 조직 내부 정보다 | 비특권자는 **본인 요청 + 자기가 승인선에 든 요청**만. 남의 것은 404(존재 은닉) |
+| 6 | `truncated` 한 필드가 두 사실을 뭉갬 (LOW) | `false`가 "상한 없음"과 "상한 안에 다 들어왔음"을 구분하지 못했다 | `rowCap` + `moreRowsExist`. **`LIMIT 0`이면 `moreRowsExist = null`**(초과 여부를 조회조차 하지 않았다 — `false`로 단정하지 않는다) |
+| 7 | 스키마 이력 마이그레이션 부재 (HIGH, ⑹의 파생) | `spring.sql.init.mode=always`인데 `CREATE TABLE IF NOT EXISTS`는 **기존 테이블에 컬럼을 더해주지 않는다**. 기존 DB는 옛 모양으로 남아 감사 INSERT가 죽고, **감사가 죽으면 실행이 무기록으로 통과**한다 | `information_schema` 기반 멱등 DDL(값 이전 후 옛 컬럼 제거). 실제 개발 DB(옛 모양)에 적용해 실측 + 회귀 테스트 |
+
+| 8 | 감사 본문 컬럼 TEXT (HIGH, ⑶의 파생) | 입력 상한(60,000 B)이 TEXT 한계(65,535 B)에 붙어 있는데 **재작성 SQL은 원본보다 커진다**(`email` → `mask_email(demo_users.email) AS email`). 입력을 통과한 SQL이 감사 INSERT에서 죽는다 = 무기록 실행 | 본문 4컬럼을 **MEDIUMTEXT**로. 상한 하나를 다른 상한에 매달지 않고 **결합을 끊었다** |
+
+⑺·⑻은 검토자가 지적한 것이 아니라 ⑹·⑶을 고치다 발견했다 — **스키마를 바꾸는 변경은 "새 DB에서 되는가"가 아니라
+"기존 DB에서 되는가"로 검증해야 한다**는 것, 그리고 **상한을 고칠 때는 그 값에 매달린 다른 상한을 함께 봐야
+한다**는 것을 회귀로 고정했다(`SchemaMigrationTest`).
+
+**검증 3라운드(수정 자체를 적대 검토)** — 2라운드 수정본을 다시 공격했다. **수정이 새 결함을 만들 수 있다**는
+것이 이 라운드의 수확이다.
+
+| # | 결함 | 무엇이 위험했나 | 수정 |
+|---|---|---|---|
+| D1 | `sql_mode` 합집합이 `ANSI_QUOTES`를 **상속** (HIGH, **2라운드가 만든 회귀**) | `"ssn"`이 판정기에는 문자열 리터럴, 실행 세션에는 **컬럼 참조**가 된다 → MASK·BLOCK 판정이 그 자리를 보지 못하고 원문이 나간다. 옛 코드(전체 치환)는 이걸 우연히 막고 있었다 | 합집합이 아니라 **금지 목록**: 판정-실행 해석을 갈라놓는 5개 모드(`NO_BACKSLASH_ESCAPES`·`ANSI_QUOTES`·`PIPES_AS_CONCAT`·`IGNORE_SPACE`·`HIGH_NOT_PRECEDENCE`)를 제거하고, **다시 읽어 확인**해 남아 있으면 실행 거부(fail-closed) |
+| D2 | `query_id NOT NULL` 마이그레이션 누락 (HIGH) | 기존 DB에서 미리보기 감사 INSERT가 전부 죽는다 → 차단 403이 **500으로 바뀌고** 감사 0건. ⑺에서 컬럼 추가만 마이그레이션하고 **nullability는 빠뜨렸다** | 멱등 `MODIFY COLUMN` 추가. 픽스처를 **실제 옛 DDL**(커밋 `52ae36a`)로 교체 — 처음 테스트는 픽스처가 이미 새 모양이어서 이 결함을 볼 수 없었다 |
+| D3 | 감사 **밀어내기** 은닉 (HIGH) | 최근 200건만 주면, 미리보기를 200번 호출해(요청당 감사 1행) 옛 SUCCESS를 조회 범위 밖으로 밀어낼 수 있다 — 삭제 은닉을 닫았는데 다른 문으로 같은 결말 | 커서 페이징(`before`) + `outcome` 필터 + 전체 건수 헤더 |
+| D4 | 커넥션 누수 → 전용 풀(3) 영구 고갈 (MEDIUM) | `apply {}` 안의 초기화가 던지면 커넥션이 닫히지 않는다. 2라운드가 이 블록에 `SET SESSION`을 하나 더 넣어 확률을 올렸다 | 초기화 실패 시 `close()` 보장 |
+| D5 | `rowCap`이 **설정 상한**과 **사용자 LIMIT**을 뭉갬 (MEDIUM) | `LIMIT 2`로 스스로 좁힌 실행이 감사에 "상한 2가 걸려 잘렸다"로 남는다 — 거버넌스 절단과 구분 불가. ⑹에서 쪼개면서 **축을 하나 잘못 골랐다** | `configuredCap` + `effectiveLimit` + `moreRowsExist` 세 값. 계획에 상한이 없으면 실행 거부(fail-closed) |
+| D6 | 승인 요청 존재·상태 **오라클** (MEDIUM) | `get`이 404로 숨기는데 ⑴ `/cancel`이 상태를 먼저 봐서 404/409-PENDING/409-APPROVED로 상태를 확정해 주고 ⑵ 403 본문(`ApprovalBlockedDto.requestStatus`)이 남의 요청 상태를 알려줬다 | 자격 검사를 상태 검사보다 **앞으로**(자격 없으면 404), 차단 본문의 `requestId`·`requestStatus`는 요청자·승인선에게만 |
+| D7 | `update(privileged = true)` (LOW) | STEWARD의 대행 수정을 **명시적으로 허용**하는 코드였고, 실제로 막힌 이유는 게이트의 `REQUESTER_MISMATCH`라는 **우연**이었다 | `privileged`를 제거 — 결정 14(대행 실행 불허)의 대칭 |
+| D8 | 잔여 (LOW) | lint 경로에 길이 검증 없음 / `saved_query` 본문이 TEXT / 승인 이벤트를 `save` **전에** 기록해 409로 성립하지 않은 승인이 감사에 남음 | 셋 다 수정(`logEvent`는 저장 성공 후) |
+
+**직접 실측으로 찾은 것 (검토자 지적 아님)**: 입력 상한(60,000 B)을 통과한 SQL도 마스킹 치환으로 부풀어
+**파서 상한(64 KiB)** 을 넘을 수 있다 — 재작성 검증이 결과를 다시 파싱하므로 그 지점에서 걸린다(3,000개 투영에서
+실측). 동작은 fail-closed였지만 메시지가 "검증 실패"라 사용자가 무엇을 고쳐야 할지 알 수 없었다.
+크기 초과를 별도 사유로 갈라 **"컬럼 수를 줄여 나눠 실행하세요"** 로 안내한다. 그리고 이 발견으로 ⑻의 근거가
+바뀌었다: `rewritten_sql`은 파서 상한 때문에 64 KiB를 넘을 수 없지만 **`applied_json`은 마스킹 컬럼 수에
+비례해 커져 실제로 65,535 B를 넘는다**(2,000개 투영 실측) — MEDIUMTEXT가 필요한 진짜 이유는 여기다.
+
+**3라운드가 남긴 규율 3개**
+1. **수정 자체를 검토 대상으로 삼는다.** D1은 2라운드 수정이 만든 회귀다 — "고쳤다"는 사실이 안전을 보장하지 않는다.
+2. **테스트가 통과하는 이유를 본다.** 2라운드의 `sql_mode` 계약 테스트는 기본 설정 MySQL에서 **아무것도 하지
+   않아도 통과**했고(위험 모드가 애초에 없다), 마이그레이션 테스트는 픽스처가 이미 새 모양이어서 D2를 볼 수
+   없었다. 두 테스트 모두 지금은 **되돌려서 실패하는 것을 확인**했다(옛 코드 복원 → 정확히 그 결함으로 실패).
+3. **한 축을 쪼갤 때 축을 옳게 고른다.** D5는 "두 사실을 뭉쳤다"를 고치면서 잘못된 두 개로 쪼갠 사례다.
+
+**의도적으로 미룬 것 (사유 명시)**
+
+| 항목 | 왜 지금 아닌가 |
+|---|---|
+| 컬럼 수준 카탈로그 검증(카탈로그엔 있고 물리 스키마엔 없는 컬럼) | **판정 축을 새로 추가**하는 일이라 별도 스펙 대상. 현 상태에서도 실패는 크게 나고 감사에 남으며 데이터는 나가지 않는다(422 SQL_ERROR) |
+| `demo_table_map` 정합성 제약·변경 감사 | 매핑 **UI**의 선행 조건이지 M3의 선행 조건이 아니다. 지금은 seed로만 바뀐다 |
+| 파서 실행 시간·깊이 상한 | 접수 검사가 문형을 좁혀 폭발 반경이 작다. 길이 상한(⑶)이 1차 방어 |
+| ~~감사 조회 페이징~~ | **철회** — 은닉 경로였다(D3). 커서 페이징 구현 완료 |
+| `/api/users`·`/api/directory/*` 전 인증 공개 | spec 007 H3 카브아웃 — 승인선을 편성하려면 후보 목록이 필요하다. 반환은 id·이름·직함·역할까지 |
+
 ## 4. 실행 (동일 DB 전제)
 
 - **데모 데이터**: 설정 DB에 `demo_users`·`demo_marketing_consents`·`demo_user_events` 같은 실제 데이터 테이블을
@@ -306,12 +371,17 @@ MASK 매핑된 컬럼이 select-item에 **원본으로** 등장하면 위반. �
   SELECT 외 문은 파서 게이트가 이미 막지만 **이중 방어**.
 - **행 상한·타임아웃**: `guardian.exec.max-rows`(기본 1000), `guardian.exec.timeout-ms`(기본 5000).
   `Statement.setMaxRows`·`setQueryTimeout` + 초과 시 명확한 오류 메시지.
-- 결과: 컬럼 메타 + 행 배열 + `rowCount`·`elapsedMs`·`appliedRewrites`·`truncated:Boolean`.
+- 결과: 컬럼 메타 + 행 배열 + `rowCount`·`elapsedMs`·`appliedRewrites` + 상한 3값
+  **`configuredCap`**(설정 상한)·**`effectiveLimit`**(적용 상한)·**`moreRowsExist`**(§3.8-⑹·D5).
+  거버넌스 절단은 `effectiveLimit == configuredCap`일 때만이다 — 사용자가 `LIMIT 2`로 스스로 좁힌 것과
+  구분되어야 감사가 거짓말을 하지 않는다. `moreRowsExist = null`은 **알 수 없음**(상한 0이면 초과 탐지용
+  1행조차 조회하지 않는다).
 
 ## 5. 실행 게이트 (순서 — v2: 완전 재판정)
 
 ```
-인증(401) → 데이터 권한(403, **현재 권한**으로 재검사) → 접수 검사(§2.6, 422)
+인증(401) → **SQL 길이**(422, §3.8-⑶ — 파싱·감사보다 앞) → 데이터 권한(403, **현재 권한**으로 재검사)
+→ 접수 검사(§2.6, 422)
 → 룰 **재판정**(현재 규칙·현재 카탈로그, 422) → 검토 APPROVED 확인(403)
 → **요청자 == 세션 principal**(403 REQUESTER_MISMATCH) → 재작성(422) → 재작성 검증(§3.0.3, 422) → 실행
 ```
@@ -320,8 +390,9 @@ MASK 매핑된 컬럼이 select-item에 **원본으로** 등장하면 위반. �
 - 재판정 BLOCK이면 실행 거부 + `execution_event(outcome=BLOCKED)` 기록. `review_status`는 되돌리지 않고
   화면에 "재검토 필요" 배지(감사 이력 보존).
 - **남의 승인 쿼리 실행 금지**: `saved_query.request_id → approval_request.requester == 세션 principal`.
-  (STEWARD/ADMIN의 검토 목적 실행을 허용할지는 별도 결정 — 허용 시 `on_behalf_of` 기록.)
-  **선행 조건**: spec 007 §6.2의 읽기 경로 스코프를 `GET /api/queries` 계열에 먼저 적용해야 id 열거가 막힌다.
+  STEWARD/ADMIN도 대행 실행 불가(결정 14 — 감사에서 열람 주체를 단일하게 유지한다). `on_behalf_of` 컬럼은 없다.
+  ~~선행 조건: 읽기 경로 스코프~~ — M2-1에서 적용 완료. **읽기만으로는 부족했다**: 쓰기 경로(`PUT /api/queries/{id}`)도
+  같은 스코프를 지나야 하고, 소유권이 `request_id`로 정의되므로 **그 컬럼의 교체 자체를 금지**해야 한다(§3.8-⑴).
 - **검토 상태 게이트**(사용자 확정): `review_status = APPROVED`인 **저장된 쿼리만** 실행 가능.
   즉 실행은 에디터의 임의 SQL이 아니라 **저장·검토 승인된 쿼리 실행**이다(`POST /api/queries/{id}/execute`).
   → spec 005 §2의 "review_status는 표시용" 한계가 **여기서 게이트로 승격**된다.
@@ -332,14 +403,17 @@ MASK 매핑된 컬럼이 select-item에 **원본으로** 등장하면 위반. �
 
 ```
 execution_event(id, query_id, actor, original_sql, rewritten_sql, applied_json,
-                row_count, elapsed_ms, truncated, outcome[SUCCESS|BLOCKED|ERROR], error_message, at)
+                row_count, elapsed_ms, configured_cap, effective_limit, more_rows_exist,
+                outcome[SUCCESS|BLOCKED|ERROR|PREVIEW], error_code, error_detail, at)
+  ※ query_id는 **nullable** — 미리보기는 저장 쿼리가 없다. 그래서 조회 경로도 저장 쿼리와 분리해야 한다(§3.8-⑵).
 ```
 - BLOCKED(게이트 차단)·ERROR(타임아웃·SQL 오류)도 기록한다 — 실행 시도 자체가 감사 대상.
 - 원본·재작성 SQL을 모두 남겨 "무엇이 자동 적용됐는지"를 사후 검증할 수 있게 한다. `applied_json`에 **적용된 강제식 원문**도 남긴다(STEWARD가 마스크 식을 약화시켜도 사후 탐지 가능).
 - **감사 쓰기는 주 DataSource + `REQUIRES_NEW`** — 실행 커넥션은 읽기 전용이라 쓸 수 없고, 타임아웃 롤백에도 살아남아야 한다. 게이트 차단은 예외 핸들러가 아니라 **차단 지점에서 기록 후 throw**.
 - **결과 행은 저장하지 않는다**(불변식). `error_message`는 SQLState+vendor code+정제 메시지만 — MySQL 오류는
   데이터 값을 에코하므로(`Truncated incorrect ... value: '...'`) 사용자 응답에는 **분류 코드만**(TIMEOUT/SQL_ERROR/REWRITE_FAILED) 반환하고 원문은 STEWARD/ADMIN에게만.
-- `original_sql`·`rewritten_sql`·`applied_json`은 **TEXT**(VARCHAR(500)이면 감사가 잘려 사후 검증 불가).
+- `original_sql`·`rewritten_sql`·`applied_json`·`error_detail`은 **MEDIUMTEXT** (VARCHAR(500)이면 감사가 잘려
+  사후 검증 불가, TEXT면 입력 상한 60,000 B와 65,535 B가 너무 가깝다 — **재작성은 원본보다 커진다**. §3.8-⑻).
 
 ## 7. API
 
@@ -350,11 +424,17 @@ POST /api/preview-rewrite {sql, requestId}  → 200 {rewrittenSql, applied[]} (�
          applied[]는 접근 허용 테이블 항목만, 감사 기록. **권한 게이트와 같은 마일스톤에서만 노출**
          (M1에만 배포하면 무권한 카탈로그 오라클이 열린다 — 어떤 컬럼이 MASK인지·강제식 원문이 노출)
 GET  /api/queries/{id}/executions     → [ExecutionEventDto] (본인·STEWARD/ADMIN)
+GET  /api/executions?actor=&outcome=&before=  → [ExecutionEventDto] (STEWARD/ADMIN, 200건씩 커서 페이징)
+       ※ 헤더 `X-QG-Audit-Total`에 전체 건수. **커서가 없으면 은닉이 성립한다** — 새 기록을 200건 쌓아
+         옛 기록을 조회 범위 밖으로 밀어낼 수 있다(§3.8-D3).
+       ※ **저장 쿼리와 분리된** 경로다 — 쿼리를 지우면 기록이 404가 되던 은닉 경로와 조회 불가였던
+         PREVIEW 기록(query_id null)을 닫는다(§3.8-⑵). append-only 감사가 대상 행의 생사에
+         매달려 있으면 통제 수단이 아니다.
 ```
 ```
 ExecutionResultDto {
   columns: [{name, type}], rows: [[Any?]],
-  rowCount, elapsedMs, truncated,
+  rowCount, elapsedMs, configuredCap, effectiveLimit, moreRowsExist,
   rewrittenSql, applied: [{kind, table, column, detail}]
 }
 ```
@@ -362,7 +442,8 @@ ExecutionResultDto {
 ## 8. 프론트엔드
 
 - **에디터 실행 결과 탭**(현재 스텁 → 실): 저장·검토 승인된 쿼리를 선택했을 때만 실행 활성.
-  결과 그리드(마스킹된 실제 값) + "N rows · Xms · LIMIT 적용됨" + **적용된 재작성 목록**(무엇이 자동 적용됐는지) +
+  결과 그리드(마스킹된 실제 값) + "N rows · Xms · 상한 N행 적용(초과 행 있음/없음/미확인)" +
+  **적용된 재작성 목록**(무엇이 자동 적용됐는지) +
   재작성 SQL 보기(토글). 미검토 쿼리는 "검토 승인 후 실행할 수 있습니다" 안내.
 - **저장된 쿼리 화면**: 검토 승인 행에 "실행" 액션, 상세에 최근 실행 이력.
 - 실행 버튼의 스텁 메시지(spec 003 §4-2) 제거 — 이제 실제 동작.
@@ -386,7 +467,7 @@ ExecutionResultDto {
 0. ~~**M0 (선행)**: 접수 검사(§2.6) + 실행 격리 3종(§2.7 스키마·계정·매핑 총체성)~~ — **완료(§2.8 참조)**
 1. ~~**M1**: SqlRewriter(RewritePlan 경계·주입 3원칙·MASK columnRefs·재작성 검증) + 단위 스위트~~
    — **완료(§3.6 참조)**. `preview-rewrite`는 권한 게이트가 붙는 M2까지 **미노출**.
-2. ~~**M2**: 실행 인프라 + 실행 게이트(완전 재판정) + 감사 + execute·preview API~~ — **구현 완료**(검증 진행 중)
+2. ~~**M2**: 실행 인프라 + 실행 게이트(완전 재판정) + 감사 + execute·preview API~~ — **완료(§3.8 참조)**. 검증 2라운드(타사 정합성 + 사내 적대) 반영
 3. **M3**: 에디터 실행 결과·재작성 표시 + 저장쿼리 실행 액션·이력 + E2E·화면 대조
 
 ## 11. 결정 기록 (2026-07-25 사용자)

@@ -58,7 +58,19 @@ class RewriteVerifier(private val parser: DialectParser) {
 
         // ⑴ 문 1개·SELECT — 재작성이 문장을 깨뜨렸거나 문 종류를 바꾸지 않았는가
         val ir = when (val result = inspected.parse) {
-            is ParseResult.Failure -> return listOf("재작성 결과를 다시 파싱할 수 없습니다: ${result.message}")
+            is ParseResult.Failure ->
+                // 크기 초과는 "재작성이 문장을 깨뜨렸다"와 **다른 사실**이다. 입력 상한(60,000 B)을 통과한
+                // SQL도 마스킹 치환으로 부풀어 파서 상한(64 KiB)을 넘을 수 있다 — 그때 사용자에게
+                // "검증 실패"라고만 말하면 무엇을 고쳐야 할지 알 수 없다(실측: 3,000개 투영에서 발생).
+                // 어느 쪽이든 실행하지 않는다(fail-closed).
+                if (result.kind == FailureKind.INPUT_TOO_LARGE) {
+                    listOf(
+                        "마스킹을 적용하면 SQL이 파서 상한을 넘습니다 — 조회 컬럼 수를 줄여 나눠 실행하세요 " +
+                            "(${result.message})",
+                    ).let { return it }
+                } else {
+                    return listOf("재작성 결과를 다시 파싱할 수 없습니다: ${result.message}")
+                }
             is ParseResult.Success -> result.ir
         }
 

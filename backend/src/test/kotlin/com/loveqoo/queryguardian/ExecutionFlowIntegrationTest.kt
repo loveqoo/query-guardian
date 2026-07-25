@@ -62,6 +62,9 @@ class ExecutionFlowIntegrationTest {
     lateinit var rest: TestRestTemplate
 
     @Autowired
+    lateinit var executor: com.loveqoo.queryguardian.exec.QueryExecutor
+
+    @Autowired
     lateinit var executionEvents: com.loveqoo.queryguardian.exec.ExecutionEventRepository
 
     private val client by lazy { SessionClient(rest) }
@@ -151,7 +154,10 @@ class ExecutionFlowIntegrationTest {
 
         // 행 상한(5)으로 잘렸다 — 데모 사용자는 12명이다
         assertEquals(5, body["rowCount"])
-        assertEquals(true, body["truncated"])
+        // 상한이 걸렸다는 사실과 상한을 넘는 행이 있다는 사실은 **다른 사실**이다(적대 검토 #7)
+        assertEquals(5, (body["effectiveLimit"] as Number).toInt())
+        assertEquals(5, (body["configuredCap"] as Number).toInt())
+        assertEquals(true, body["moreRowsExist"])
 
         // 무엇이 자동 적용됐는지 사용자에게 보인다
         assertTrue(body["applied"].toString().contains("MASK"), "${body["applied"]}")
@@ -181,7 +187,9 @@ class ExecutionFlowIntegrationTest {
 
         val success = history.first { it["outcome"] == "SUCCESS" }
         assertEquals(5, success["rowCount"])
-        assertEquals(true, success["truncated"])
+        assertEquals(5, (success["effectiveLimit"] as Number).toInt())
+        assertEquals(5, (success["configuredCap"] as Number).toInt())
+        assertEquals(true, success["moreRowsExist"])
         assertTrue(success["rewrittenSql"].toString().contains("mask_email"))
         // 결과 값은 저장하지 않는다(§6 불변식) — 이력 어디에도 데이터가 없어야 한다
         assertTrue(!history.toString().contains("@naver.com"), "감사에 결과 값이 남았다: $history")
@@ -300,5 +308,300 @@ class ExecutionFlowIntegrationTest {
         assertTrue(forbidden.any { it.actor == "u2" && it.queryId == queryId }, "열거 시도가 기록되지 않았다")
         // 본문은 기록하지 않는다 — 열람 권한이 없는 사람의 요청으로 SQL을 감사에 복사할 이유가 없다
         assertTrue(forbidden.none { it.originalSql.contains("SELECT") }, "권한 없는 시도에 SQL 본문이 남았다")
+    }
+
+    /**
+     * PUT 탈취 (적대 검토 #1). `update`가 소유권을 확인하지 않던 동안 남의 쿼리를 덮어쓸 수 있었고,
+     * 소유권이 `request_id`로 정의되므로 **requestId 교체는 소유권 이전**이었다 — 둘 다 막혔음을 본다.
+     */
+    @Test
+    @Order(11)
+    fun `게이트 - 남의 쿼리는 수정할 수 없고 근거 승인도 바꿀 수 없다`() {
+        val before = client.getAs("/api/queries/$queryId", "u1").body!!
+        val body = mapOf(
+            "name" to "탈취", "dialect" to "MYSQL", "purposeCode" to "marketing",
+            "sql" to "SELECT id FROM users", "requestId" to requestId,
+        )
+        val hijack = client.putAs("/api/queries/$queryId", "u2", body)
+        assertEquals(HttpStatus.FORBIDDEN, hijack.statusCode, "본문: " + hijack.body)
+
+        // 본인이라도 근거 승인 요청은 교체할 수 없다 — 그 컬럼이 소유자를 정의한다
+        val otherCreated = postAs("/api/approvals", "u2", mapOf(
+            "purposeTitle" to "타인 요청", "purposeCode" to "marketing",
+            "tables" to listOf(mapOf("tableName" to "users")),
+            "ruleIds" to emptyList<Long>(), "businessReqs" to emptyList<String>(),
+            "approvers" to listOf(mapOf("step" to 1, "approverId" to "ap1"))))
+        val otherRequest =
+            (((otherCreated.body ?: error("요청 생성 실패: " + otherCreated.body))["summary"] as Map<*, *>)["id"] as Number).toLong()
+        assertEquals(
+            HttpStatus.FORBIDDEN,
+            client.putAs("/api/queries/$queryId", "u1", body + mapOf("requestId" to otherRequest)).statusCode,
+        )
+
+        // 행이 실제로 안 바뀌었다 — 403만 보고 만족하면 "거절했지만 이미 저장됨"을 놓친다
+        val after = client.getAs("/api/queries/$queryId", "u1").body!!
+        assertEquals(before["name"], after["name"])
+        assertEquals(before["sql"], after["sql"])
+        assertEquals(before["requestId"], after["requestId"])
+    }
+
+    /**
+     * SQL 길이 (적대 검토 #3). 파서 한계(65536B)가 감사 TEXT 컬럼 한계(65535B)보다 커서,
+     * 그 사이 크기의 SQL은 REQUIRES_NEW 감사 INSERT에서 죽어 **500 + 감사 0건**이 됐다 — 유일한 미기록 경로였다.
+     */
+    @Test
+    @Order(12)
+    fun `입력 한계 - 과대 SQL은 감사 이전에 거부된다`() {
+        val huge = "SELECT id FROM users WHERE id IN (" + (1..12_000).joinToString(",") + ")"
+        assertTrue(huge.toByteArray().size > 60_000, "표본이 한계보다 작다: ${huge.length}")
+        val before = executionEvents.findAll().count()
+        val res = client.postAs("/api/queries", "u1", mapOf(
+            "name" to "과대", "dialect" to "MYSQL", "purposeCode" to "marketing",
+            "sql" to huge, "requestId" to requestId,
+        ))
+        assertTrue(res.statusCode.is4xxClientError, "500이 아니라 4xx여야 한다: " + res.statusCode + " " + res.body)
+        // **길이 때문에** 막혔는지 확인한다 — dialect 오타로 400이 나도 통과하던 단정이었다(실측)
+        assertTrue(
+            res.body.toString().contains("길이") || res.body.toString().contains("깁니다"),
+            "다른 이유로 막혔다: " + res.body,
+        )
+        assertEquals(before, executionEvents.findAll().count(), "거부된 입력이 감사를 남겼다")
+    }
+
+    /**
+     * 감사 도달성 (적대 검토 #2). 유일한 읽기 경로가 저장 쿼리를 지나던 동안, 쿼리를 지우면 그 실행 기록이
+     * 404가 되어 **행위자가 스스로 감사를 은닉**할 수 있었고 PREVIEW 기록은 어떤 API로도 볼 수 없었다.
+     */
+    @Test
+    @Order(13)
+    fun `감사 - 쿼리를 지워도 기록은 남고 미리보기도 조회된다`() {
+        // 지울 쿼리를 하나 만들어 실행까지 한 뒤 삭제한다
+        val created = client.postAs("/api/queries", "u1", mapOf(
+            "name" to "지울 쿼리", "dialect" to "MYSQL", "purposeCode" to "marketing",
+            "sql" to "SELECT email FROM users", "requestId" to requestId,
+        ))
+        val disposable = (created.body?.get("id") as? Number)?.toLong()
+            ?: error("쿼리 생성 실패: " + created.statusCode + " " + created.body)
+        assertEquals(
+            HttpStatus.OK,
+            postAs("/api/queries/$disposable/review", "ap1", mapOf("decision" to "APPROVED")).statusCode,
+        )
+        assertEquals(HttpStatus.OK, postAs("/api/queries/$disposable/execute", "u1").statusCode)
+        assertEquals(HttpStatus.NO_CONTENT, client.deleteAs("/api/queries/$disposable", "u1").statusCode)
+
+        // 쿼리별 경로는 이제 대상이 없다 — 그런데 감사는 살아 있어야 한다
+        assertEquals(HttpStatus.NOT_FOUND, client.getAs("/api/queries/$disposable/executions", "u1").statusCode)
+        val all = client.getListAs("/api/executions", "ap1").body!!.filterIsInstance<Map<*, *>>()
+        assertTrue(all.isNotEmpty(), "감사 전건 조회가 비었다")
+        assertTrue(all.any { it["outcome"] == "PREVIEW" }, "미리보기 기록이 어디에도 안 보인다: $all")
+        assertTrue(
+            executionEvents.findAll().any { it.queryId == disposable },
+            "삭제된 쿼리의 실행 기록이 사라졌다",
+        )
+        // 결과 값은 여기에도 없다(§6 불변식)
+        assertTrue(!all.toString().contains("@naver.com"), "감사 전건에 결과 값이 있다")
+        // 거버넌스 역할 전용
+        // 거부 응답은 리스트가 아니라 오류 객체이므로 Map으로 받는다
+        assertEquals(HttpStatus.FORBIDDEN, client.getAs("/api/executions", "u1").statusCode)
+        // 행위자 좁히기
+        val mine = client.getListAs("/api/executions?actor=u2", "ap1").body!!.filterIsInstance<Map<*, *>>()
+        assertTrue(mine.all { it["actor"] == "u2" }, "actor 필터가 새어 나갔다: $mine")
+    }
+
+    /**
+     * 승인 요청 읽기 스코프 (적대 검토 #6). 요청에는 목적·대상 테이블·승인 라인이 들어 있는데
+     * `requester` 파라미터를 비우면 전건이 보였다.
+     */
+    @Test
+    @Order(14)
+    fun `스코프 - 남의 승인 요청은 목록에도 상세에도 없다`() {
+        assertEquals(HttpStatus.NOT_FOUND, client.getAs("/api/approvals/$requestId", "u2").statusCode)
+        assertEquals(HttpStatus.OK, client.getAs("/api/approvals/$requestId", "u1").statusCode)
+        // 승인선에 편성된 사람은 심사해야 하므로 보인다
+        assertEquals(HttpStatus.OK, client.getAs("/api/approvals/$requestId", "ap1").statusCode)
+
+        val u2List = client.getListAs("/api/approvals", "u2").body!!.filterIsInstance<Map<*, *>>()
+        assertTrue(
+            u2List.none { (it["id"] as Number).toLong() == requestId },
+            "남의 요청이 목록에 있다: $u2List",
+        )
+        val stewardList = client.getListAs("/api/approvals", "ap1").body!!.filterIsInstance<Map<*, *>>()
+        assertTrue(stewardList.any { (it["id"] as Number).toLong() == requestId }, "심사자에게 안 보인다")
+    }
+
+    /**
+     * 실행 커넥션 `sql_mode` 계약 (적대 검토 #4). 전체를 치환해서 서버 기본값의 `ONLY_FULL_GROUP_BY`가
+     * 사라졌고, 검토자가 승인한 SQL이 실행 시점에 **다른 의미**로 돌았다(그룹당 임의 행 선택).
+     * `NO_BACKSLASH_ESCAPES`는 M0 어휘 스캐너의 전제이므로 반대로 **없어야** 한다.
+     */
+    @Test
+    @Order(15)
+    fun `실행 커넥션 - sql_mode는 합집합이고 스캐너 전제를 지킨다`() {
+        ensureDemoSchema()
+        val mode = executor.execute("SELECT @@SESSION.sql_mode", 1).rows.single().single()!!
+        assertTrue(mode.contains("ONLY_FULL_GROUP_BY"), "서버 기본 모드를 갈아써 버렸다: $mode")
+        assertTrue(mode.contains("STRICT_TRANS_TABLES"), "고정 모드가 빠졌다: $mode")
+        assertTrue(!mode.contains("NO_BACKSLASH_ESCAPES"), "접수 스캐너의 전제가 깨진다: $mode")
+    }
+
+    /**
+     * 상한 경계 (적대 검토 D5·테스트 공백 4). 사용자가 스스로 좁힌 것과 거버넌스가 자른 것은 **다른 사실**이다 —
+     * 한 값으로 뭉치면 감사가 "상한 2가 걸려 잘렸다"는 거짓을 남긴다.
+     */
+    @Test
+    @Order(16)
+    fun `상한 - 사용자 LIMIT과 설정 상한을 구분해 기록한다`() {
+        ensureDemoSchema()
+        fun run(sql: String): Map<*, *> {
+            val id = (client.postAs("/api/queries", "u1", mapOf(
+                "name" to "상한 $sql", "dialect" to "MYSQL", "requestId" to requestId, "sql" to sql,
+            )).body!!["id"] as Number).toLong()
+            postAs("/api/queries/$id/review", "ap1", mapOf("decision" to "APPROVED"))
+            val res = postAs("/api/queries/$id/execute", "u1")
+            assertEquals(HttpStatus.OK, res.statusCode, "실행 실패: " + res.body)
+            return res.body!!
+        }
+
+        // 사용자가 2행만 요청 — 설정 상한(5)은 발동하지 않았다
+        val narrow = run("SELECT email FROM users LIMIT 2")
+        assertEquals(2, narrow["rowCount"])
+        assertEquals(2, (narrow["effectiveLimit"] as Number).toInt())
+        assertEquals(5, (narrow["configuredCap"] as Number).toInt())
+        assertTrue(
+            (narrow["effectiveLimit"] as Number).toLong() != (narrow["configuredCap"] as Number).toLong(),
+            "사용자 LIMIT과 설정 상한이 구분되지 않는다: $narrow",
+        )
+
+        // LIMIT 0 — 초과 행을 볼 기회가 없으므로 "없다"고 단정하지 않는다
+        val zero = run("SELECT email FROM users LIMIT 0")
+        assertEquals(0, zero["rowCount"])
+        assertEquals(null, zero["moreRowsExist"], "확인하지 않은 것을 false로 단정했다: $zero")
+    }
+
+    /**
+     * 감사 밀어내기 은닉 (적대 검토 D3). "최근 200건"만 주면 새 기록을 쌓아 옛 기록을 조회 범위 밖으로
+     * 밀어낼 수 있다 — 저장은 남지만 아무도 볼 수 없으니 삭제 은닉과 결말이 같다.
+     */
+    @Test
+    @Order(17)
+    fun `감사 - 새 기록을 쌓아도 옛 기록에 도달할 수 있다`() {
+        val oldest = executionEvents.findAll().minByOrNull { it.id!! } ?: error("감사가 비었다")
+
+        // 미리보기 차단은 요청당 감사 1행을 만든다(무권한·무비용) — 은닉 시나리오의 재료였다
+        repeat(210) { client.postAs("/api/preview-rewrite", "u2", mapOf("sql" to "SELECT 1")) }
+
+        val firstPage = client.getListAs("/api/executions", "ap1").body!!.filterIsInstance<Map<*, *>>()
+        assertTrue(firstPage.size <= 200, "상한이 없다: ${firstPage.size}")
+        assertTrue(
+            firstPage.none { (it["id"] as Number).toLong() == oldest.id },
+            "밀려나지 않았다면 이 테스트가 은닉을 재현하지 못한다",
+        )
+
+        // 커서로 거슬러 올라가면 반드시 도달한다
+        var cursor = firstPage.minOf { (it["id"] as Number).toLong() }
+        var found = false
+        repeat(20) {
+            if (found) return@repeat
+            val page = client.getListAs("/api/executions?before=$cursor", "ap1")
+                .body!!.filterIsInstance<Map<*, *>>()
+            if (page.isEmpty()) return@repeat
+            if (page.any { (it["id"] as Number).toLong() == oldest.id }) found = true
+            cursor = page.minOf { (it["id"] as Number).toLong() }
+        }
+        assertTrue(found, "커서 페이징으로도 옛 기록(id=${oldest.id})에 도달할 수 없다 — 감사가 은닉됐다")
+    }
+
+    /** 대행 수정 불허 (적대 검토 D7) — 결정 14가 대행 실행을 막는데 대행 수정을 열어둘 이유가 없다. */
+    @Test
+    @Order(18)
+    fun `게이트 - STEWARD도 남의 쿼리를 수정할 수 없다`() {
+        val before = client.getAs("/api/queries/$queryId", "u1").body!!
+        val res = client.putAs("/api/queries/$queryId", "ap1", mapOf(
+            "name" to "심사자 수정", "dialect" to "MYSQL", "purposeCode" to "marketing",
+            "sql" to "SELECT id FROM users", "requestId" to requestId,
+        ))
+        assertEquals(HttpStatus.FORBIDDEN, res.statusCode, "본문: " + res.body)
+        assertEquals(before["name"], client.getAs("/api/queries/$queryId", "u1").body!!["name"])
+    }
+
+    /**
+     * 존재·상태 오라클 (적대 검토 D6). `GET /api/approvals/{id}`가 404로 숨기는 요청의 존재·상태를
+     * 다른 경로가 확정해 주면 은닉은 무의미하다.
+     */
+    @Test
+    @Order(19)
+    fun `스코프 - 승인 요청의 존재와 상태가 다른 경로로 새지 않는다`() {
+        // 취소는 역할 제약이 없다 — 상태를 먼저 보던 동안 아무나 존재+상태를 얻었다
+        val cancel = postAs("/api/approvals/$requestId/cancel", "u2")
+        assertEquals(HttpStatus.NOT_FOUND, cancel.statusCode, "본문: " + cancel.body)
+        assertTrue(
+            !cancel.body.toString().contains("APPROVED"),
+            "상태가 메시지로 새어 나갔다: " + cancel.body,
+        )
+
+        // 남의 requestId로 저장을 시도하면 403이지만, 그 본문에 상태를 담아서는 안 된다
+        val save = client.postAs("/api/queries", "u2", mapOf(
+            "name" to "정찰", "dialect" to "MYSQL", "requestId" to requestId, "sql" to "SELECT id FROM users",
+        ))
+        assertEquals(HttpStatus.FORBIDDEN, save.statusCode)
+        assertEquals(null, save.body?.get("requestStatus"), "요청 상태가 403 본문으로 새어 나갔다: " + save.body)
+        assertEquals(null, save.body?.get("requestId"), "요청 id가 403 본문으로 새어 나갔다: " + save.body)
+    }
+
+    /**
+     * 재작성 증폭 (적대 검토 테스트 공백 5). 입력을 통과한 SQL은 **재작성 후에도** 감사에 온전히 저장돼야
+     * 한다 — 감사 INSERT가 죽으면 그 실행은 무기록으로 통과한다. `applied_json`은 마스킹 컬럼 수에
+     * 비례해 커지므로 원본보다 훨씬 빨리 TEXT 한계(65,535 B)를 넘는다.
+     */
+    @Test
+    @Order(20)
+    fun `감사 - 재작성으로 커진 기록도 잘리지 않고 저장된다`() {
+        ensureDemoSchema()
+        val projections = (1..2_000).joinToString(", ") { "email AS e$it" }
+        val sql = "SELECT $projections FROM users"
+        val id = (client.postAs("/api/queries", "u1", mapOf(
+            "name" to "증폭", "dialect" to "MYSQL", "requestId" to requestId, "sql" to sql,
+        )).body!!["id"] as Number).toLong()
+        postAs("/api/queries/$id/review", "ap1", mapOf("decision" to "APPROVED"))
+        val res = postAs("/api/queries/$id/execute", "u1")
+        assertEquals(HttpStatus.OK, res.statusCode, "실행 실패: " + res.body)
+
+        val event = executionEvents.findAll().filter { it.queryId == id }
+            .maxByOrNull { it.id!! } ?: error("감사 기록이 없다")
+        val applied = event.appliedJson ?: error("적용 목록이 저장되지 않았다")
+        // 표본이 실제로 TEXT 한계를 넘어야 MEDIUMTEXT 전환이 검증된다
+        assertTrue(applied.toByteArray().size > 65_535, "한계를 넘지 않는 표본이다: ${applied.length}")
+        assertTrue(applied.trimEnd().endsWith("]"), "적용 목록이 잘렸다(끝: ...${applied.takeLast(40)})")
+        assertEquals(sql, event.originalSql, "원본 SQL이 잘렸다")
+        assertTrue(event.rewrittenSql!!.contains("mask_email"), "재작성 SQL이 잘렸다")
+    }
+
+    /**
+     * 증폭 절벽 (실측 발견). 입력 상한(60,000 B)을 통과한 SQL도 마스킹 치환으로 부풀어 **파서 상한(64 KiB)**
+     * 을 넘을 수 있다 — 재작성 검증이 다시 파싱하므로 그 지점에서 걸린다. 데이터는 나가지 않아야 하고
+     * (fail-closed), 감사에 남아야 하고, 사용자는 **무엇을 고쳐야 할지** 알아야 한다.
+     */
+    @Test
+    @Order(21)
+    fun `증폭 절벽 - 재작성이 파서 상한을 넘으면 차단하고 이유를 알려준다`() {
+        ensureDemoSchema()
+        val sql = "SELECT " + (1..3_000).joinToString(", ") { "email AS e$it" } + " FROM users"
+        assertTrue(sql.toByteArray().size < 60_000, "입력 상한을 넘는 표본이면 다른 게이트가 잡는다")
+        val id = (client.postAs("/api/queries", "u1", mapOf(
+            "name" to "절벽", "dialect" to "MYSQL", "requestId" to requestId, "sql" to sql,
+        )).body!!["id"] as Number).toLong()
+        postAs("/api/queries/$id/review", "ap1", mapOf("decision" to "APPROVED"))
+
+        val res = postAs("/api/queries/$id/execute", "u1")
+        assertTrue(res.statusCode.is4xxClientError, "500이 아니라 4xx여야 한다: ${res.statusCode}")
+        assertTrue(
+            res.body.toString().contains("컬럼 수를 줄여"),
+            "무엇을 고쳐야 할지 알려주지 않는다: " + res.body,
+        )
+        // 차단도 감사 대상이다(§6)
+        assertTrue(
+            executionEvents.findAll().any { it.queryId == id && it.outcome == "BLOCKED" },
+            "차단이 기록되지 않았다",
+        )
     }
 }

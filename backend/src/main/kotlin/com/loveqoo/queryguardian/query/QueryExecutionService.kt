@@ -117,6 +117,17 @@ class QueryExecutionService(
             throw e
         }
 
+        // 승인도 **현재 상태로 재검사**한다(상태·요청자·테이블 커버). 예전에는 "승인은 APPROVED 이후 불변"과
+        // "수정 시 게이트가 재실행된다"는 두 가정에 기대고 있었는데, 적대 검토가 두 번째 가정이 얼마나 얇은지
+        // 보여줬다(소유권 탈취로 request_id가 바뀔 수 있었다). §5는 예외 없이 재판정을 요구한다.
+        try {
+            approvalGate.check(query.requestId, actor, ir)
+        } catch (e: ApprovalBlockedException) {
+            audit.record(queryId, actor, ExecutionOutcome.BLOCKED, sql,
+                errorCode = e.detail.code, errorDetail = e.detail.message)
+            throw e
+        }
+
         // 접수 검사 + 룰 **재판정** — 저장 시점 스냅샷은 표시용이고 게이트 근거가 아니다(§5)
         val report = LintReportDto.from(lintService.judge(inspected, query.purposeCode))
         if (report.blocked) blockedByReport("RULE_BLOCKED", report)
@@ -149,9 +160,11 @@ class QueryExecutionService(
             is RewriteOutcome.Refused -> blocked("REWRITE_${outcome.refusal.name}", outcome.message)
         }
 
-        val cap = plan.limitCap?.maxRows ?: 0
+        // 계획에 상한이 없으면 재작성이 LIMIT을 넣지 않았다는 뜻이다 — 상한 없는 실행을 허용하지 않는다(fail-closed)
+        val limitCap = plan.limitCap
+            ?: blocked("REWRITE_NO_LIMIT", "행 상한을 적용하지 못했습니다 — 실행할 수 없습니다")
         val result = try {
-            executor.execute(rewritten.sql, cap)
+            executor.execute(rewritten.sql, limitCap.maxRows, limitCap.governanceCap)
         } catch (e: ExecutionFailure) {
             // 사용자에게는 분류 코드만, 원문(SQLState·vendor code)은 감사에만 (§6).
             // 감사 저장이 실패해도 **원래 실행 오류가 이긴다** — 감사 예외로 바꿔치면 무엇이 실패했는지 잃는다.

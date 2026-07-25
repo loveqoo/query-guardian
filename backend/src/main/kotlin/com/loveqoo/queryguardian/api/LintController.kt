@@ -31,6 +31,9 @@ class LintController(
     @PostMapping
     fun lint(http: HttpServletRequest, @RequestBody request: LintRequest): LintReportDto {
         validation.validateDialect(request.dialect)
+        // lint에도 길이 상한을 건다 — 감사 INSERT가 없어 무기록 500은 아니지만, 파서에 실재하는 상한이
+        // 여기 말고는 없다(적대 검토 D8). 임의 크기 SQL을 Druid에 그대로 넣을 이유가 없다.
+        validation.validateSql(request.sql)
         val user = auth.currentUser(http)
 
         // 게이트 순서 (spec 007 §6.0): 인증 → 데이터 권한 → 룰. 권한이 없으면 룰 결과를 주지 않는다.

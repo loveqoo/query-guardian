@@ -29,7 +29,9 @@ data class ExecutionEvent(
     val appliedJson: String? = null,
     val rowCount: Int? = null,
     val elapsedMs: Long? = null,
-    val truncated: Boolean = false,
+    val effectiveLimit: Long? = null,
+    val configuredCap: Long? = null,
+    val moreRowsExist: Boolean? = null,
     /** 사용자에게 보여줄 분류 코드(TIMEOUT·SQL_ERROR·게이트 코드). */
     val errorCode: String? = null,
     /** 원문 — STEWARD/ADMIN 전용. MySQL 오류는 데이터 값을 에코하므로 일반 사용자에게 주지 않는다. */
@@ -39,6 +41,17 @@ data class ExecutionEvent(
 
 interface ExecutionEventRepository : CrudRepository<ExecutionEvent, Long> {
     fun findByQueryIdOrderByIdDesc(queryId: Long): List<ExecutionEvent>
+
+    // 커서 페이징(`id < before`) — 상한만 있고 커서가 없으면 새 기록을 쌓아 **옛 기록을 조회 범위 밖으로
+    // 밀어낼 수 있다**(적대 검토 D3). 그러면 삭제로 은닉하던 것과 같은 결말에 다른 문으로 도달한다.
+    fun findTop200ByIdLessThanOrderByIdDesc(before: Long): List<ExecutionEvent>
+    fun findTop200ByActorAndIdLessThanOrderByIdDesc(actor: String, before: Long): List<ExecutionEvent>
+    fun findTop200ByOutcomeAndIdLessThanOrderByIdDesc(outcome: String, before: Long): List<ExecutionEvent>
+    fun findTop200ByActorAndOutcomeAndIdLessThanOrderByIdDesc(
+        actor: String,
+        outcome: String,
+        before: Long,
+    ): List<ExecutionEvent>
 }
 
 /**
@@ -75,7 +88,9 @@ class ExecutionAudit(
             appliedJson = applied?.let { objectMapper.writeValueAsString(it) },
             rowCount = result?.rowCount,
             elapsedMs = result?.elapsedMs,
-            truncated = result?.truncated ?: false,
+            effectiveLimit = result?.effectiveLimit,
+            configuredCap = result?.configuredCap,
+            moreRowsExist = result?.moreRowsExist,
             errorCode = errorCode,
             errorDetail = errorDetail,
             at = Instant.now(),
@@ -83,4 +98,31 @@ class ExecutionAudit(
     )
 
     fun historyOf(queryId: Long): List<ExecutionEvent> = repository.findByQueryIdOrderByIdDesc(queryId)
+
+    /**
+     * **저장 쿼리와 무관한** 감사 조회 (적대 검토 HIGH).
+     *
+     * 유일한 읽기 경로가 `queries.visible(queryId)`를 지나던 동안 두 가지가 깨졌다:
+     * ⑴ 쿼리를 지우면 그 실행 기록이 404가 되어 **행위자 스스로 감사를 은닉**할 수 있었다
+     * ⑵ PREVIEW 기록은 `query_id`가 null이라 **어떤 API로도 볼 수 없었다**(write-only 감사).
+     * append-only 감사가 대상 행의 생사에 매달려 있으면 통제 수단이 아니다.
+     *
+     * **커서 페이징이 필수다.** "최근 200건"만 주던 동안, 미리보기를 200번 호출해(요청당 감사 1행)
+     * 옛 SUCCESS 기록을 조회 범위 밖으로 밀어낼 수 있었다 — 저장은 남지만 아무도 볼 수 없으니
+     * 삭제 은닉과 결말이 같다(적대 검토 D3).
+     */
+    fun recent(actor: String?, outcome: String?, before: Long?): List<ExecutionEvent> {
+        // 커서는 "이 id보다 앞"이다. 없으면 맨 앞부터 — Long.MAX_VALUE로 같은 질의를 쓴다.
+        val cursor = before ?: Long.MAX_VALUE
+        return when {
+            actor != null && outcome != null ->
+                repository.findTop200ByActorAndOutcomeAndIdLessThanOrderByIdDesc(actor, outcome, cursor)
+            actor != null -> repository.findTop200ByActorAndIdLessThanOrderByIdDesc(actor, cursor)
+            outcome != null -> repository.findTop200ByOutcomeAndIdLessThanOrderByIdDesc(outcome, cursor)
+            else -> repository.findTop200ByIdLessThanOrderByIdDesc(cursor)
+        }
+    }
+
+    /** 전체 건수 — 목록이 상한에 걸렸는지(더 있는지) 화면·감사자가 알 수 있어야 한다. */
+    fun total(): Long = repository.count()
 }

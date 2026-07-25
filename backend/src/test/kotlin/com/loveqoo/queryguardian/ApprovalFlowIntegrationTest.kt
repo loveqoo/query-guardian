@@ -116,7 +116,11 @@ class ApprovalFlowIntegrationTest {
 
         val r2 = idOf(postAs("/api/approvals", "u1", requestBody(
             listOf("user_events"), listOf("ap1"))).body!!)
-        assertEquals(HttpStatus.CONFLICT, postAs("/api/approvals/$r2/cancel", "u2").statusCode) // 요청자만
+        // 남의 요청 취소 시도는 **404**다 — 예전 기대치는 409("요청자만 취소할 수 있습니다")였고, 그것이
+        // 곧 "그 id의 요청이 존재하며 지금 PENDING이다"를 알려주는 오라클이었다(적대 검토 D6).
+        // `GET /api/approvals/{id}`가 404로 숨기는 것을 이 경로가 흘리면 은닉은 무의미하다.
+        val byOther = postAs("/api/approvals/$r2/cancel", "u2")
+        assertEquals(HttpStatus.NOT_FOUND, byOther.statusCode)
         assertEquals("CANCELLED", statusOf(postAs("/api/approvals/$r2/cancel", "u1").body!!))
     }
 

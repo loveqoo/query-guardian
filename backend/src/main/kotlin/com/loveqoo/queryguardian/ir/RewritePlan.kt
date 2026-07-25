@@ -85,10 +85,19 @@ data class PredicateInjection(
 
 /**
  * 유효 상한 [maxRows] = `min(사용자 LIMIT ?: ∞, 설정 상한)`. 재작성기는 `LIMIT maxRows + 1`을 넣고
- * 실행기가 `maxRows + 1`번째 행을 보면 `truncated = true`로 확정한 뒤 그 행을 버린다(§3.0-2).
+ * 실행기가 `maxRows + 1`번째 행을 보면 초과 행이 있다고 확정한 뒤 그 행을 버린다(§3.0-2).
+ *
+ * [governanceCap]은 **설정 상한**이고 [maxRows]는 **적용된 상한**(= min(사용자 LIMIT, 설정 상한))이다.
+ * 둘을 한 값으로 뭉치면 감사가 거짓말을 한다: 사용자가 `LIMIT 2`로 스스로 좁힌 실행이 "상한 2가 걸려
+ * 잘렸다"로 남는다(적대 검토 D5). 거버넌스 절단은 `maxRows == governanceCap`일 때만이다.
  * `setMaxRows` 병용은 금지 — 상한 장치는 하나여야 어긋나지 않는다.
  */
-data class LimitCap(val scopeId: String, val maxRows: Long)
+data class LimitCap(
+    val scopeId: String,
+    val maxRows: Long,
+    /** 기본값은 [maxRows] — "설정 상한과 적용 상한이 같다"(사용자 LIMIT이 없었다)는 뜻이다. */
+    val governanceCap: Long = maxRows,
+)
 
 /** 재작성 거부 사유 — 전부 fail-closed다(부분 적용 없음, spec 008 결정 6). */
 enum class RewriteRefusal {

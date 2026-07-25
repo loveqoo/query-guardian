@@ -53,10 +53,31 @@ class QueryService(
         return toDto(saved)
     }
 
-    /** 수정: 게이트 재실행 + **검토 상태 리셋**(C5 — 검토 도장을 단 채 본문이 바뀌는 구멍 차단). */
+    /**
+     * 수정: **소유권 검사** + 게이트 재실행 + 검토 상태 리셋(C5 — 검토 도장을 단 채 본문이 바뀌는 구멍 차단).
+     *
+     * 소유권 검사가 없던 동안 **남의 쿼리를 탈취**할 수 있었다(적대 검토 CRITICAL, 실측):
+     * 공격자가 자기 승인 요청 id로 PUT하면 게이트는 *공격자의* 승인을 검증해 통과시키고, 저장 시 `request_id`가
+     * 덮여 소유권이 넘어갔다. 그러면 피해자는 자기 쿼리를 잃고(403), 공격자는 피해자의 재작성 SQL·조건 상수·
+     * 행위자 이름을 실행 이력으로 읽고 삭제까지 했다. M2-1이 조회·삭제만 닫고 **수정을 빠뜨린 것**이 원인이다.
+     *
+     * 그래서 두 겹으로 막는다: ⑴ 소유자만 수정할 수 있다 ⑵ **`request_id`는 바꿀 수 없다** —
+     * 소유자 정의가 그 컬럼에 걸려 있으므로 갱신을 허용하는 것 자체가 소유권 이전이다.
+     *
+     * **`privileged`를 받지 않는다.** 처음엔 조회와 대칭으로 STEWARD/ADMIN에게 열었는데, 실제로 탈취가
+     * 막힌 이유는 게이트가 `REQUESTER_MISMATCH`에 걸리는 **우연**이었다 — 나중에 게이트가 특권 역할을
+     * 면제하면 탈취가 되살아난다(적대 검토 D7). 결정 14가 대행 *실행*을 불허하는데 대행 *수정*을 허용할
+     * 이유는 없다. 검토는 읽기로 하고, 고치는 것은 소유자가 한다.
+     */
     fun update(id: Long, actor: String, request: SaveQueryRequest): QueryDto {
-        val existing = repository.findById(id).orElseThrow { NotFoundException("쿼리 $id 없음") }
-        val (approval, report) = gate(actor, request)
+        val existing = visible(id, actor, privileged = false)
+        if (request.requestId != null && request.requestId != existing.requestId) {
+            throw ForbiddenException(
+                "저장된 쿼리의 근거 승인 요청은 바꿀 수 없습니다 — 다른 요청으로 저장하려면 새 쿼리로 저장하세요",
+            )
+        }
+        // 게이트는 **원래 요청 id**로 재실행한다(클라이언트가 보낸 것을 신뢰하지 않는다)
+        val (approval, report) = gate(actor, request.copy(requestId = existing.requestId))
         val saved = repository.save(
             existing.copy(
                 name = request.name, dialect = request.dialect, sqlText = request.sql,

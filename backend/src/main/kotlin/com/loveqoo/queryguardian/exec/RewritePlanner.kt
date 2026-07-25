@@ -56,7 +56,7 @@ class RewritePlanner(
             RewritePlan(
                 maskProjections = masks,
                 injections = injections,
-                limitCap = LimitCap(ir.root.scopeId, effectiveCap(ir.root.limit)),
+                limitCap = LimitCap(ir.root.scopeId, effectiveCap(ir.root.limit), maxRows),
                 tableRenames = renames,
             )
         )

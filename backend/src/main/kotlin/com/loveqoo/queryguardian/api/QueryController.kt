@@ -27,12 +27,15 @@ class QueryController(
     @ResponseStatus(HttpStatus.CREATED)
     fun save(http: HttpServletRequest, @RequestBody request: SaveQueryRequest): QueryDto {
         validation.validateDialect(request.dialect)
+        validation.validateSql(request.sql)
         return queryService.save(auth.currentUser(http).id, request)
     }
 
     @PutMapping("/{id}")
     fun update(@PathVariable id: Long, http: HttpServletRequest, @RequestBody request: SaveQueryRequest): QueryDto {
         validation.validateDialect(request.dialect)
+        validation.validateSql(request.sql)
+        // 대행 수정 불허 — privileged를 넘기지 않는다(결정 14의 대칭, 적대 검토 D7)
         return queryService.update(id, auth.currentUser(http).id, request)
     }
 
@@ -73,7 +76,9 @@ class QueryController(
             rows = executed.result.rows,
             rowCount = executed.result.rowCount,
             elapsedMs = executed.result.elapsedMs,
-            truncated = executed.result.truncated,
+            effectiveLimit = executed.result.effectiveLimit,
+            configuredCap = executed.result.configuredCap,
+            moreRowsExist = executed.result.moreRowsExist,
             rewrittenSql = executed.rewrittenSql,
             applied = executed.applied.map { AppliedRewriteDto(it.kind.name, it.table, it.column, it.detail) },
         )
@@ -87,7 +92,7 @@ class QueryController(
         return executionService.history(id, me.id, canSeeRawErrors).map {
             ExecutionEventDto(
                 id = it.id!!, actor = it.actor, outcome = it.outcome,
-                rowCount = it.rowCount, elapsedMs = it.elapsedMs, truncated = it.truncated,
+                rowCount = it.rowCount, elapsedMs = it.elapsedMs, effectiveLimit = it.effectiveLimit, configuredCap = it.configuredCap, moreRowsExist = it.moreRowsExist,
                 errorCode = it.errorCode,
                 errorDetail = if (canSeeRawErrors) it.errorDetail else null,
                 rewrittenSql = it.rewrittenSql, at = it.at,

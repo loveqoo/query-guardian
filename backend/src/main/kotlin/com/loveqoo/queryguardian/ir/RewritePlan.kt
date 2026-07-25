@@ -18,19 +18,36 @@ data class RewritePlan(
     /** 행 상한 — 루트(또는 UNION 노드)에 적용 (§3.0-2). */
     val limitCap: LimitCap? = null,
     /**
-     * 논리명(소문자) → 물리 데모 테이블명. **재작성의 마지막 단계에서만** 적용한다 —
+     * 논리 테이블 → 물리 데모 테이블 치환. **재작성의 마지막 단계에서만** 적용한다 —
      * 물리명으로 카탈로그를 조회하면 제약이 0건 매칭돼 마스킹·필터가 조용히 사라진다(§3 원칙).
+     *
+     * 전역 맵이 아니라 **스코프+인스턴스 단위**인 이유: CTE·파생 테이블 alias가 논리 테이블명과 같을 수 있고
+     * (`WITH users AS (…) SELECT … FROM users`), 그 경우 전역 치환은 CTE 참조까지 물리명으로 바꿔 쿼리를 깨뜨린다.
+     * 어느 인스턴스가 물리 테이블인지는 IR만이 정확히 안다.
      */
-    val tableMap: Map<String, String> = emptyMap(),
+    val tableRenames: List<TableRename> = emptyList(),
 ) {
     val isEmpty: Boolean
-        get() = maskProjections.isEmpty() && injections.isEmpty() && limitCap == null && tableMap.isEmpty()
+        get() = maskProjections.isEmpty() && injections.isEmpty() && limitCap == null && tableRenames.isEmpty()
 
     /** 계획이 참조하는 모든 스코프 id — 핸들과의 짝 검증에 쓴다. */
     val referencedScopeIds: Set<String>
         get() = (maskProjections.map { it.scopeId } + injections.map { it.scopeId } +
-            listOfNotNull(limitCap?.scopeId)).toSet()
+            tableRenames.map { it.scopeId } + listOfNotNull(limitCap?.scopeId)).toSet()
 }
+
+/**
+ * [scopeId] 스코프의 [instanceKey] 인스턴스가 가리키는 테이블을 [physicalName]으로 바꾼다.
+ *
+ * 원본에 alias가 없으면 재작성기가 **alias로 논리명을 남긴다** — 그러지 않으면 `users.email` 같은
+ * 한정 참조가 이름이 바뀐 테이블을 못 찾아 문법 오류가 된다(실측 확인).
+ */
+data class TableRename(
+    val scopeId: String,
+    val instanceKey: String,
+    val logicalName: String,
+    val physicalName: String,
+)
 
 /**
  * [scopeId] 스코프에서 [instanceKey] 인스턴스의 [column] **투영**을 [expressionTemplate]로 치환한다.

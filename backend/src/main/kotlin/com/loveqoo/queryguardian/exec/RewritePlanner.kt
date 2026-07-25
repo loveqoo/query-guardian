@@ -9,6 +9,7 @@ import com.loveqoo.queryguardian.ir.RewritePlan
 import com.loveqoo.queryguardian.ir.RewriteRefusal
 import com.loveqoo.queryguardian.ir.SelectItem
 import com.loveqoo.queryguardian.ir.SelectScope
+import com.loveqoo.queryguardian.ir.TableRename
 import com.loveqoo.queryguardian.ir.TableRef
 
 /** 계획 수립 결과. 거부는 예외가 아니라 값이다 — 게이트가 사유를 그대로 사용자에게 전달한다. */
@@ -35,11 +36,17 @@ class RewritePlanner(
     fun plan(ir: QueryIR, purposeCode: String?, tableMap: Map<String, String>): PlanOutcome {
         val masks = mutableListOf<MaskProjection>()
         val injections = mutableListOf<PredicateInjection>()
+        val renames = mutableListOf<TableRename>()
 
         for (scope in allScopes(ir.root)) {
             for (instance in scope.tables.filter { it.physical }) {
                 planMasks(scope, instance, masks)?.let { return it }
                 planInjections(scope, instance, purposeCode, injections)?.let { return it }
+                // 물리명 치환은 **물리 테이블 인스턴스에만** 계획한다 — CTE·파생 alias가 논리명과 겹쳐도
+                // 그것들은 physical=false라 여기 오지 않는다(전역 치환이면 그 참조까지 깨뜨린다).
+                tableMap[instance.name.lowercase()]?.let { physical ->
+                    renames += TableRename(scope.scopeId, instance.instanceKey, instance.name, physical)
+                }
             }
         }
 
@@ -48,7 +55,7 @@ class RewritePlanner(
                 maskProjections = masks,
                 injections = injections,
                 limitCap = LimitCap(ir.root.scopeId, effectiveCap(ir.root.limit)),
-                tableMap = tableMap,
+                tableRenames = renames,
             )
         )
     }

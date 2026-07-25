@@ -59,6 +59,16 @@ class RewritePlannerTest {
         assertEquals("mask_email({col})", mask.expressionTemplate)
     }
 
+    /** 동명 CTE가 있으면 전역 치환은 CTE 참조까지 물리명으로 바꿔 쿼리를 깨뜨린다 — 물리 인스턴스만 치환한다. */
+    @Test
+    fun `동명 CTE 참조는 물리명 치환 대상이 아니다`() {
+        val outcome = assertIs<PlanOutcome.Planned>(
+            plan("WITH users AS (SELECT id FROM users) SELECT id FROM users LIMIT 10"),
+        )
+        // CTE 본문의 물리 users 1건만 치환 대상 (루트의 users는 CTE 참조)
+        assertEquals(1, outcome.plan.tableRenames.size)
+    }
+
     @Test
     fun `alias로 참조된 인스턴스도 인스턴스 키로 지목한다`() {
         val outcome = assertIs<PlanOutcome.Planned>(plan("SELECT u.email FROM users u LIMIT 10"))
@@ -183,9 +193,11 @@ class RewritePlannerTest {
     }
 
     @Test
-    fun `물리명은 계획의 tableMap에만 담긴다`() {
+    fun `물리명은 계획의 tableRenames에만 담긴다`() {
         val outcome = assertIs<PlanOutcome.Planned>(plan("SELECT email FROM users LIMIT 10"))
-        assertEquals(mapOf("users" to "demo_users"), outcome.plan.tableMap)
+        val rename = outcome.plan.tableRenames.single()
+        assertEquals("users", rename.logicalName)
+        assertEquals("demo_users", rename.physicalName)
         // 계획의 다른 항목은 전부 **논리명·인스턴스 키**로만 말한다 — 물리명이 새면 카탈로그 조회가 0건이 된다
         assertTrue(outcome.plan.maskProjections.none { it.instanceKey.contains("demo_") })
         assertTrue(outcome.plan.injections.none { it.predicateSql.contains("demo_") })

@@ -76,6 +76,12 @@ class DruidMySqlParser(
         internal val statement: SQLSelectStatement,
         internal val scopeNodes: Map<String, SQLObject>,
     ) : ParsedStatement {
+        /**
+         * 재작성은 AST를 **제자리에서** 고친다(그래야 판정된 것과 같은 AST가 실행된다). 그래서 핸들은 한 번만
+         * 쓸 수 있다 — 두 번 적용하면 강제식이 이중으로 감싸이고 술어가 중복된다.
+         */
+        internal var rewritten: Boolean = false
+
         override val dialect = Dialect.MYSQL
         override val scopeIds: Set<String> get() = scopeNodes.keys
     }

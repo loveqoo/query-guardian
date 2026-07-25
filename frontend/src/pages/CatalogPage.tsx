@@ -52,6 +52,8 @@ import type {
   TableInput,
 } from "../api/client";
 import { MONO_FONT } from "../theme";
+import { useAuth } from "../auth/AuthContext";
+import StewardOnly from "../components/StewardOnly";
 import {
   buildPreview,
   CLASS_LABEL,
@@ -95,6 +97,12 @@ const DEFAULT_KIND: Record<ColumnClass, DefKind> = {
 
 export default function CatalogPage() {
   const { message } = App.useApp();
+  /**
+   * 카탈로그 조회·변경은 STEWARD/ADMIN 전용 (spec 007 §5·§6.2 — ANALYST는 목록 API가 403).
+   * 403 토스트 대신 안내 화면을 띄우고 **요청 자체를 보내지 않는다**.
+   */
+  const { isSteward, user } = useAuth();
+  const sessionKey = isSteward ? (user?.id ?? "") : "";
 
   const [tab, setTab] = useState<"defs" | "mappings" | "purposes">("defs");
   const [defs, setDefs] = useState<ConstraintDef[]>([]);
@@ -120,6 +128,10 @@ export default function CatalogPage() {
 
   // ---- loads ----
   useEffect(() => {
+    if (!sessionKey) {
+      setLoading(false);
+      return;
+    }
     let live = true;
     (async () => {
       setLoading(true);
@@ -140,7 +152,7 @@ export default function CatalogPage() {
     return () => {
       live = false;
     };
-  }, []);
+  }, [sessionKey]);
 
   useEffect(() => {
     if (tableId == null) {
@@ -238,6 +250,7 @@ export default function CatalogPage() {
   }
 
   // ---- render ----
+  if (!isSteward) return <StewardOnly what="제약 카탈로그" />;
   if (loading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", padding: 80 }}>

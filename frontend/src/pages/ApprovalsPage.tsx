@@ -12,12 +12,14 @@ import {
   Spin,
   Tabs,
   Tag,
+  Tooltip,
   theme,
 } from "antd";
 import {
   CheckOutlined,
   DeleteOutlined,
   DownOutlined,
+  LockOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -25,7 +27,8 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import { MONO_FONT, STATUS_COLOR, STATUS_LABEL } from "../theme";
-import ActorSelect, { personLabel, useActor, useDirectory } from "../components/ActorSelect";
+import { useAuth } from "../auth/AuthContext";
+import { userLabel, useUsers } from "../auth/useUsers";
 import {
   apiErrorMessage,
   approveApproval,
@@ -36,13 +39,13 @@ import {
   listBusinessReqs,
   listPurposes,
   listRules,
-  listTables,
+  myTables,
   rejectApproval,
   type ApprovalDetail,
   type ApprovalStatus,
   type ApprovalSummary,
   type BusinessReq,
-  type CatalogTable,
+  type MyTable,
   type Purpose,
   type RuleDto,
 } from "../api/client";
@@ -81,6 +84,9 @@ const ACTION_LABEL: Record<string, string> = {
 
 const AVATAR_COLORS = ["#722ed1", "#1677ff", "#13c2c2", "#fa8c16", "#eb2f96"];
 
+/** ANALYST는 승인·반려 권한이 없다 (spec 007 §5 — 시도 시 403). */
+const DECIDE_DENIED_TIP = "승인·반려는 STEWARD 이상만 가능합니다";
+
 function fmtDateTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   return iso.length >= 16 ? iso.slice(0, 16).replace("T", " ") : iso;
@@ -96,8 +102,16 @@ export default function ApprovalsPage() {
   const GRAY2 = "#fafafa";
   const label12 = { fontSize: 12, color: token.colorTextTertiary };
 
-  const [actor] = useActor();
-  const { users, approvers: approverPool } = useDirectory();
+  const { user, isSteward } = useAuth();
+  const { users, approvers: allApprovers } = useUsers();
+  /** 요청자는 세션 사용자 — 행위자 선택 UI는 제거됐다 (spec 007 §8). */
+  const actor = user?.id ?? "";
+  const sessionKey = actor;
+  /** 자가 승인 금지 (C1) — 본인은 승인자 후보에서 뺀다(서버도 400 `REQUESTER_IS_APPROVER`). */
+  const approverPool = useMemo(
+    () => allApprovers.filter((a) => a.id !== actor),
+    [allApprovers, actor],
+  );
 
   const [tab, setTab] = useState<"list" | "new">("list");
 
@@ -111,7 +125,8 @@ export default function ApprovalsPage() {
 
   // ---- 참조 데이터 ----------------------------------------------------------
   const [purposes, setPurposes] = useState<Purpose[]>([]);
-  const [catalogTables, setCatalogTables] = useState<CatalogTable[]>([]);
+  /** 요청 피커는 `/api/my/tables` — 전 테이블 + accessible (spec 007 §6.3). 비허용은 담을 수 없다(400). */
+  const [pickerTables, setPickerTables] = useState<MyTable[]>([]);
   const [rules, setRules] = useState<RuleDto[]>([]);
   const [businessReqs, setBusinessReqs] = useState<BusinessReq[]>([]);
 
@@ -150,22 +165,27 @@ export default function ApprovalsPage() {
   }, [status, requester, message]);
 
   useEffect(() => {
+    if (!sessionKey) return;
     void load();
-  }, [load]);
+  }, [load, sessionKey]);
 
+  // 참조 데이터는 사용자별로 다시 받는다(허용 테이블이 사용자마다 다름).
   useEffect(() => {
+    if (!sessionKey) return;
     listPurposes().then(setPurposes).catch(() => void 0);
-    listTables().then(setCatalogTables).catch(() => void 0);
+    myTables().then(setPickerTables).catch(() => void 0);
     listRules().then(setRules).catch(() => void 0);
     listBusinessReqs().then(setBusinessReqs).catch(() => void 0);
-  }, []);
+  }, [sessionKey]);
 
   // 승인자 풀이 로드되면 기본 2단계 라인을 세팅한다 (디자인 원본과 동일한 초기 상태).
+  // 사용자 전환 시 풀에서 사라진 승인자(=본인)는 라인에서 제거한다.
   useEffect(() => {
-    if (approverPool.length > 0 && formApprovers.length === 0) {
-      setFormApprovers(approverPool.slice(0, 2).map((a) => a.id));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (approverPool.length === 0) return;
+    setFormApprovers((prev) => {
+      const kept = prev.filter((id) => approverPool.some((a) => a.id === id));
+      return kept.length > 0 ? kept : approverPool.slice(0, 2).map((a) => a.id);
+    });
   }, [approverPool]);
 
   const reqLabel = useMemo(() => {
@@ -229,6 +249,11 @@ export default function ApprovalsPage() {
     }
     if (new Set(line).size !== line.length) {
       message.error("같은 승인자를 여러 단계에 지정할 수 없습니다");
+      return;
+    }
+    // 자가 승인 금지 (C1) — 서버도 400 REQUESTER_IS_APPROVER로 거부한다.
+    if (line.includes(actor)) {
+      message.error("본인을 자신의 승인 라인에 지정할 수 없습니다 (REQUESTER_IS_APPROVER)");
       return;
     }
     setSubmitting(true);
@@ -298,7 +323,7 @@ export default function ApprovalsPage() {
           onChange={setRequester}
           options={[
             { label: "요청자 전체", value: "all" },
-            ...users.map((u) => ({ label: u.name, value: u.id })),
+            ...users.map((u) => ({ label: `${u.displayName} · ${u.title}`, value: u.id })),
           ]}
         />
         <Select
@@ -307,15 +332,15 @@ export default function ApprovalsPage() {
           onChange={setApproverFilter}
           options={[
             { label: "승인자 전체", value: "all" },
-            ...approverPool.map((a) => ({ label: `${a.name} · ${a.role}`, value: a.id })),
+            ...allApprovers.map((a) => ({
+              label: `${a.displayName} · ${a.title}`,
+              value: a.id,
+            })),
           ]}
         />
         <Button icon={<ReloadOutlined />} onClick={() => void load()}>
           새로고침
         </Button>
-        <span style={{ marginLeft: "auto" }}>
-          <ActorSelect />
-        </span>
       </div>
 
       <Spin spinning={loading}>
@@ -377,7 +402,7 @@ export default function ApprovalsPage() {
                 <div style={{ display: "flex", gap: 32, marginTop: 14, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ ...label12, marginBottom: 4 }}>요청자</div>
-                    <div style={{ fontSize: 13 }}>{personLabel(users, a.requester)}</div>
+                    <div style={{ fontSize: 13 }}>{userLabel(users, a.requester)}</div>
                   </div>
                   <div>
                     <div style={{ ...label12, marginBottom: 4 }}>승인 라인 (순차)</div>
@@ -428,43 +453,56 @@ export default function ApprovalsPage() {
                     }}
                   >
                     <span style={{ marginRight: "auto", fontSize: 11, color: token.colorTextTertiary }}>
-                      현재 사용자: {personLabel([...users, ...approverPool], actor)}
+                      현재 사용자: {userLabel(users, actor)}
                       {isCurrentApprover
                         ? " · 이 단계의 승인자입니다"
                         : isRequester
                           ? " · 요청자 (취소 가능)"
-                          : " · 이 단계의 승인자가 아닙니다 (시도 시 409)"}
+                          : !isSteward
+                            ? " · 승인 권한 없음 (열람 전용)"
+                            : " · 이 단계의 승인자가 아닙니다 (시도 시 409)"}
                     </span>
-                    <Popconfirm
-                      title="요청 취소"
-                      description="이 승인 요청을 취소하시겠습니까?"
-                      okText="취소하기"
-                      cancelText="닫기"
-                      onConfirm={() => runAction(() => cancelApproval(a.id), "요청을 취소했습니다")}
-                    >
-                      <Button size="small" loading={acting}>
-                        요청 취소
+                    {/* 취소는 요청자 본인만 (spec 007 §5) */}
+                    {isRequester && (
+                      <Popconfirm
+                        title="요청 취소"
+                        description="이 승인 요청을 취소하시겠습니까?"
+                        okText="취소하기"
+                        cancelText="닫기"
+                        onConfirm={() => runAction(() => cancelApproval(a.id), "요청을 취소했습니다")}
+                      >
+                        <Button size="small" loading={acting}>
+                          요청 취소
+                        </Button>
+                      </Popconfirm>
+                    )}
+                    {/* 승인·반려는 STEWARD 이상 — ANALYST에게는 비활성 + 툴팁 (§8) */}
+                    <Tooltip title={isSteward ? "" : DECIDE_DENIED_TIP}>
+                      <Button
+                        size="small"
+                        danger
+                        disabled={!isSteward}
+                        icon={isSteward ? undefined : <LockOutlined />}
+                        onClick={() => {
+                          setRejectTarget(a);
+                          setRejectNote("");
+                        }}
+                      >
+                        반려
                       </Button>
-                    </Popconfirm>
-                    <Button
-                      size="small"
-                      danger
-                      onClick={() => {
-                        setRejectTarget(a);
-                        setRejectNote("");
-                      }}
-                    >
-                      반려
-                    </Button>
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<CheckOutlined />}
-                      loading={acting}
-                      onClick={() => runAction(() => approveApproval(a.id), "승인했습니다")}
-                    >
-                      승인
-                    </Button>
+                    </Tooltip>
+                    <Tooltip title={isSteward ? "" : DECIDE_DENIED_TIP}>
+                      <Button
+                        size="small"
+                        type="primary"
+                        icon={isSteward ? <CheckOutlined /> : <LockOutlined />}
+                        loading={acting}
+                        disabled={!isSteward}
+                        onClick={() => runAction(() => approveApproval(a.id), "승인했습니다")}
+                      >
+                        승인
+                      </Button>
+                    </Tooltip>
                   </div>
                 )}
               </div>
@@ -494,7 +532,12 @@ export default function ApprovalsPage() {
             요건을 제출하면 지정된 상위 조직장의 순차 승인 후 쿼리 작성이 가능합니다.
           </div>
         </div>
-        <ActorSelect />
+        {/* 요청자는 로그인 사용자로 고정 — 선택 불가 (spec 007 §4) */}
+        <div style={{ textAlign: "right", flex: "none" }}>
+          <div style={label12}>요청자</div>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>{user?.displayName ?? "—"}</div>
+          <div style={{ fontSize: 11, color: token.colorTextTertiary }}>{user?.title ?? ""}</div>
+        </div>
       </div>
 
       {/* 1. 쿼리 목적 */}
@@ -539,37 +582,58 @@ export default function ApprovalsPage() {
         </label>
         <div style={{ ...label12, marginBottom: 10 }}>
           카탈로그에 등록된 테이블만 선택할 수 있습니다(자유 입력 불가). 저장 시 쿼리가 참조하는 모든
-          테이블이 이 집합 안에 있어야 합니다.
+          테이블이 이 집합 안에 있어야 합니다. <b>접근 권한이 없는 테이블은 담을 수 없습니다</b>(요청 시 400).
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {catalogTables.map((t) => {
+          {pickerTables.map((t) => {
             const selected = formTables.includes(t.name);
+            const locked = !t.accessible;
             return (
               <div
-                key={String(t.id)}
-                onClick={() => toggle(setFormTables, t.name)}
+                key={t.name}
+                onClick={() => {
+                  if (!locked) toggle(setFormTables, t.name);
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: 10,
                   padding: "10px 14px",
                   borderRadius: 8,
-                  cursor: "pointer",
+                  cursor: locked ? "not-allowed" : "pointer",
+                  opacity: locked ? 0.55 : 1,
                   border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
-                  background: selected ? token.colorPrimaryBg : "#fff",
+                  background: selected ? token.colorPrimaryBg : locked ? "#fafafa" : "#fff",
                 }}
               >
                 <Checkbox
                   checked={selected}
+                  disabled={locked}
                   onClick={(e) => e.stopPropagation()}
                   onChange={() => toggle(setFormTables, t.name)}
                 />
                 <span style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
-                  <span style={{ fontFamily: MONO_FONT, fontSize: 13, color: token.colorText }}>
+                  <span
+                    style={{
+                      fontFamily: MONO_FONT,
+                      fontSize: 13,
+                      color: token.colorText,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
                     {t.name}
+                    {locked && (
+                      <Tooltip title="접근 권한 없음 — 이 테이블은 요청서에 담을 수 없습니다">
+                        <LockOutlined style={{ color: token.colorTextQuaternary, fontSize: 12 }} />
+                      </Tooltip>
+                    )}
                   </span>
                   <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
-                    {t.description || `${t.columns.length}개 컬럼`}
+                    {locked
+                      ? "접근 권한 없음 · 열람 전용"
+                      : t.description || `${t.columns.length}개 컬럼`}
                   </span>
                 </span>
                 {selected && (
@@ -580,7 +644,7 @@ export default function ApprovalsPage() {
               </div>
             );
           })}
-          {catalogTables.length === 0 && (
+          {pickerTables.length === 0 && (
             <Empty description="카탈로그에 등록된 테이블이 없습니다" image={Empty.PRESENTED_IMAGE_SIMPLE} />
           )}
         </div>
@@ -697,7 +761,8 @@ export default function ApprovalsPage() {
           승인 라인 (순차 승인) <span style={{ color: token.colorError }}>*</span>
         </label>
         <div style={{ ...label12, marginBottom: 12 }}>
-          위에서부터 순서대로 승인이 진행됩니다 · 같은 사람을 두 단계에 넣을 수 없습니다 (최대 10단계)
+          위에서부터 순서대로 승인이 진행됩니다 · 같은 사람을 두 단계에 넣을 수 없습니다 (최대 10단계) ·
+          승인자는 <b>STEWARD 이상</b>만 지정할 수 있고 <b>본인은 지정할 수 없습니다</b>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
           {formApprovers.map((id, i) => {
@@ -747,7 +812,7 @@ export default function ApprovalsPage() {
                       fontWeight: 600,
                     }}
                   >
-                    {(person?.name ?? "?").slice(0, 1)}
+                    {(person?.displayName ?? "?").slice(0, 1)}
                   </span>
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <Select
@@ -758,7 +823,7 @@ export default function ApprovalsPage() {
                       }
                       options={approverPool.map((p) => ({
                         value: p.id,
-                        label: `${p.name} · ${p.role}`,
+                        label: `${p.displayName} · ${p.title}`,
                         disabled: formApprovers.includes(p.id) && p.id !== id,
                       }))}
                     />
@@ -899,7 +964,7 @@ export default function ApprovalsPage() {
                 <div>
                   <div style={label12}>요청자</div>
                   <div style={{ fontSize: 13, marginTop: 4 }}>
-                    {personLabel(users, detail.summary.requester)}
+                    {userLabel(users, detail.summary.requester)}
                   </div>
                 </div>
                 <div>
@@ -980,7 +1045,7 @@ export default function ApprovalsPage() {
                       </span>
                       <Tag style={{ margin: 0 }}>{ACTION_LABEL[e.action] ?? e.action}</Tag>
                       <span>{e.step != null ? `${e.step}단계 · ` : ""}</span>
-                      <span>{personLabel([...users, ...approverPool], e.actor)}</span>
+                      <span>{userLabel(users, e.actor)}</span>
                       {e.note && (
                         <span style={{ color: token.colorTextSecondary }}>— {e.note}</span>
                       )}

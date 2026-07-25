@@ -12,6 +12,8 @@ import {
 } from "@ant-design/icons";
 import { MONO_FONT } from "../theme";
 import { opMeta, servers } from "../mock/design";
+import { useAuth } from "../auth/AuthContext";
+import StewardOnly from "../components/StewardOnly";
 import {
   apiErrorMessage,
   createRule,
@@ -290,6 +292,12 @@ const fieldLabel: React.CSSProperties = {
 // ===========================================================================
 export default function RulesPage() {
   const { message } = App.useApp();
+  /**
+   * 규칙 상세·쓰기와 카탈로그 조회(정의·매핑)는 STEWARD/ADMIN 전용 (spec 007 §5·§6.2).
+   * ANALYST는 목록만 볼 수 있고 나머지가 403이라 화면이 성립하지 않으므로 안내 화면으로 대체한다.
+   */
+  const { isSteward, user } = useAuth();
+  const sessionKey = isSteward ? (user?.id ?? "") : "";
 
   // catalog + rules
   const [loading, setLoading] = useState(true);
@@ -317,6 +325,10 @@ export default function RulesPage() {
 
   // ---- load ---------------------------------------------------------------
   useEffect(() => {
+    if (!sessionKey) {
+      setLoading(false);
+      return;
+    }
     let alive = true;
     (async () => {
       try {
@@ -347,7 +359,7 @@ export default function RulesPage() {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sessionKey]);
 
   function applyDetail(d: RuleDetail) {
     const tree = d.tree ? (fromApi(d.tree) as EditorGroup) : starterGroup(d.scope);
@@ -1392,6 +1404,8 @@ export default function RulesPage() {
     flexDirection: "column",
     overflow: "hidden",
   };
+
+  if (!isSteward) return <StewardOnly what="규칙 관리" />;
 
   if (loading) {
     return (

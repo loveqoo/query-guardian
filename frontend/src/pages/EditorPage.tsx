@@ -29,7 +29,7 @@ import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
 import type { Extension } from "@codemirror/state";
 import { MONO_FONT } from "../theme";
 import { mockSql } from "../mock/design";
-import ActorSelect, { useActor } from "../components/ActorSelect";
+import { useAuth } from "../auth/AuthContext";
 import {
   apiErrorMessage,
   createQuery,
@@ -38,6 +38,7 @@ import {
   lint,
   listUsableApprovals,
   updateQuery,
+  type AccessBlocked,
   type ApprovalBlocked,
   type ApprovalSummary,
   type Id,
@@ -157,6 +158,26 @@ const APPROVAL_BLOCK_LABEL: Record<string, string> = {
   TABLES_NOT_COVERED: "승인 범위 밖 테이블",
 };
 
+/** 403 AccessBlockedDto.code → 한국어 라벨 (spec 007 §6.5). 승인 차단과 **별도 영역**에 노출한다 (§8). */
+const ACCESS_BLOCK_LABEL: Record<AccessBlocked["code"], string> = {
+  TABLES_NOT_PERMITTED: "권한 없는 테이블",
+  TABLES_UNKNOWN: "카탈로그에 없는 테이블",
+  REQUESTER_MISMATCH: "본인 요청만 사용 가능",
+};
+
+/** 코드별 안내 문구 — 오타(미등록)와 권한 부족을 구분해 보여준다 (M6). */
+function accessBlockDescription(err: AccessBlocked): string {
+  const list = err.deniedTables.join(", ");
+  switch (err.code) {
+    case "TABLES_NOT_PERMITTED":
+      return list ? `권한 없는 테이블: ${list}` : err.message;
+    case "TABLES_UNKNOWN":
+      return list ? `카탈로그에 없는 테이블: ${list}` : err.message;
+    case "REQUESTER_MISMATCH":
+      return "본인이 요청한 승인만 사용할 수 있습니다 — 승인 요청을 다시 선택하세요.";
+  }
+}
+
 type BottomTab = "rulecheck" | "result" | "messages";
 interface AiMessage {
   role: "user" | "assistant";
@@ -173,7 +194,9 @@ export default function EditorPage() {
   const [params] = useSearchParams();
   const editId = params.get("id");
 
-  const [actor] = useActor();
+  const { user } = useAuth();
+  /** 사용자별 캐시 키 — 로그인/로그아웃 시 자동완성 사전·usable 목록을 다시 받는다 (§8 M5). */
+  const sessionKey = user?.id ?? "";
 
   const [queryName, setQueryName] = useState("marketing_consent_users");
   const [sql, setSql] = useState(INITIAL_SQL);
@@ -184,6 +207,8 @@ export default function EditorPage() {
   const [usable, setUsable] = useState<ApprovalSummary[]>([]);
   const [usableLoading, setUsableLoading] = useState(true);
   const [approvalBlock, setApprovalBlock] = useState<ApprovalBlocked | null>(null);
+  /** 데이터 권한 차단(403) — 규칙 위반·승인 차단과 분리된 자체 영역 (spec 007 §8). */
+  const [accessBlock, setAccessBlock] = useState<AccessBlocked | null>(null);
   const [schema, setSchema] = useState<SchemaDict>({});
 
   const [showSuggest, setShowSuggest] = useState(false);
@@ -223,20 +248,30 @@ export default function EditorPage() {
     };
   }, [editId, message]);
 
-  // ---- catalog: schema completion ------------------------------------------
+  // ---- catalog: schema completion (허용 테이블만 · 사용자별) -------------------
   useEffect(() => {
-    getSchemaDict().then(setSchema).catch(() => void 0);
-  }, []);
+    if (!sessionKey) return;
+    let alive = true;
+    getSchemaDict()
+      .then((d) => {
+        if (alive) setSchema(d);
+      })
+      .catch(() => void 0);
+    return () => {
+      alive = false;
+    };
+  }, [sessionKey]);
 
-  // ---- 사용 가능한 승인 요청 (현재 actor 기준) --------------------------------
+  // ---- 사용 가능한 승인 요청 (세션 사용자 기준) --------------------------------
   useEffect(() => {
+    if (!sessionKey) return;
     let alive = true;
     setUsableLoading(true);
     listUsableApprovals()
       .then((list) => {
         if (!alive) return;
         setUsable(list);
-        // 현재 선택이 이 actor의 승인 목록에 없으면(사용자 전환 등) 첫 항목으로 재설정
+        // 현재 선택이 이 사용자의 승인 목록에 없으면(사용자 전환 등) 첫 항목으로 재설정
         setRequestId((prev) =>
           prev != null && list.some((r) => String(r.id) === String(prev))
             ? prev
@@ -252,7 +287,7 @@ export default function EditorPage() {
     return () => {
       alive = false;
     };
-  }, [actor]);
+  }, [sessionKey]);
 
   const selectedRequest = useMemo(
     () => usable.find((r) => String(r.id) === String(requestId)) ?? null,
@@ -273,7 +308,16 @@ export default function EditorPage() {
       try {
         // purposeCode는 보내지 않는다 — 서버가 requestId에서 주입한다 (C1).
         const r = await lint({ dialect: "MYSQL", sql: body, requestId });
-        if (seq === lintSeq.current) setReport(r);
+        if (seq !== lintSeq.current) return;
+        if (r.ok) {
+          // 권한 통과 → 룰 결과 표시. 이전 권한 차단은 해소된 것으로 본다.
+          setReport(r.report);
+          setAccessBlock(null);
+        } else {
+          // 403 — 데이터 권한 차단이 룰보다 앞선다 (§6.0). 위반 리포트는 주지 않는다.
+          setAccessBlock(r.error);
+          setReport(null);
+        }
       } catch {
         if (seq === lintSeq.current && immediate) message.error("규칙 검사에 실패했습니다");
       } finally {
@@ -354,6 +398,7 @@ export default function EditorPage() {
     }
     setSaving(true);
     setApprovalBlock(null);
+    setAccessBlock(null);
     try {
       const input = { name, dialect: "MYSQL" as const, sql, requestId };
       const result = editId ? await updateQuery(editId, input) : await createQuery(input);
@@ -365,6 +410,11 @@ export default function EditorPage() {
         setReport(result.report);
         setBottomTab("rulecheck");
         message.error("규칙 위반으로 저장이 차단되었습니다");
+      } else if (result.kind === "ACCESS") {
+        // 403 — 데이터 권한 차단: 규칙 위반·승인 차단과 **또 다른 영역**에 노출 (spec 007 §8)
+        setAccessBlock(result.error);
+        setReport(null);
+        message.error("데이터 접근 권한이 없어 저장이 차단되었습니다");
       } else {
         // 403 — 승인 게이트 차단: 규칙 위반과 **별도 영역**에 노출 (§8)
         setApprovalBlock(result.error);
@@ -455,6 +505,7 @@ export default function EditorPage() {
                 onChange={(v) => {
                   setRequestId(v);
                   setApprovalBlock(null);
+                  setAccessBlock(null);
                 }}
                 loading={usableLoading}
                 disabled={noUsable}
@@ -485,8 +536,35 @@ export default function EditorPage() {
           <Button icon={<RobotOutlined />} onClick={() => setAiOpen((v) => !v)}>
             AI 에이전트
           </Button>
-          <ActorSelect showLabel={false} width={190} />
         </div>
+
+        {/* 데이터 권한 차단(403) — 규칙 위반·승인 차단과 별도 영역 (spec 007 §8) */}
+        {accessBlock && (
+          <Alert
+            type="error"
+            showIcon
+            closable
+            onClose={() => setAccessBlock(null)}
+            message={`데이터 권한 차단 · ${ACCESS_BLOCK_LABEL[accessBlock.code]}`}
+            description={
+              <div style={{ fontSize: 13 }}>
+                <div style={{ fontFamily: accessBlock.deniedTables.length ? MONO_FONT : undefined }}>
+                  {accessBlockDescription(accessBlock)}
+                </div>
+                {accessBlock.code === "TABLES_UNKNOWN" ? (
+                  <div style={{ marginTop: 6, color: C.textSecondary }}>
+                    이름 오타이거나 카탈로그에 등록되지 않은 테이블입니다 — 등록 후 다시 시도하세요.
+                  </div>
+                ) : accessBlock.code === "TABLES_NOT_PERMITTED" ? (
+                  <div style={{ marginTop: 6, color: C.textSecondary }}>
+                    접근 권한 관리 화면에서 권한을 요청하세요. 권한이 없는 동안은 규칙 검사 결과도
+                    제공되지 않습니다.
+                  </div>
+                ) : null}
+              </div>
+            }
+          />
+        )}
 
         {/* 승인 요청 컨텍스트 — 읽기 전용 (§8) */}
         {noUsable ? (
@@ -693,7 +771,9 @@ export default function EditorPage() {
             ))}
           </div>
           <div style={{ padding: 16, maxHeight: 210, overflowY: "auto" }}>
-            {bottomTab === "rulecheck" && <RuleCheckPanel report={report} linting={linting} />}
+            {bottomTab === "rulecheck" && (
+              <RuleCheckPanel report={report} linting={linting} accessBlocked={!!accessBlock} />
+            )}
             {bottomTab === "result" && <ResultPanel />}
             {bottomTab === "messages" && <MessagesPanel />}
           </div>
@@ -836,7 +916,24 @@ function tabStyle(active: boolean): React.CSSProperties {
 }
 
 /** 규칙 검사 결과 — 실 lint 리포트 우선, 없으면 예시 카드. */
-function RuleCheckPanel({ report, linting }: { report: LintReport | null; linting: boolean }) {
+function RuleCheckPanel({
+  report,
+  linting,
+  accessBlocked,
+}: {
+  report: LintReport | null;
+  linting: boolean;
+  accessBlocked: boolean;
+}) {
+  // 권한 게이트가 룰보다 앞이므로(§6.0) 권한 차단 시 위반 목록 자체가 존재하지 않는다.
+  if (accessBlocked && !report) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: C.textSecondary }}>
+        <CloseCircleOutlined style={{ color: C.red5 }} />
+        데이터 접근 권한이 없어 규칙 검사 결과를 제공하지 않습니다 — 위 권한 차단 안내를 확인하세요.
+      </div>
+    );
+  }
   if (report) {
     if (report.violations.length === 0) {
       // 통과 상태 (real)

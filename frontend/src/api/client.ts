@@ -72,7 +72,7 @@ export const approvalSummarySchema = z.object({
   id: idSchema,
   purposeTitle: z.string(),
   purposeCode: z.string(),
-  /** 요청자 = 디렉터리 actor id (스텁 identity, §5). */
+  /** 요청자 = `app_user.id` (세션 principal, spec 007 §4). */
   requester: z.string(),
   status: approvalStatusSchema,
   currentStep: z.number(),
@@ -126,24 +126,60 @@ export const approvalBlockedSchema = z.object({
 });
 export type ApprovalBlocked = z.infer<typeof approvalBlockedSchema>;
 
-// ---------- 디렉터리 (spec 005 §7 — 관리형 목록) ----------
-
-/**
- * `id`가 optional인 이유: 백엔드 `DirectoryPersonDto`는 현재 `{name, role}`만 직렬화한다
- * (`Directory.Person`은 id를 갖지만 DTO 매핑에서 탈락). actor 헤더·approverId는 **id**를 요구하므로
- * id가 없으면 이름 → id 매핑, 그래도 없으면 목록 순서(u1.., ap1..)로 복원한다.
- */
-export const directoryPersonSchema = z.object({
-  id: z.string().optional(),
-  name: z.string(),
-  role: z.string(),
+/** 403 데이터 권한 차단 — 역할 부족(ErrorResponse{message})과 구분되는 코드 포함 403 (spec 007 §6.5). */
+export const accessBlockedSchema = z.object({
+  code: z.enum(["TABLES_NOT_PERMITTED", "TABLES_UNKNOWN", "REQUESTER_MISMATCH"]),
+  message: z.string(),
+  deniedTables: z.array(z.string()).default([]),
 });
+export type AccessBlocked = z.infer<typeof accessBlockedSchema>;
 
-export interface DirectoryPerson {
-  id: string;
-  name: string;
-  role: string;
+// ---------- 인증·사용자·권한 (spec 007 §4·§5) ----------
+
+export const roleSchema = z.enum(["ANALYST", "STEWARD", "ADMIN"]);
+export type Role = z.infer<typeof roleSchema>;
+
+/** `GET /api/auth/me` · 로그인 응답. password_hash는 어떤 응답에도 없다 (spec 007 H9). */
+export const meSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  /** 직책("마케팅본부장") — `role`(열거형)과 다른 값 (spec 007 H4-a). */
+  title: z.string(),
+  role: roleSchema,
+});
+export type Me = z.infer<typeof meSchema>;
+
+/** `GET /api/users` — 전 인증 사용자 열람 가능(승인 라인 편성, H3 카브아웃). */
+export const appUserSchema = meSchema.extend({ enabled: z.boolean() });
+export type AppUser = z.infer<typeof appUserSchema>;
+
+export const tablePermSchema = z.object({ tableName: z.string(), allowed: z.boolean() });
+export type TablePerm = z.infer<typeof tablePermSchema>;
+
+/** 행 부재 = 허용(default-allow, spec 007 §3.1) — 백엔드가 전 테이블을 채워 내려준다. */
+export const permissionsSchema = z.object({
+  userId: z.string(),
+  serverAllowed: z.boolean(),
+  tables: z.array(tablePermSchema),
+});
+export type Permissions = z.infer<typeof permissionsSchema>;
+
+export interface PermissionsInput {
+  serverAllowed: boolean;
+  tables: TablePerm[];
 }
+
+/** append-only 감사 이벤트 (spec 007 M2). */
+export const permissionEventSchema = z.object({
+  targetUserId: z.string(),
+  actor: z.string(),
+  scope: z.string(),
+  target: z.string(),
+  beforeAllowed: z.boolean().nullish(),
+  afterAllowed: z.boolean(),
+  at: z.string(),
+});
+export type PermissionEvent = z.infer<typeof permissionEventSchema>;
 
 export const businessReqSchema = z.object({
   code: z.string(),
@@ -188,6 +224,19 @@ export const catalogTableSchema = z.object({
   columns: z.array(catalogColumnSchema),
 });
 export type CatalogTable = z.infer<typeof catalogTableSchema>;
+
+/**
+ * `GET /api/my/tables` — 탐색기·요청 피커용 (spec 007 §6.3).
+ * 전 테이블 + `accessible`, 비허용 테이블은 **컬럼이 생략**된다(이름은 잠금 UI를 위해 노출).
+ */
+export const myTableSchema = z.object({
+  id: idSchema.nullish(),
+  name: z.string(),
+  description: z.string().nullish(),
+  accessible: z.boolean(),
+  columns: z.array(catalogColumnSchema),
+});
+export type MyTable = z.infer<typeof myTableSchema>;
 
 /** 제약 정의 (spec 002 §5.3 DefDto) */
 export const constraintDefSchema = z.object({
@@ -438,63 +487,42 @@ export function apiErrorMessage(err: unknown): string | null {
 
 const BASE = "/api";
 
-// ---------- 행위자(actor) 스텁 — 접근 통제가 아님 (spec 005 §5) ----------
+// ---------- 세션 · 전역 401 훅 (spec 007 §8 M5) ----------
 
 /**
- * actor는 **인증되지 않은 클라이언트 제공 문자열**이다. 순차 승인·자가 검토 금지·요청자 일치 검사는
- * 워크플로·감사 장치이며 접근 통제가 아니다(위조 가능). 인증 도입 시 이 모듈이 유일한 교체 지점.
+ * 세션은 **쿠키(HttpOnly)** 다. vite 프록시로 same-origin이므로 `credentials`를 지정하지 않는다
+ * (기본값 `same-origin`이 쿠키를 실어 보낸다). 구 actor 헤더는 백엔드가 400으로 거부하므로 어디서도 보내지 않는다.
  */
-export const ACTOR_HEADER = "X-QG-Actor";
-const ACTOR_STORAGE_KEY = "qg.actor";
-const DEFAULT_ACTOR = "u1";
+const unauthorizedListeners = new Set<() => void>();
 
-function readStoredActor(): string {
-  try {
-    return window.localStorage.getItem(ACTOR_STORAGE_KEY) || DEFAULT_ACTOR;
-  } catch {
-    return DEFAULT_ACTOR;
-  }
-}
-
-let currentActor = readStoredActor();
-const actorListeners = new Set<() => void>();
-
-export function getActor(): string {
-  return currentActor;
-}
-
-export function setActor(actor: string): void {
-  if (!actor || actor === currentActor) return;
-  currentActor = actor;
-  try {
-    window.localStorage.setItem(ACTOR_STORAGE_KEY, actor);
-  } catch {
-    /* storage 비활성 환경은 메모리 값만 사용 */
-  }
-  actorListeners.forEach((fn) => fn());
-}
-
-/** useSyncExternalStore 용 구독자. 반환값은 해지 함수. */
-export function subscribeActor(fn: () => void): () => void {
-  actorListeners.add(fn);
+/** 전역 401 훅. 어떤 요청이든 401이면 호출된다 → 앱은 로그인 화면으로 보낸다. 반환값은 해지 함수. */
+export function subscribeUnauthorized(fn: () => void): () => void {
+  unauthorizedListeners.add(fn);
   return () => {
-    actorListeners.delete(fn);
+    unauthorizedListeners.delete(fn);
   };
 }
 
-interface RequestOptions {
-  /** true면 `X-QG-Actor` 헤더를 현재 actor로 실어 보낸다. */
-  actor?: boolean;
+/**
+ * 401을 만나면 훅에 알리고 **영원히 settle되지 않는** 프라미스를 돌려준다.
+ * 화면마다 "API 오류" 토스트를 띄우는 대신 진행 중 흐름을 그대로 버리는 방식(진행 중 요청 취소, §8).
+ * 앱은 이미 로그인 화면으로 리다이렉트되어 해당 컴포넌트가 언마운트된다.
+ */
+function handleUnauthorized<T>(): Promise<T> {
+  unauthorizedListeners.forEach((fn) => fn());
+  return new Promise<T>(() => {
+    /* 의도적으로 settle하지 않는다 */
+  });
 }
 
-async function rawRequest(
-  path: string,
-  init?: RequestInit,
-  opts?: RequestOptions,
-): Promise<Response> {
+interface RequestOptions {
+  /** true면 401을 훅으로 넘기지 않고 `ApiError`로 던진다 (로그인 실패·부트스트랩 me()). */
+  throw401?: boolean;
+}
+
+async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
   const headers: Record<string, string> = {};
   if (init?.body != null) headers["Content-Type"] = "application/json";
-  if (opts?.actor) headers[ACTOR_HEADER] = getActor();
   return fetch(`${BASE}${path}`, { ...init, headers });
 }
 
@@ -515,43 +543,134 @@ async function request<T>(
   init?: RequestInit,
   opts?: RequestOptions,
 ): Promise<T> {
-  const res = await rawRequest(path, init, opts);
+  const res = await rawRequest(path, init);
   const body = await readBody(res);
+  if (res.status === 401 && !opts?.throw401) return handleUnauthorized<T>();
   if (!res.ok) throw new ApiError(res.status, body);
   return schema.parse(body);
 }
 
 async function requestVoid(path: string, init?: RequestInit, opts?: RequestOptions): Promise<void> {
-  const res = await rawRequest(path, init, opts);
-  if (!res.ok) throw new ApiError(res.status, await readBody(res));
+  const res = await rawRequest(path, init);
+  const body = await readBody(res);
+  if (res.status === 401 && !opts?.throw401) return handleUnauthorized<void>();
+  if (!res.ok) throw new ApiError(res.status, body);
 }
 
-// ---------- lint / 쿼리 ----------
+// ---------- 인증 (spec 007 §4) ----------
 
-/** requestId를 보내면 서버가 그 요청의 purposeCode로 판정한다 (C1 — 저장 게이트와 동일 조건). */
-export function lint(input: LintInput): Promise<LintReport> {
-  return request(lintReportSchema, "/lint", {
-    method: "POST",
+/** 200 Me | 401(사유 구분 없는 동일 메시지). 401은 화면이 직접 처리하므로 던진다. */
+export function login(userId: string, password: string): Promise<Me> {
+  return request(
+    meSchema,
+    "/auth/login",
+    { method: "POST", body: JSON.stringify({ userId, password }) },
+    { throw401: true },
+  );
+}
+
+/** 이미 만료된 세션에서도 호출될 수 있으므로 401을 훅으로 넘기지 않고 던진다(호출자가 무시). */
+export function logout(): Promise<void> {
+  return requestVoid("/auth/logout", { method: "POST" }, { throw401: true });
+}
+
+/** **401 = 미로그인(정상 부트스트랩 흐름)** — 에러 토스트 금지. 그래서 훅을 타지 않고 던진다. */
+export function me(): Promise<Me> {
+  return request(meSchema, "/auth/me", undefined, { throw401: true });
+}
+
+// ---------- 사용자 · 권한 (spec 007 §4 H3) ----------
+
+/** 전 인증 사용자 (승인자 피커·표시 이름 해석). `/api/directory/*`를 대체한다. */
+export function listUsers(): Promise<AppUser[]> {
+  return request(z.array(appUserSchema), "/users");
+}
+
+/** 본인 또는 ADMIN (그 외 403). */
+export function getPermissions(userId: string): Promise<Permissions> {
+  return request(permissionsSchema, `/users/${userId}/permissions`);
+}
+
+/** ADMIN 전용. 자기 자신의 권한 편집은 **403 CANNOT_EDIT_OWN_PERMISSION**. */
+export function savePermissions(userId: string, input: PermissionsInput): Promise<Permissions> {
+  return request(permissionsSchema, `/users/${userId}/permissions`, {
+    method: "PUT",
     body: JSON.stringify(input),
   });
 }
 
+/** ADMIN 전용 — append-only 감사 이력. */
+export function listPermissionHistory(userId: string): Promise<PermissionEvent[]> {
+  return request(z.array(permissionEventSchema), `/users/${userId}/permissions/history`);
+}
+
+/** 탐색기·요청 피커 — 전 테이블 + accessible (비허용은 컬럼 생략). */
+export function myTables(): Promise<MyTable[]> {
+  return request(z.array(myTableSchema), "/my/tables");
+}
+
+// ---------- lint / 쿼리 ----------
+
 /**
- * 저장 결과 (spec 005 §7 H5 — 차단 계약 2종):
+ * lint 결과 (spec 007 §6.0 — 인증 → **데이터 권한(403)** → 룰):
+ * - 성공: 200 LintReportDto
+ * - `ACCESS`: 403 AccessBlockedDto — 권한 없는/미등록 테이블, 남의 requestId
+ */
+export type LintResult =
+  | { ok: true; report: LintReport }
+  | { ok: false; error: AccessBlocked };
+
+/** requestId를 보내면 서버가 그 요청의 purposeCode로 판정한다 (C1 — 저장 게이트와 동일 조건). */
+export async function lint(input: LintInput): Promise<LintResult> {
+  const res = await rawRequest("/lint", { method: "POST", body: JSON.stringify(input) });
+  const body = await readBody(res);
+  if (res.status === 401) return handleUnauthorized<LintResult>();
+  if (res.status === 403) {
+    const parsed = accessBlockedSchema.safeParse(body);
+    if (parsed.success) return { ok: false, error: parsed.data };
+    throw new ApiError(res.status, body); // 역할 권한 부족(ErrorResponse) 등
+  }
+  if (!res.ok) throw new ApiError(res.status, body);
+  return { ok: true, report: lintReportSchema.parse(body) };
+}
+
+/**
+ * 저장 결과 (spec 005 §7 H5 + spec 007 §6.5 — 차단 계약 3종):
  * - 성공(201/200)
  * - `RULES`: 422 LintReportDto — 룰 게이트 차단
+ * - `ACCESS`: 403 AccessBlockedDto — 데이터 권한 차단(권한 밖·미등록 테이블)
  * - `APPROVAL`: 403 ApprovalBlockedDto — 승인 게이트 차단
+ *
+ * ACCESS와 APPROVAL은 **둘 다 403**이라 `code`로 구분한다. `REQUESTER_MISMATCH`는 양쪽에 다 있으므로
+ * AccessBlockedDto에만 있는 `deniedTables` 필드 유무로 최종 판별한다.
  */
 export type SaveQueryResult =
   | { ok: true; query: SavedQuery }
   | { ok: false; kind: "RULES"; report: LintReport }
+  | { ok: false; kind: "ACCESS"; error: AccessBlocked }
   | { ok: false; kind: "APPROVAL"; error: ApprovalBlocked };
 
+function isAccessBlockedBody(body: unknown): boolean {
+  if (body == null || typeof body !== "object") return false;
+  const code = (body as { code?: unknown }).code;
+  if (code === "TABLES_NOT_PERMITTED" || code === "TABLES_UNKNOWN") return true;
+  // REQUESTER_MISMATCH는 두 계약에 모두 존재 → 필드 형태로 구분
+  return code === "REQUESTER_MISMATCH" && "deniedTables" in (body as object);
+}
+
 async function saveQuery(path: string, method: "POST" | "PUT", input: QueryInput): Promise<SaveQueryResult> {
-  const res = await rawRequest(path, { method, body: JSON.stringify(input) }, { actor: true });
+  const res = await rawRequest(path, { method, body: JSON.stringify(input) });
   const body = await readBody(res);
+  if (res.status === 401) return handleUnauthorized<SaveQueryResult>();
   if (res.status === 422) return { ok: false, kind: "RULES", report: lintReportSchema.parse(body) };
-  if (res.status === 403) return { ok: false, kind: "APPROVAL", error: approvalBlockedSchema.parse(body) };
+  if (res.status === 403) {
+    if (isAccessBlockedBody(body)) {
+      return { ok: false, kind: "ACCESS", error: accessBlockedSchema.parse(body) };
+    }
+    const approval = approvalBlockedSchema.safeParse(body);
+    if (approval.success) return { ok: false, kind: "APPROVAL", error: approval.data };
+    throw new ApiError(res.status, body); // 역할 권한 부족(ErrorResponse{message})
+  }
   if (!res.ok) throw new ApiError(res.status, body);
   return { ok: true, query: savedQuerySchema.parse(body) };
 }
@@ -564,14 +683,12 @@ export function updateQuery(id: Id, input: QueryInput): Promise<SaveQueryResult>
   return saveQuery(`/queries/${id}`, "PUT", input);
 }
 
-/** 검토 결정 — 200 | 409 {message}(자가 검토·현재 BLOCK). */
+/** 검토 결정 — STEWARD/ADMIN 전용(403). 200 | 409 {message}(자가 검토·현재 BLOCK). */
 export function reviewQuery(id: Id, input: ReviewInput): Promise<SavedQuery> {
-  return request(
-    savedQuerySchema,
-    `/queries/${id}/review`,
-    { method: "POST", body: JSON.stringify(input) },
-    { actor: true },
-  );
+  return request(savedQuerySchema, `/queries/${id}/review`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export function listQueries(): Promise<QueryListItem[]> {
@@ -600,26 +717,25 @@ export function getApproval(id: Id): Promise<ApprovalDetail> {
   return request(approvalDetailSchema, `/approvals/${id}`);
 }
 
-/** 201 | 400 {message}(승인자 0·비연속 step·중복 인물·미등록 purpose/요건·카탈로그 밖 테이블) */
+/**
+ * 201 | 400 {message}(승인자 0·비연속 step·중복 인물·미등록 purpose/요건·카탈로그 밖 테이블 ·
+ * ANALYST를 승인자로 지정 · **본인을 승인자로 지정 `REQUESTER_IS_APPROVER`**) — 요청자는 세션 principal.
+ */
 export function createApproval(input: ApprovalInput): Promise<ApprovalDetail> {
-  return request(
-    approvalDetailSchema,
-    "/approvals",
-    { method: "POST", body: JSON.stringify(input) },
-    { actor: true },
-  );
+  return request(approvalDetailSchema, "/approvals", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 function decide(id: Id, action: "approve" | "reject" | "cancel", note?: string): Promise<ApprovalDetail> {
-  return request(
-    approvalDetailSchema,
-    `/approvals/${id}/${action}`,
-    { method: "POST", body: JSON.stringify({ note: note ?? null }) },
-    { actor: true },
-  );
+  return request(approvalDetailSchema, `/approvals/${id}/${action}`, {
+    method: "POST",
+    body: JSON.stringify({ note: note ?? null }),
+  });
 }
 
-/** 200 | 409 {message}(순서 아닌 actor·재결정·이미 결정된 요청·동시성) */
+/** STEWARD/ADMIN 전용(403). 200 | 409 {message}(순서 아닌 승인자·재결정·이미 결정된 요청·동시성) */
 export function approveApproval(id: Id, note?: string): Promise<ApprovalDetail> {
   return decide(id, "approve", note);
 }
@@ -633,51 +749,17 @@ export function cancelApproval(id: Id): Promise<ApprovalDetail> {
   return decide(id, "cancel");
 }
 
-/** 에디터 요청 선택용 — 현재 actor가 요청자인 APPROVED 요청. */
+/** 에디터 요청 선택용 — **세션 사용자**가 요청자인 APPROVED 요청. */
 export function listUsableApprovals(): Promise<ApprovalSummary[]> {
-  return request(z.array(approvalSummarySchema), "/approvals/usable", undefined, { actor: true });
+  return request(z.array(approvalSummarySchema), "/approvals/usable");
 }
 
-// ---------- 디렉터리 (spec 005 §7) ----------
+// ---------- 비즈니스 요건 (spec 007 H4-b) ----------
 
 /**
- * 백엔드 DTO가 id를 빠뜨린 경우의 복원 표 (`Directory` 상수와 1:1).
- * id가 응답에 들어오면 그 값이 우선한다.
+ * 요건 5종은 승인자 풀과 무관한 **상수 유지**이므로 `/api/directory/business-reqs`는 계속 쓴다.
+ * 반면 `/api/directory/users|approvers`는 폐기 → `listUsers()`로 대체하고, 이름→id 복원표도 제거했다 (H4-c).
  */
-const USER_ID_BY_NAME: Record<string, string> = {
-  김도현: "u1",
-  이서연: "u2",
-  박민준: "u3",
-  정하윤: "u4",
-};
-const APPROVER_ID_BY_NAME: Record<string, string> = {
-  최지훈: "ap1",
-  한도윤: "ap2",
-  서준호: "ap3",
-  김영은: "ap4",
-};
-
-async function fetchDirectory(
-  path: string,
-  byName: Record<string, string>,
-  prefix: string,
-): Promise<DirectoryPerson[]> {
-  const people = await request(z.array(directoryPersonSchema), path);
-  return people.map((p, i) => ({
-    id: p.id ?? byName[p.name] ?? `${prefix}${i + 1}`,
-    name: p.name,
-    role: p.role,
-  }));
-}
-
-export function listDirectoryUsers(): Promise<DirectoryPerson[]> {
-  return fetchDirectory("/directory/users", USER_ID_BY_NAME, "u");
-}
-
-export function listDirectoryApprovers(): Promise<DirectoryPerson[]> {
-  return fetchDirectory("/directory/approvers", APPROVER_ID_BY_NAME, "ap");
-}
-
 export function listBusinessReqs(): Promise<BusinessReq[]> {
   return request(z.array(businessReqSchema), "/directory/business-reqs");
 }

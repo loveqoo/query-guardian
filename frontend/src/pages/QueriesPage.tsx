@@ -10,6 +10,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Alert,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -30,7 +31,8 @@ import {
   VENDOR_COLOR,
   sqlHighlight,
 } from "../theme";
-import ActorSelect, { personLabel, useActor, useDirectory } from "../components/ActorSelect";
+import { useAuth } from "../auth/AuthContext";
+import { userLabel, useUsers } from "../auth/useUsers";
 import {
   apiErrorMessage,
   deleteQuery,
@@ -64,6 +66,9 @@ const REVIEW_COLOR: Record<ReviewStatus, string> = {
   REJECTED: STATUS_COLOR.rejected,
 };
 type RuleState = "passed" | "failed" | "none";
+
+/** ANALYST는 쿼리 검토 권한이 없다 (spec 007 §5 — 시도 시 403). */
+const REVIEW_DENIED_TIP = "쿼리 검토는 STEWARD 이상만 가능합니다";
 
 interface Row {
   key: string;
@@ -160,8 +165,9 @@ interface Detail {
 export default function QueriesPage() {
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const [actor] = useActor();
-  const { users, approvers } = useDirectory();
+  const { user, isSteward } = useAuth();
+  const { users } = useUsers();
+  const sessionKey = user?.id ?? "";
 
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
@@ -200,10 +206,12 @@ export default function QueriesPage() {
     }
   }
 
+  // 사용자가 바뀌면 목록을 다시 받는다(읽기 스코프가 역할·권한에 따라 달라짐, spec 007 §6.2).
   useEffect(() => {
+    if (!sessionKey) return;
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sessionKey]);
 
   // reset to page 1 when a filter changes
   useEffect(() => {
@@ -450,7 +458,6 @@ export default function QueriesPage() {
           />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <ActorSelect />
           <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate("/editor")}>
             새 쿼리 작성
           </Button>
@@ -498,24 +505,26 @@ export default function QueriesPage() {
           <Button key="close" onClick={() => setDetail(null)}>
             닫기
           </Button>,
-          <Button
-            key="reject"
-            danger
-            loading={reviewing}
-            disabled={!detailRow || detailRow.isSample}
-            onClick={() => void handleReview("REJECTED")}
-          >
-            검토 반려
-          </Button>,
-          <Button
-            key="approve"
-            icon={<CheckCircleOutlined />}
-            loading={reviewing}
-            disabled={!detailRow || detailRow.isSample}
-            onClick={() => void handleReview("APPROVED")}
-          >
-            검토 승인
-          </Button>,
+          <Tooltip key="reject" title={isSteward ? "" : REVIEW_DENIED_TIP}>
+            <Button
+              danger
+              loading={reviewing}
+              disabled={!isSteward || !detailRow || detailRow.isSample}
+              onClick={() => void handleReview("REJECTED")}
+            >
+              검토 반려
+            </Button>
+          </Tooltip>,
+          <Tooltip key="approve" title={isSteward ? "" : REVIEW_DENIED_TIP}>
+            <Button
+              icon={<CheckCircleOutlined />}
+              loading={reviewing}
+              disabled={!isSteward || !detailRow || detailRow.isSample}
+              onClick={() => void handleReview("APPROVED")}
+            >
+              검토 승인
+            </Button>
+          </Tooltip>,
           <Button
             key="open"
             type="primary"
@@ -592,9 +601,7 @@ export default function QueriesPage() {
               <div>
                 <div style={{ fontSize: 12, color: TEXT_TERTIARY, marginBottom: 6 }}>검토자</div>
                 <div style={{ fontSize: 14 }}>
-                  {detail.reviewer
-                    ? personLabel([...users, ...approvers], detail.reviewer)
-                    : "—"}
+                  {detail.reviewer ? userLabel(users, detail.reviewer) : "—"}
                   {detail.reviewNote ? (
                     <span style={{ fontSize: 12, color: TEXT_SECONDARY }}> · {detail.reviewNote}</span>
                   ) : null}
@@ -603,10 +610,14 @@ export default function QueriesPage() {
             </div>
 
             <Alert
-              type="warning"
+              type={isSteward ? "warning" : "info"}
               showIcon
               style={{ marginBottom: 16 }}
-              message={`검토는 현재 사용자(${personLabel([...users, ...approvers], actor)}) 명의로 기록됩니다 — 데모: 신원 위조 가능, 인증 후속. 본인이 요청한 쿼리는 자가 검토 불가(409)이며, 현재 규칙 기준 BLOCK이면 승인할 수 없습니다.`}
+              message={
+                isSteward
+                  ? `검토는 로그인 사용자(${user?.displayName ?? "—"}) 명의로 기록됩니다. 본인이 요청한 쿼리는 자가 검토 불가(409)이며, 현재 규칙 기준 BLOCK이면 승인할 수 없습니다.`
+                  : `${REVIEW_DENIED_TIP} — 현재 역할로는 열람만 가능합니다.`
+              }
             />
 
             <div style={{ fontSize: 12, color: TEXT_TERTIARY, marginBottom: 8 }}>쿼리 (SQL)</div>

@@ -1,35 +1,41 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { App, Button, Input, Tag } from "antd";
+import { Alert, App, Button, Empty, Input, Spin, Tag, Tooltip } from "antd";
 import {
   AppstoreOutlined,
   CodeOutlined,
   DownOutlined,
-  EditOutlined,
   LockOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import {
-  buildDefaultPerms,
-  colConstraints,
-  columnsFor,
+  columnsByTable,
   databases,
-  defById,
   genericIndexes,
   genericTableMeta,
   indexesByTable,
   tableComments,
   tableMetaByName,
-  tablesByDb,
 } from "../mock/design";
 import { MONO_FONT } from "../theme";
+import { useAuth } from "../auth/AuthContext";
+import {
+  listMappings,
+  myTables,
+  type CatalogColumn,
+  type ConstraintMapping,
+  type MyTable,
+} from "../api/client";
+import { CLASS_LABEL } from "./catalog/meta";
 
 /**
- * Database Explorer (/databases) — 3-pane catalog browser.
- * Faithful conversion of dc.html lines 79–237 + x-dc renderVals (1259–1329).
- * All data is the design SAMPLE from src/mock/design.ts. Locks/perms are a
- * UI-only sample (NOT real access control).
+ * 데이터베이스 탐색기 (/databases) — 3분할 카탈로그 브라우저.
+ * 화면 골격은 디자인 원본(dc.html 79–237)을 유지하고, **테이블·컬럼·잠금은 실 API**로 교체했다:
+ * `GET /api/my/tables` = 전 테이블 + `accessible`(비허용은 컬럼 생략, spec 007 §6.3).
+ *
+ * 연결 목록은 단일 서버(mysql-prod) 전제라 나머지 벤더는 비활성이다(spec 007 §3.1 C3 — 멀티 벤더는 ④).
+ * 인덱스·코멘트는 카탈로그 API가 제공하지 않으므로 디자인 표본이 있는 테이블에서만 "예시"로 표시한다.
  */
 
 // ── design tokens (CSS vars → concrete values) ─────────────────────────────
@@ -54,18 +60,9 @@ const T = {
   red6: "#f5222d",
 } as const;
 
-const CURRENT_USER_ID = "u1"; // 김도현 — perms sample uses u1
-const PERMS = buildDefaultPerms();
-
-// column-key Tag colors (dc.html 1292)
-const KEY_COLOR: Record<string, string> = {
-  PK: "gold",
-  FK: "geekblue",
-  UK: "cyan",
-  PARTITION: "purple",
-  IDX: "blue",
-  CHECK: "green",
-};
+/** 백엔드가 붙어 있는 유일한 연결 (spec 007 §3.1 — 권한 키는 테이블명 단독, 단일 서버 전제). */
+const ACTIVE_DB_KEY = "mysql-prod";
+const OTHER_VENDOR_TIP = "후속 지원 예정 — 현재 MySQL(prod-main)만 연결됩니다";
 
 // index-type text colors (dc.html 1323)
 const IDX_TEXT: Record<string, string> = {
@@ -146,9 +143,7 @@ function Section({
           <DownOutlined />
         </span>
         <span style={{ fontSize: 13, fontWeight: 600 }}>{title}</span>
-        {right != null && (
-          <span style={{ marginLeft: "auto" }}>{right}</span>
-        )}
+        {right != null && <span style={{ marginLeft: "auto" }}>{right}</span>}
       </Row>
       {open && <div style={{ padding: "0 16px 16px 36px" }}>{children}</div>}
     </div>
@@ -165,16 +160,23 @@ const cardStyle: CSSProperties = {
   minHeight: 0,
 };
 
+/** 디자인 표본에만 있는 컬럼 코멘트 — 실 카탈로그에는 없다. */
+function sampleComment(table: string, column: string): string | null {
+  return columnsByTable[table]?.find((c) => c.name === column)?.comment || null;
+}
+
 export default function DatabasesPage() {
   const navigate = useNavigate();
   const { message } = App.useApp();
-  const up = PERMS[CURRENT_USER_ID];
+  const { user, isSteward } = useAuth();
+  const sessionKey = user?.id ?? "";
 
-  const [dbKey, setDbKey] = useState<string>(databases[0].key);
-  const firstTable = (tablesByDb[databases[0].key] || [])[0]?.name ?? "";
-  const [tableName, setTableName] = useState<string>(firstTable);
+  const [tables, setTables] = useState<MyTable[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [tableName, setTableName] = useState<string>("");
   const [selColName, setSelColName] = useState<string>("");
   const [search, setSearch] = useState("");
+  const [mappings, setMappings] = useState<ConstraintMapping[]>([]);
   const [open, setOpen] = useState({
     index: true,
     comment: true,
@@ -182,48 +184,73 @@ export default function DatabasesPage() {
     constraint: true,
   });
 
-  const curDb = databases.find((d) => d.key === dbKey);
-  const dbNameForCols = curDb ? curDb.name : "";
-  const tables = tablesByDb[dbKey] || [];
+  // ---- 실 테이블 목록 (사용자 권한 반영) ------------------------------------
+  useEffect(() => {
+    if (!sessionKey) return;
+    let alive = true;
+    setLoading(true);
+    myTables()
+      .then((list) => {
+        if (!alive) return;
+        setTables(list);
+        setTableName((prev) =>
+          prev && list.some((t) => t.name === prev)
+            ? prev
+            : (list.find((t) => t.accessible)?.name ?? list[0]?.name ?? ""),
+        );
+      })
+      .catch(() => {
+        if (alive) setTables([]);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [sessionKey]);
 
-  const selectDb = (key: string) => {
-    const list = tablesByDb[key] || [];
-    const first =
-      list.find((t) => up.tables[key + "/" + t.name]) || list[0];
-    setDbKey(key);
-    setTableName(first ? first.name : "");
-    setSelColName("");
-    setSearch("");
-  };
+  const table = tables.find((t) => t.name === tableName) ?? null;
+  const accessible = !!table?.accessible;
+  const cols: CatalogColumn[] = table?.columns ?? [];
 
-  const cols = columnsFor(tableName);
+  // ---- 매핑(쿼리 제약) — STEWARD 이상만 조회 가능 (spec 007 §6.2) -------------
+  useEffect(() => {
+    if (!isSteward || !table?.id || !accessible) {
+      setMappings([]);
+      return;
+    }
+    let alive = true;
+    listMappings({ tableId: table.id })
+      .then((m) => {
+        if (alive) setMappings(m);
+      })
+      .catch(() => {
+        if (alive) setMappings([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isSteward, table?.id, accessible, sessionKey]);
+
   const effSelCol =
     selColName && cols.some((c) => c.name === selColName)
       ? selColName
-      : cols[0]?.name ?? "";
-  const selColMeta = cols.find((c) => c.name === effSelCol);
+      : (cols[0]?.name ?? "");
+  const selColMeta = cols.find((c) => c.name === effSelCol) ?? null;
 
-  const currentTableAccessible = !!(
-    up.dbs[dbKey] && up.tables[dbKey + "/" + tableName]
-  );
-  const cannotEdit = !currentTableAccessible;
-
-  const filteredTables = tables.filter((t) =>
-    t.name.toLowerCase().includes(search.trim().toLowerCase()),
+  const filteredTables = useMemo(
+    () => tables.filter((t) => t.name.toLowerCase().includes(search.trim().toLowerCase())),
+    [tables, search],
   );
 
-  const tableComment = tableComments[tableName] || "";
-  const metaEntries = Object.entries(
-    tableMetaByName[tableName] || genericTableMeta,
-  );
-  const indexes = indexesByTable[tableName] || genericIndexes;
+  const tableComment = table?.description || tableComments[tableName] || "";
+  const metaEntries = Object.entries(tableMetaByName[tableName] || genericTableMeta);
+  const sampleIndexes = indexesByTable[tableName];
   const piiCols = cols.filter((c) => c.isPii);
-
-  const selKey = dbNameForCols + "/" + tableName + "/" + effSelCol;
-  const selConstraintIds = colConstraints[selKey] || [];
-  const selConstraints = selConstraintIds
-    .map((id) => defById(id))
-    .filter((d): d is NonNullable<typeof d> => Boolean(d));
+  const selMappings = selColMeta
+    ? mappings.filter((m) => String(m.columnId) === String(selColMeta.id))
+    : [];
 
   const onMapEdit = () => {
     message.info("제약 매핑은 카탈로그 화면에서 관리합니다");
@@ -247,7 +274,7 @@ export default function DatabasesPage() {
         }}
       >
         <LockOutlined style={{ color: T.textTer }} />
-        김도현 님 권한 기준 · 잠금 항목은 접근 불가
+        {user?.displayName ?? "—"} 님 권한 기준 · 잠금 항목은 접근 불가 (컬럼은 노출되지 않습니다)
       </div>
 
       <div
@@ -271,31 +298,23 @@ export default function DatabasesPage() {
             }}
           >
             <span style={{ fontWeight: 600, fontSize: 14 }}>연결 목록</span>
-            <span style={{ fontSize: 12, color: T.textTer }}>
-              {databases.length}개
-            </span>
+            <span style={{ fontSize: 12, color: T.textTer }}>{databases.length}개</span>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
             {databases.map((d) => {
-              const accessible = up.dbs[d.key];
-              const locked = !accessible;
-              const selected = d.key === dbKey;
+              const active = d.key === ACTIVE_DB_KEY;
               const base: CSSProperties = {
                 padding: "10px 12px",
                 borderRadius: 6,
-                cursor: "pointer",
+                cursor: active ? "pointer" : "not-allowed",
                 marginBottom: 4,
                 border: "1px solid transparent",
               };
-              const style: CSSProperties = locked
-                ? selected
-                  ? { ...base, background: T.primaryBg, borderColor: T.primaryBorder, opacity: 0.8 }
-                  : { ...base, background: T.gray2, borderColor: T.border, opacity: 0.72 }
-                : selected
-                  ? { ...base, background: T.primaryBg, borderColor: T.primaryBorder }
-                  : { ...base, background: "#fff", borderColor: T.border };
-              return (
-                <Row key={d.key} selected={selected} style={style} onClick={() => selectDb(d.key)}>
+              const style: CSSProperties = active
+                ? { ...base, background: T.primaryBg, borderColor: T.primaryBorder }
+                : { ...base, background: T.gray2, borderColor: T.border, opacity: 0.6 };
+              const body = (
+                <Row key={d.key} selected={active} style={style}>
                   <div
                     style={{
                       display: "flex",
@@ -321,7 +340,7 @@ export default function DatabasesPage() {
                       </span>
                     </span>
                     <span style={{ display: "flex", alignItems: "center", gap: 6, flex: "none" }}>
-                      {locked && (
+                      {!active && (
                         <span style={{ color: T.textQua, display: "inline-flex" }}>
                           <LockOutlined style={{ fontSize: 13 }} />
                         </span>
@@ -331,17 +350,17 @@ export default function DatabasesPage() {
                       </Tag>
                     </span>
                   </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: T.textTer,
-                      marginTop: 6,
-                      paddingLeft: 23,
-                    }}
-                  >
-                    {d.host} · {d.tables}개 테이블
+                  <div style={{ fontSize: 12, color: T.textTer, marginTop: 6, paddingLeft: 23 }}>
+                    {active ? `${d.host} · ${tables.length}개 테이블` : `${d.host} · 미연결`}
                   </div>
                 </Row>
+              );
+              return active ? (
+                body
+              ) : (
+                <Tooltip key={d.key} title={OTHER_VENDOR_TIP} placement="right">
+                  {body}
+                </Tooltip>
               );
             })}
           </div>
@@ -351,7 +370,7 @@ export default function DatabasesPage() {
         <div style={cardStyle}>
           <div style={{ padding: "10px 12px", borderBottom: `1px solid ${T.border}` }}>
             <div style={{ fontWeight: 600, fontSize: 14, margin: "4px 4px 10px" }}>
-              {curDb ? curDb.name : "—"} · 테이블
+              prod-main · 테이블
             </div>
             <Input
               size="small"
@@ -363,9 +382,21 @@ export default function DatabasesPage() {
             />
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: 8 }}>
+            {loading && (
+              <div style={{ padding: 24, textAlign: "center" }}>
+                <Spin />
+              </div>
+            )}
+            {!loading && filteredTables.length === 0 && (
+              <div style={{ padding: 16 }}>
+                <Empty
+                  description="카탈로그에 등록된 테이블이 없습니다"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              </div>
+            )}
             {filteredTables.map((t) => {
-              const accessible = up.dbs[dbKey] && up.tables[dbKey + "/" + t.name];
-              const locked = !accessible;
+              const locked = !t.accessible;
               const selected = t.name === tableName;
               const base: CSSProperties = {
                 display: "flex",
@@ -396,10 +427,7 @@ export default function DatabasesPage() {
                 >
                   <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                     <span
-                      style={{
-                        color: selected ? T.primary : T.textQua,
-                        display: "inline-flex",
-                      }}
+                      style={{ color: selected ? T.primary : T.textQua, display: "inline-flex" }}
                     >
                       <AppstoreOutlined style={{ fontSize: 14 }} />
                     </span>
@@ -416,12 +444,17 @@ export default function DatabasesPage() {
                     </span>
                   </span>
                   <span style={{ flex: "none", display: "flex", alignItems: "center", gap: 4 }}>
-                    {locked && (
-                      <span style={{ color: T.textQua, display: "inline-flex" }}>
-                        <LockOutlined style={{ fontSize: 12 }} />
+                    {locked ? (
+                      <Tooltip title="접근 권한 없음 · 열람 전용">
+                        <span style={{ color: T.textQua, display: "inline-flex" }}>
+                          <LockOutlined style={{ fontSize: 12 }} />
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      <span style={{ fontSize: 11, color: T.textTer }}>
+                        {t.columns.length} cols
                       </span>
                     )}
-                    <span style={{ fontSize: 11, color: T.textTer }}>{t.rows}</span>
                   </span>
                 </Row>
               );
@@ -445,19 +478,23 @@ export default function DatabasesPage() {
                 <span style={{ fontFamily: MONO_FONT, fontWeight: 600, fontSize: 14 }}>
                   {tableName || "—"}
                 </span>
-                <span style={{ fontSize: 12, color: T.textTer }}>· {cols.length} columns</span>
+                <span style={{ fontSize: 12, color: T.textTer }}>
+                  · {accessible ? `${cols.length} columns` : "컬럼 비공개"}
+                </span>
               </span>
-              <Button
-                size="small"
-                icon={<CodeOutlined />}
-                disabled={cannotEdit}
-                onClick={() => navigate("/editor")}
-              >
-                이 테이블로 쿼리
-              </Button>
+              <Tooltip title={accessible ? "" : "접근 권한이 없는 테이블은 쿼리할 수 없습니다"}>
+                <Button
+                  size="small"
+                  icon={<CodeOutlined />}
+                  disabled={!accessible}
+                  onClick={() => navigate("/editor")}
+                >
+                  이 테이블로 쿼리
+                </Button>
+              </Tooltip>
             </div>
 
-            {cannotEdit && (
+            {!accessible && tableName && (
               <div
                 style={{
                   display: "flex",
@@ -473,7 +510,7 @@ export default function DatabasesPage() {
                 }}
               >
                 <LockOutlined style={{ fontSize: 13 }} />
-                접근 권한 없음 · 열람 전용 (편집·쿼리 불가)
+                접근 권한 없음 · 열람 전용 (컬럼·제약 비공개 · 쿼리 불가)
               </div>
             )}
 
@@ -494,20 +531,22 @@ export default function DatabasesPage() {
                     color: T.textTer,
                   }}
                 >
-                  {k}{" "}
-                  <span style={{ color: T.textSec, fontFamily: MONO_FONT }}>{v}</span>
+                  {k} <span style={{ color: T.textSec, fontFamily: MONO_FONT }}>{v}</span>
                 </span>
               ))}
+              <Tag color="default" style={{ margin: 0, fontSize: 10 }}>
+                예시 메타
+              </Tag>
             </div>
           </div>
 
           {/* scroll body */}
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-            {/* column grid header */}
+            {/* column grid header — 카탈로그 API가 주는 필드(타입·클래스·PII)로 구성 */}
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "1.2fr 1fr 0.8fr 1fr",
+                gridTemplateColumns: "1.2fr 1fr 0.9fr 0.6fr",
                 gap: 0,
                 padding: "10px 16px",
                 borderBottom: `1px solid ${T.border}`,
@@ -522,42 +561,45 @@ export default function DatabasesPage() {
             >
               <span>컬럼</span>
               <span>타입</span>
-              <span>NULL</span>
-              <span>기본값</span>
+              <span>클래스</span>
+              <span>개인정보</span>
             </div>
 
-            {/* column rows */}
-            {cols.map((c) => {
-              const selected = c.name === effSelCol;
-              const rowStyle: CSSProperties = {
-                display: "grid",
-                gridTemplateColumns: "1.2fr 1fr 0.8fr 1fr",
-                gap: 0,
-                padding: "11px 16px",
-                borderBottom: `1px solid ${T.split}`,
-                alignItems: "center",
-                fontSize: 13,
-                cursor: "pointer",
-                background: selected ? T.primaryBg : "transparent",
-                boxShadow: selected ? `inset 3px 0 0 ${T.primary}` : "none",
-              };
-              return (
-                <Row
-                  key={c.name}
-                  selected={selected}
-                  style={rowStyle}
-                  onClick={() => {
-                    setSelColName(c.name);
-                    setOpen((o) => ({ ...o, constraint: true }));
-                  }}
-                >
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                      minWidth: 0,
-                      flexWrap: "wrap",
+            {/* 비허용 테이블은 컬럼을 내려주지 않는다 (spec 007 §6.3) */}
+            {!accessible ? (
+              <div style={{ padding: 32 }}>
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="접근 권한이 없어 컬럼을 표시하지 않습니다"
+                />
+              </div>
+            ) : cols.length === 0 ? (
+              <div style={{ padding: 32 }}>
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="등록된 컬럼이 없습니다" />
+              </div>
+            ) : (
+              cols.map((c) => {
+                const selected = c.name === effSelCol;
+                const rowStyle: CSSProperties = {
+                  display: "grid",
+                  gridTemplateColumns: "1.2fr 1fr 0.9fr 0.6fr",
+                  gap: 0,
+                  padding: "11px 16px",
+                  borderBottom: `1px solid ${T.split}`,
+                  alignItems: "center",
+                  fontSize: 13,
+                  cursor: "pointer",
+                  background: selected ? T.primaryBg : "transparent",
+                  boxShadow: selected ? `inset 3px 0 0 ${T.primary}` : "none",
+                };
+                return (
+                  <Row
+                    key={String(c.id)}
+                    selected={selected}
+                    style={rowStyle}
+                    onClick={() => {
+                      setSelColName(c.name);
+                      setOpen((o) => ({ ...o, constraint: true }));
                     }}
                   >
                     <span
@@ -566,129 +608,109 @@ export default function DatabasesPage() {
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
+                        minWidth: 0,
                       }}
                     >
                       {c.name}
                     </span>
-                    {(c.keys || []).map((k) => (
-                      <Tag
-                        key={k}
-                        color={KEY_COLOR[k] || "default"}
-                        style={{
-                          marginInlineEnd: 0,
-                          fontSize: 10,
-                          lineHeight: "16px",
-                          padding: "0 5px",
-                        }}
-                      >
-                        {k}
-                      </Tag>
-                    ))}
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: MONO_FONT,
-                      color: T.textSec,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {c.type}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      color: c.nullable ? T.textQua : T.textSec,
-                    }}
-                  >
-                    {c.nullable ? "NULL" : "NOT NULL"}
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: MONO_FONT,
-                      fontSize: 11,
-                      color: T.textTer,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {c.def === null || c.def === undefined ? "—" : c.def}
-                  </span>
-                </Row>
-              );
-            })}
+                    <span
+                      style={{
+                        fontFamily: MONO_FONT,
+                        color: T.textSec,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {c.type}
+                    </span>
+                    <span style={{ fontSize: 11, color: T.textSec }}>{CLASS_LABEL[c.cls]}</span>
+                    <span>
+                      {c.isPii ? (
+                        <Tag color="red" style={{ margin: 0, fontSize: 10 }}>
+                          PII
+                        </Tag>
+                      ) : (
+                        <span style={{ fontSize: 11, color: T.textQua }}>—</span>
+                      )}
+                    </span>
+                  </Row>
+                );
+              })
+            )}
 
             {/* ── 4 accordion sections ── */}
             <div style={{ borderTop: `8px solid ${T.gray3}` }}>
-              {/* 1) 인덱스 */}
+              {/* 1) 인덱스 — 카탈로그 API 미제공, 디자인 표본이 있을 때만 예시로 노출 */}
               <Section
                 title="인덱스"
                 open={open.index}
                 onToggle={() => setOpen((o) => ({ ...o, index: !o.index }))}
-                right={<span style={{ fontSize: 12, color: T.textTer }}>{indexes.length}개</span>}
+                right={
+                  <span style={{ fontSize: 12, color: T.textTer }}>
+                    {sampleIndexes ? `${sampleIndexes.length}개 (예시)` : "정보 없음"}
+                  </span>
+                }
               >
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {indexes.map((ix) => (
-                    <div
-                      key={ix.name}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      <span style={{ width: 74, flex: "none" }}>
-                        <span
-                          style={{
-                            fontSize: 11,
-                            fontWeight: 600,
-                            padding: "1px 7px",
-                            borderRadius: 4,
-                            background: T.gray3,
-                            border: `1px solid ${T.border}`,
-                            color: IDX_TEXT[ix.type] || T.textSec,
-                          }}
-                        >
-                          {ix.type}
-                        </span>
-                      </span>
-                      <span style={{ fontFamily: MONO_FONT, fontSize: 12, color: T.text }}>
-                        {ix.name}
-                      </span>
-                      <span
-                        style={{
-                          display: "flex",
-                          gap: 4,
-                          flexWrap: "wrap",
-                          alignItems: "center",
-                        }}
+                {!accessible ? (
+                  <div style={{ fontSize: 12, color: T.textTer }}>접근 권한이 없습니다.</div>
+                ) : !sampleIndexes ? (
+                  <div style={{ fontSize: 12, color: T.textTer }}>
+                    카탈로그는 인덱스 정보를 보관하지 않습니다 (후속 스펙).
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <Tag color="default" style={{ alignSelf: "flex-start" }}>
+                      예시 데이터
+                    </Tag>
+                    {(sampleIndexes ?? genericIndexes).map((ix) => (
+                      <div
+                        key={ix.name}
+                        style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
                       >
-                        {ix.columns.map((ic) => (
+                        <span style={{ width: 74, flex: "none" }}>
                           <span
-                            key={ic}
                             style={{
-                              fontFamily: MONO_FONT,
                               fontSize: 11,
+                              fontWeight: 600,
+                              padding: "1px 7px",
+                              borderRadius: 4,
                               background: T.gray3,
                               border: `1px solid ${T.border}`,
-                              borderRadius: 4,
-                              padding: "1px 7px",
-                              color: T.textSec,
+                              color: IDX_TEXT[ix.type] || T.textSec,
                             }}
                           >
-                            {ic}
+                            {ix.type}
                           </span>
-                        ))}
-                      </span>
-                      {ix.note && (
-                        <span style={{ fontSize: 11, color: T.textTer }}>{ix.note}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                        </span>
+                        <span style={{ fontFamily: MONO_FONT, fontSize: 12, color: T.text }}>
+                          {ix.name}
+                        </span>
+                        <span
+                          style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}
+                        >
+                          {ix.columns.map((ic) => (
+                            <span
+                              key={ic}
+                              style={{
+                                fontFamily: MONO_FONT,
+                                fontSize: 11,
+                                background: T.gray3,
+                                border: `1px solid ${T.border}`,
+                                borderRadius: 4,
+                                padding: "1px 7px",
+                                color: T.textSec,
+                              }}
+                            >
+                              {ic}
+                            </span>
+                          ))}
+                        </span>
+                        {ix.note && <span style={{ fontSize: 11, color: T.textTer }}>{ix.note}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Section>
 
               {/* 2) 코멘트 */}
@@ -711,31 +733,30 @@ export default function DatabasesPage() {
                     wordBreak: "break-word",
                   }}
                 >
-                  {selColMeta && selColMeta.comment ? selColMeta.comment : "—"}
+                  {accessible ? (sampleComment(tableName, effSelCol) ?? "—") : "접근 권한이 없습니다."}
                 </div>
               </Section>
 
-              {/* 3) 개인정보 컬럼 */}
+              {/* 3) 개인정보 컬럼 — 실 카탈로그의 is_pii */}
               <Section
                 title="개인정보 컬럼"
                 open={open.pii}
                 onToggle={() => setOpen((o) => ({ ...o, pii: !o.pii }))}
                 right={
                   <span
-                    style={{
-                      fontSize: 12,
-                      color: piiCols.length ? T.red6 : T.textQua,
-                    }}
+                    style={{ fontSize: 12, color: piiCols.length ? T.red6 : T.textQua }}
                   >
-                    {piiCols.length ? piiCols.length + "개" : "없음"}
+                    {accessible ? (piiCols.length ? `${piiCols.length}개` : "없음") : "비공개"}
                   </span>
                 }
               >
-                {piiCols.length ? (
+                {!accessible ? (
+                  <div style={{ fontSize: 12, color: T.textTer }}>접근 권한이 없습니다.</div>
+                ) : piiCols.length ? (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     {piiCols.map((pc) => (
                       <span
-                        key={pc.name}
+                        key={String(pc.id)}
                         style={{
                           display: "inline-flex",
                           alignItems: "center",
@@ -758,7 +779,7 @@ export default function DatabasesPage() {
                 )}
               </Section>
 
-              {/* 4) 쿼리 제약 */}
+              {/* 4) 쿼리 제약 — 실 매핑(STEWARD 이상만 조회 가능, §6.2) */}
               <Section
                 title="쿼리 제약"
                 open={open.constraint}
@@ -766,63 +787,68 @@ export default function DatabasesPage() {
                 last
                 right={
                   <span
-                    style={{
-                      fontSize: 12,
-                      color: selConstraints.length ? T.primary : T.textQua,
-                    }}
+                    style={{ fontSize: 12, color: selMappings.length ? T.primary : T.textQua }}
                   >
                     · <span style={{ fontFamily: MONO_FONT }}>{effSelCol || "—"}</span>
                   </span>
                 }
               >
-                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-                  <Button
-                    size="small"
-                    type="dashed"
-                    icon={<EditOutlined />}
-                    disabled={cannotEdit}
-                    onClick={onMapEdit}
-                  >
-                    매핑 편집
-                  </Button>
-                </div>
-                {selConstraints.length ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {selConstraints.map((mc) => (
-                      <div
-                        key={mc.id}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 10,
-                          padding: "8px 12px",
-                          background: "#fff",
-                          border: `1px solid ${T.border}`,
-                          borderRadius: 6,
-                        }}
-                      >
-                        <span
-                          style={{
-                            width: 6,
-                            height: 6,
-                            borderRadius: "50%",
-                            background: T.primary,
-                            flex: "none",
-                          }}
-                        />
-                        <span style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 500 }}>{mc.name}</div>
-                          <div style={{ fontSize: 12, color: T.textTer, marginTop: 1 }}>
-                            {mc.desc}
-                          </div>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                {!accessible ? (
+                  <div style={{ fontSize: 12, color: T.textTer }}>접근 권한이 없습니다.</div>
+                ) : !isSteward ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="컬럼 제약 매핑은 STEWARD 이상만 조회할 수 있습니다"
+                  />
                 ) : (
-                  <div style={{ fontSize: 12, color: T.textTer }}>
-                    이 컬럼에 매핑된 제약이 없습니다. "매핑 편집"으로 추가하세요.
-                  </div>
+                  <>
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+                      <Button size="small" type="dashed" onClick={onMapEdit}>
+                        매핑 편집
+                      </Button>
+                    </div>
+                    {selMappings.length ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {selMappings.map((m) => (
+                          <div
+                            key={String(m.id)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                              padding: "8px 12px",
+                              background: "#fff",
+                              border: `1px solid ${T.border}`,
+                              borderRadius: 6,
+                            }}
+                          >
+                            <span
+                              style={{
+                                width: 6,
+                                height: 6,
+                                borderRadius: "50%",
+                                background: T.primary,
+                                flex: "none",
+                              }}
+                            />
+                            <span style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 13, fontWeight: 500 }}>{m.defName}</div>
+                              <div style={{ fontSize: 12, color: T.textTer, marginTop: 1 }}>
+                                {m.defKind}
+                                {m.purposeCode ? ` · purpose=${m.purposeCode}` : ""}
+                              </div>
+                            </span>
+                            {m.clsMismatch && <Tag color="warning">클래스 불일치</Tag>}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: T.textTer }}>
+                        이 컬럼에 매핑된 제약이 없습니다. "매핑 편집"으로 추가하세요.
+                      </div>
+                    )}
+                  </>
                 )}
               </Section>
             </div>

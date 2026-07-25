@@ -1,4 +1,4 @@
-import { Layout, Menu } from "antd";
+import { App, Layout, Menu, Tag, Tooltip } from "antd";
 import {
   BellOutlined,
   LockOutlined,
@@ -9,6 +9,8 @@ import type { MenuProps } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { LOGO_GRADIENT, SIDER_BG } from "../theme";
 import { NAV_GROUPS, SCREENS, screenByPath } from "../nav";
+import { useAuth } from "../auth/AuthContext";
+import { ROLE_COLOR, ROLE_LABEL } from "../auth/demoUsers";
 
 const { Sider, Header, Content } = Layout;
 
@@ -23,6 +25,15 @@ export default function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const active = screenByPath(location.pathname) ?? SCREENS[0];
+  const { user, logout } = useAuth();
+  const { message } = App.useApp();
+
+  /** 로그아웃 → 세션 무효화 후 로그인 화면. 뒤로가기로 화면이 복원되지 않도록 replace (L6). */
+  async function handleLogout() {
+    await logout();
+    message.success("로그아웃되었습니다");
+    navigate("/login", { replace: true });
+  }
 
   return (
     <Layout style={{ height: "100vh", overflow: "hidden" }}>
@@ -109,7 +120,7 @@ export default function AppShell() {
               fontWeight: 600,
             }}
           >
-            김
+            {(user?.displayName ?? "?").slice(0, 1)}
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div
@@ -117,20 +128,33 @@ export default function AppShell() {
                 color: "#fff",
                 fontSize: 13,
                 lineHeight: 1.3,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
               }}
             >
-              김도현
+              {user?.displayName ?? "—"}
+              {user && (
+                <Tag color={ROLE_COLOR[user.role]} style={{ margin: 0, fontSize: 10, lineHeight: "16px" }}>
+                  {ROLE_LABEL[user.role]}
+                </Tag>
+              )}
             </div>
             <div style={{ color: "rgba(255,255,255,.45)", fontSize: 11, lineHeight: 1.3 }}>
-              데이터 분석가
+              {user?.title ?? ""}
             </div>
           </div>
-          <span style={{ color: "rgba(255,255,255,.45)", cursor: "pointer", display: "inline-flex" }}>
-            <LogoutOutlined />
-          </span>
+          <Tooltip title="로그아웃" placement="right">
+            <span
+              onClick={() => void handleLogout()}
+              style={{ color: "rgba(255,255,255,.45)", cursor: "pointer", display: "inline-flex" }}
+            >
+              <LogoutOutlined />
+            </span>
+          </Tooltip>
         </div>
       </Sider>
 

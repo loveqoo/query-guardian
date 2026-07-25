@@ -23,4 +23,25 @@ class ArchIsolationTest {
     val judgmentPathKnowsNothingAboutAuth: ArchRule = noClasses()
         .that().resideInAnyPackage("..queryguardian.rules..", "..queryguardian.lint..", "..queryguardian.ir..")
         .should().dependOnClassesThat().resideInAnyPackage("..queryguardian.auth..")
+
+    /**
+     * spec 008 §3: 재작성이 권한에 따라 달라지면 "권한 없는 사용자가 마스킹을 덜 받는" 역전이 생긴다
+     * (spec 007 C4와 같은 함정). 실행·재작성 계층은 권한을 알지 못한다 — 권한 판단은 호출자(게이트)의 몫이다.
+     */
+    @ArchTest
+    val execKnowsNothingAboutAuth: ArchRule = noClasses()
+        .that().resideInAnyPackage("..queryguardian.exec..")
+        .should().dependOnClassesThat().resideInAnyPackage("..queryguardian.auth..")
+
+    /**
+     * spec 008 §3: `parser`는 방언 중립 계획(RewritePlan)만 받아 AST를 조작한다 — 카탈로그·권한·규칙 미인지.
+     * 이 경계가 깨지면 물리명으로 제약을 조회해 **마스킹이 조용히 0건 적용**되는 함정이 파서 안으로 들어온다.
+     */
+    @ArchTest
+    val parserKnowsOnlyIr: ArchRule = noClasses()
+        .that().resideInAnyPackage("..queryguardian.parser..")
+        .should().dependOnClassesThat().resideInAnyPackage(
+            "..queryguardian.catalog..", "..queryguardian.rules..", "..queryguardian.auth..",
+            "..queryguardian.exec..", "..queryguardian.approval..",
+        )
 }

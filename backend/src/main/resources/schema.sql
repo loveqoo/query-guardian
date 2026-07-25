@@ -161,6 +161,21 @@ CREATE TABLE IF NOT EXISTS user_table_permission (
     CONSTRAINT uq_user_table UNIQUE (user_id, table_name)
 );
 
+-- 실행 격리 (spec 008 §2.7-3) ------------------------------------------------
+-- 논리 테이블 ↔ 데모 물리 테이블. 매핑표이면서 **실행 허용목록을 겸한다** —
+-- 미매핑 테이블이 하나라도 있으면 실행을 거부해야 원래 이름 그대로 실행되는 경로가 없다.
+CREATE TABLE IF NOT EXISTS demo_table_map (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    logical_name  VARCHAR(128) NOT NULL,
+    physical_name VARCHAR(128) NOT NULL,
+    CONSTRAINT uq_demo_logical UNIQUE (logical_name)
+);
+
+INSERT IGNORE INTO demo_table_map (logical_name, physical_name) VALUES
+    ('users', 'demo_users'),
+    ('marketing_consents', 'demo_marketing_consents'),
+    ('user_events', 'demo_user_events');
+
 CREATE TABLE IF NOT EXISTS permission_change_event (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     target_user_id  VARCHAR(64) NOT NULL,

@@ -69,6 +69,44 @@
 3. **`demo_table_map`이 실행 허용목록을 겸한다** — 참조 테이블 중 **미매핑이 하나라도 있으면 실행 거부**(`NO_DEMO_MAPPING`).
    부분 매핑을 허용하면 `SELECT tree_json FROM rule`처럼 **실재하는 거버넌스 테이블을 직격**한다.
 
+### 2.8 M0 구현 결과 (2026-07-25 — 적대 검토 2차 반영)
+
+M0(위생 게이트 + 실행 격리)은 **구현·검증 완료**. 구현 중 스펙에서 갈라진 결정과, 2차 적대 검토가 실측으로
+잡은 것들:
+
+**스펙에서 갈라진 결정(의도적)**
+1. **위생은 lint·저장 시점에도 발화한다** — §2.6은 실행 게이트에 뒀지만 *실행 대상 = 저장된 쿼리*라 두 집합이
+   같다. 저장 때 잡으면 같은 방어를 유지하면서 "승인까지 받았는데 실행 불가"가 없어진다. **단락시키지 않고
+   추가 위반**으로 넣어 나머지 룰 판정 결과를 함께 보여준다.
+2. **파싱은 1회** (`DialectParser.inspect(sql) → (ParseResult, List<HygieneViolation>)`) — 위생용 2차 파싱은
+   타임아웃 레이스로 **판정 대상과 검사 대상이 갈라짐이 실측**됐다(84회 중 57회 fail-open 관측). M1의 재작성
+   파싱도 이 경로에 얹는다.
+3. **검사 불가 = 위반**(`UNVERIFIABLE`) — 빈 목록은 "위반 없음"으로 읽혀 위생을 독립 단계로 호출하는
+   §5 경로가 fail-open한다. `INTO DUMPFILE`·`PROCEDURE ANALYSE`·`TABLE users`가 이 경로였다.
+4. **`--`는 MySQL 규칙(뒤에 공백류/문장 끝)을 따른다** — Druid 프린터가 `- -1`을 `--1`로 출력하므로,
+   무조건 거부하면 `hygiene(sql) 통과 ⟹ hygiene(rewrite(sql)) 통과`가 깨져 §3.0.3 재작성 검증이 성립하지 않는다.
+5. **0-테이블 판정은 IR 기준**(스코프별 CTE 해석) — AST에서 CTE 이름을 전역 수집하면 동명 집계 CTE
+   (`WITH user_events AS (SELECT … FROM user_events)`, 분석가 표준 관용구)를 오차단한다. `dual`은 물리 테이블에서 제외.
+
+**2차 적대 검토가 실측으로 잡은 결함(전부 수정)**
+- **CRITICAL**: `` `sleep`(5) `` — Druid가 함수명에 백틱을 남겨 금지 함수 목록 4종이 **전부 무효**였고,
+  MySQL 8.4는 백틱 함수명을 빌트인으로 실행했다(3초 지연 실측). → 함수명도 `norm()` 통과(spec 001 §6.5의 누락분).
+- **HIGH**: `FOR SHARE`(MySQL 8의 현행 문법)가 Druid의 어떤 플래그에도 담기지 않아 통과했다.
+  `START TRANSACTION READ ONLY`에서도 **실행되므로** DB 권한이 막아주지 않는 유일한 잠금 형태였다. → 어휘 검사.
+- **HIGH**: `FROM DUAL` 네 글자로 0-테이블 검사가 무효화됐다(`SELECT @@version … FROM DUAL`).
+- **MEDIUM**: 마스킹 함수가 `DEFINER=root`로 생성됐고 `GRANT EXECUTE ON queryguardian_demo.*`가 **미래 루틴까지**
+  포함했다. → `SQL SECURITY INVOKER` + 함수별 `GRANT EXECUTE`.
+- 스캐너 전제 명문화: `NO_BACKSLASH_ESCAPES`가 **없는** `sql_mode` 가정 → M2 실행 커넥션에서 고정해야 한다.
+
+**M0에서 발견된 별건 (spec 001 §6.2 위반, 수정 + 우회 스위트 추가)**
+CTE에 물리 테이블과 **같은 이름**을 붙이면 그 본문의 물리 테이블 참조가 IR에서 사라져 BLOCK 룰이 발화하지
+않았다. MySQL은 비재귀 CTE 본문의 자기 이름 참조를 **물리 테이블로 해석**한다(`WITH demo_users AS
+(SELECT id, ssn FROM demo_users) …`가 실제 ssn 반환 실측). → CTE 가시 범위를 "앞서 정의된 CTE만"으로
+바로잡고(RECURSIVE면 자기 이름 포함) `BypassSuiteTest`에 회귀 고정.
+
+**남은 부채(M1·M2에서)**: 문형 검사를 화이트리스트로 전환(현재는 아는 나쁜 것 열거라 MySQL 신문법마다
+구멍), 파서 executor 상한, 물리명 삽입 시 백틱 인용, `demo_table_map` 관리 UI(대소문자 구분 환경).
+
 ## 3. 재작성 엔진 (SqlRewriter)
 
 입력: 원본 SQL + IR + 카탈로그 매핑 + purposeCode. 출력: `RewriteResult(sql, applied: List<AppliedRewrite>)`.
@@ -215,7 +253,7 @@ ExecutionResultDto {
 
 ## 10. 마일스톤
 
-0. **M0 (선행)**: 위생 게이트(§2.6) + 실행 격리 3종(§2.7 스키마·계정·매핑 총체성) — 다른 결함의 폭발 반경을 줄인다
+0. ~~**M0 (선행)**: 위생 게이트(§2.6) + 실행 격리 3종(§2.7 스키마·계정·매핑 총체성)~~ — **완료(§2.8 참조)**
 1. **M1**: SqlRewriter(RewritePlan 경계·주입 3원칙·MASK columnRefs·재작성 검증) + 단위 스위트
    (`preview-rewrite`는 권한 게이트가 붙는 M2까지 **미노출**)
 2. **M2**: 실행 인프라(별도 DataSource·상한·타임아웃·작은 전용 풀) + 실행 게이트(완전 재판정) + 감사 + execute·preview API

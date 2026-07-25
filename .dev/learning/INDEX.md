@@ -10,3 +10,4 @@
 - 008 규칙 데이터화 구현 — IR 축을 판정별 분리(joinEqualities를 §6.1 top-level에 얹어 OUTER·OR 우회 위치만으로 차단); enum ordinal≠심각도(worstSeverity); 미강제는 배지 아닌 규칙 플래그(enforced); 위임은 파일 완결로 중단에 강하게 [규칙 엔진, joinEqualities, severity, enforced, 빈 순환]
 - 009 승인·검토 구현 — 게이트 추가가 기존 게이트를 열 수 있다(purposeCode 유실→승인 요청에서 서버 주입으로 승격); "IR 대상 테이블"은 집합 정의를 식으로(CTE 우회); HTTP 헤더는 ASCII(actor id화가 검증도 강화); 스텁 identity는 한계 명문화가 기능 [purposeCode, 테이블 커버, actor, 검토 리셋, 재-lint]
 - 010 인증·접근 권한 — 권한 도입이 판정을 약화시킬 수 있다(ArchUnit으로 고정); 풀 통합은 암묵적 불변식(자가 승인 불가)을 깬다; changeSessionId는 세션 전제 필요(첫 로그인 500); 헬퍼 시그니처 유지로 이관 비용 제거 [인증, 세션, ArchUnit, 자가 승인, 위임 브리프]
+- 011 위생 게이트·실행 격리 — 식별자 비교 한 곳의 norm() 누락이 금지 목록 전체를 무효화(백틱 `sleep`); "검사 불가"를 빈 목록으로 보고하면 fail-open; 2차 파싱은 판정-검사 분기(실측 57/84); 위생 규칙은 프린터 출력의 고정점이어야; 오탐 조사가 CTE 자기이름 우회를 찾음 [위생, norm, UNVERIFIABLE, 단일 파싱, 고정점, CTE, 격리 스크립트]

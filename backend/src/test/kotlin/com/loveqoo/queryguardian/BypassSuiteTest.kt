@@ -90,6 +90,21 @@ class BypassSuiteTest {
         )
     }
 
+    /**
+     * CTE 이름을 물리 테이블과 **같게** 지어도 그 본문의 물리 테이블 참조는 숨겨지지 않는다.
+     *
+     * MySQL 실측: `WITH demo_users AS (SELECT id, ssn FROM demo_users) SELECT ... FROM demo_users`는
+     * 본문의 참조를 **물리 테이블로 해석해 실제 ssn을 반환**한다(비재귀 CTE는 자기 이름을 가리지 않는다).
+     * IR이 본문에서도 그 이름을 CTE로 취급하면 카탈로그 조회가 건너뛰어져 BLOCK 룰이 발화하지 않는다 (§6.2).
+     */
+    @Test
+    fun `CTE에 물리 테이블과 같은 이름을 붙여도 숨길 수 없다`() {
+        assertBlockedBy(
+            "WITH users AS (SELECT id, ssn FROM users) SELECT id FROM users LIMIT 10",
+            "no-blocked-column",
+        )
+    }
+
     @Test
     fun `OUTER JOIN ON의 술어는 충족이 아니다`() {
         assertBlockedBy(

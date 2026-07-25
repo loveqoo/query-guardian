@@ -10,6 +10,9 @@ services:
       - "3307:3306"
     volumes:
       - config-db-data:/var/lib/mysql
+      # spec 008 §2.7: 데모 스키마·실행 전용 계정. 볼륨이 비어 있을 때만 실행되므로
+      # 기존 환경에는 docker/apply-exec-isolation.sh로 같은 내용을 멱등 적용한다.
+      - ./initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uqg", "-pqg"]
       interval: 5s

@@ -17,8 +17,10 @@ import com.alibaba.druid.sql.ast.expr.SQLInSubQueryExpr
 import com.alibaba.druid.sql.ast.expr.SQLIntegerExpr
 import com.alibaba.druid.sql.ast.expr.SQLNotExpr
 import com.alibaba.druid.sql.ast.expr.SQLNumberExpr
+import com.alibaba.druid.sql.ast.expr.SQLMethodInvokeExpr
 import com.alibaba.druid.sql.ast.expr.SQLPropertyExpr
 import com.alibaba.druid.sql.ast.expr.SQLQueryExpr
+import com.alibaba.druid.sql.ast.expr.SQLVariantRefExpr
 import com.alibaba.druid.sql.ast.statement.SQLExprTableSource
 import com.alibaba.druid.sql.ast.statement.SQLJoinTableSource
 import com.alibaba.druid.sql.ast.statement.SQLSelect
@@ -28,6 +30,9 @@ import com.alibaba.druid.sql.ast.statement.SQLSelectStatement
 import com.alibaba.druid.sql.ast.statement.SQLSubqueryTableSource
 import com.alibaba.druid.sql.ast.statement.SQLTableSource
 import com.alibaba.druid.sql.ast.statement.SQLUnionQuery
+import com.alibaba.druid.sql.ast.statement.SQLWithSubqueryClause
+import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlSelectQueryBlock
+import com.alibaba.druid.sql.dialect.mysql.visitor.MySqlASTVisitorAdapter
 import com.alibaba.druid.sql.visitor.SQLASTVisitorAdapter
 import com.loveqoo.queryguardian.ir.ColumnEquality
 import com.loveqoo.queryguardian.ir.ColumnRef
@@ -56,30 +61,180 @@ class DruidMySqlParser(
         Thread(r, "druid-parse").apply { isDaemon = true }
     }
 
-    override fun parse(sql: String): ParseResult {
+    /** 기존 호출자 유지 — 파싱과 위생은 [inspect]에서 **한 번의 파싱으로** 함께 나온다. */
+    override fun parse(sql: String): ParseResult = inspect(sql).parse
+
+    /**
+     * 단독 호출용 위생 검사. 파싱 실패·비-SELECT는 "검사 불가"이므로 [HygieneCode.UNVERIFIABLE]을 얹는다 —
+     * 빈 목록으로 돌려주면 위생을 독립 단계로 호출하는 경로(spec 008 §5)가 fail-open한다.
+     */
+    override fun checkHygiene(sql: String): List<HygieneViolation> {
+        val result = inspect(sql)
+        val failure = result.parse as? ParseResult.Failure ?: return result.hygiene
+        return result.hygiene + HygieneViolation(
+            HygieneCode.UNVERIFIABLE,
+            "형태를 검사할 수 없습니다: ${failure.message}",
+        )
+    }
+
+    /**
+     * **파싱 1회**로 IR과 위생 위반을 함께 만든다.
+     *
+     * 파싱을 두 번 하면 (1) 두 결과가 갈라질 수 있고(타임아웃 레이스 실측됨) (2) 비용이 2배이며
+     * (3) 취소되지 않은 파싱 스레드가 누적된다. 재작성(M1)이 3차 파싱을 더할 예정이라 지금 합친다.
+     */
+    override fun inspect(sql: String): InspectResult {
+        // ⑴ 어휘 층: 주석과, AST에 남지 않는 문형 키워드. AST 유무와 무관하게 항상 검사한다.
+        val scan = SqlCommentScanner.scan(sql)
+        val lexical = mutableListOf<HygieneViolation>()
+        scan.commentAt?.let { at ->
+            lexical += HygieneViolation(
+                HygieneCode.COMMENT_NOT_ALLOWED,
+                "SQL 주석은 허용되지 않습니다 (${at + 1}번째 문자). 실행 주석은 판정을 우회하고, " +
+                    "후행 주석은 주입된 LIMIT을 삼킵니다",
+            )
+        }
+        // FOR SHARE(MySQL 8이 LOCK IN SHARE MODE를 대체한 현행 문법)는 Druid의 어떤 플래그에도 담기지 않으면서
+        // 출력에는 보존된다 — 읽기 전용 트랜잭션에서도 실행되므로 DB 권한이 막아주지 않는다(적대 검토 결함 2).
+        FOR_SHARE.find(scan.withoutLiterals)?.let {
+            lexical += HygieneViolation(HygieneCode.STATEMENT_FORM_NOT_ALLOWED, "허용되지 않는 문형입니다: FOR SHARE")
+        }
+
         if (sql.toByteArray(Charsets.UTF_8).size > maxSqlBytes) {
-            return ParseResult.Failure(FailureKind.INPUT_TOO_LARGE, "SQL이 최대 크기(${maxSqlBytes}B)를 초과했습니다")
+            return InspectResult(
+                ParseResult.Failure(FailureKind.INPUT_TOO_LARGE, "SQL이 최대 크기(${maxSqlBytes}B)를 초과했습니다"),
+                lexical,
+            )
+        }
+        val future = executor.submit<List<com.alibaba.druid.sql.ast.SQLStatement>> {
+            SQLUtils.parseStatements(sql, DbType.mysql)
         }
         val statements = try {
-            val future = executor.submit<List<com.alibaba.druid.sql.ast.SQLStatement>> {
-                SQLUtils.parseStatements(sql, DbType.mysql)
-            }
             future.get(parseTimeoutMillis, TimeUnit.MILLISECONDS)
         } catch (e: TimeoutException) {
-            return ParseResult.Failure(FailureKind.TIMEOUT, "파싱이 ${parseTimeoutMillis}ms 안에 끝나지 않았습니다")
+            future.cancel(true) // 방치하면 파싱 스레드가 계속 돌아 풀에 누적된다
+            return InspectResult(
+                ParseResult.Failure(FailureKind.TIMEOUT, "파싱이 ${parseTimeoutMillis}ms 안에 끝나지 않았습니다"),
+                lexical,
+            )
         } catch (e: Exception) {
-            return ParseResult.Failure(FailureKind.SYNTAX_ERROR, "문법 오류: ${e.cause?.message ?: e.message}")
+            return InspectResult(
+                ParseResult.Failure(FailureKind.SYNTAX_ERROR, "문법 오류: ${e.cause?.message ?: e.message}"),
+                lexical,
+            )
         }
 
         if (statements.size != 1) {
-            return ParseResult.Failure(FailureKind.MULTI_STATEMENT, "문은 정확히 1개여야 합니다 (${statements.size}개 제출됨)")
+            return InspectResult(
+                ParseResult.Failure(FailureKind.MULTI_STATEMENT, "문은 정확히 1개여야 합니다 (${statements.size}개 제출됨)"),
+                lexical,
+            )
         }
         val statement = statements[0] as? SQLSelectStatement
-            ?: return ParseResult.Failure(FailureKind.NOT_SELECT, "SELECT 문만 저장할 수 있습니다")
+            ?: return InspectResult(ParseResult.Failure(FailureKind.NOT_SELECT, "SELECT 문만 저장할 수 있습니다"), lexical)
 
         val root = buildFromSelect(statement.select, ScopeKind.ROOT, parentResolver = null)
-        return ParseResult.Success(QueryIR(root, sql))
+        return InspectResult(ParseResult.Success(QueryIR(root, sql)), lexical + astHygiene(statement, root))
     }
+
+    // ---- 위생 게이트 (spec 008 §2.6) ----
+
+    /** AST·IR에서만 보이는 위생 위반. [root]는 같은 파싱에서 만든 IR이므로 판정-검사 분기가 없다. */
+    private fun astHygiene(statement: SQLSelectStatement, root: SelectScope): List<HygieneViolation> {
+        val out = mutableListOf<HygieneViolation>()
+        val bannedFunctions = mutableSetOf<String>()
+        val variables = mutableSetOf<String>()
+        val schemaQualified = mutableSetOf<String>()
+        val forms = mutableSetOf<String>()
+
+        /** 문형 검사 — base·MySQL 블록 양쪽에서 호출된다. */
+        fun checkForm(x: SQLSelectQueryBlock) {
+            if (x.into != null) forms += "INTO"
+            if (x.isForUpdate) forms += "FOR UPDATE"
+            if (x.hintsSize > 0) forms += "옵티마이저 힌트"
+            if (x is MySqlSelectQueryBlock) {
+                if (x.isLockInShareMode) forms += "LOCK IN SHARE MODE"
+                if (x.procedureName != null) forms += "PROCEDURE"
+                // 주입한 LIMIT을 무시하고 전체 행을 세게 만들어 상한의 비용 통제를 무력화한다
+                if (x.isCalcFoundRows) forms += "SQL_CALC_FOUND_ROWS"
+            }
+        }
+
+        // MySQL 전용 노드(OUTFILE 등)는 MySqlASTVisitor가 아니면 accept가 예외를 던진다 → MySQL 어댑터를 쓴다.
+        val visitor = object : MySqlASTVisitorAdapter() {
+            override fun visit(x: SQLExprTableSource): Boolean {
+                if (x.expr is SQLPropertyExpr) schemaQualified += x.expr.toString()
+                return true
+            }
+
+            override fun visit(x: SQLVariantRefExpr): Boolean {
+                variables += x.name
+                return false
+            }
+
+            override fun visit(x: SQLMethodInvokeExpr): Boolean {
+                // 백틱을 벗기지 않으면 `\`sleep\`(5)`가 목록을 통째로 우회한다 —
+                // §6.5 "모든 식별자는 norm()을 통과한다"가 여기서 빠져 있었다(적대 검토 결함 1).
+                norm(x.methodName)?.uppercase()?.let { if (it in BANNED_FUNCTIONS) bannedFunctions += it }
+                return true
+            }
+
+            override fun visit(x: SQLSelectQueryBlock): Boolean { checkForm(x); return true }
+
+            override fun visit(x: MySqlSelectQueryBlock): Boolean { checkForm(x); return true }
+        }
+
+        // AST를 완주하지 못하면(미지원 노드 등) 검사 결과를 신뢰할 수 없다 → 거부가 기본값 (fail-closed).
+        try {
+            statement.accept(visitor)
+        } catch (e: Exception) {
+            return out + HygieneViolation(
+                HygieneCode.UNVERIFIABLE,
+                "검사할 수 없는 문 형태입니다: ${e.message ?: e.javaClass.simpleName}",
+            )
+        }
+
+        if (forms.isNotEmpty()) {
+            out += HygieneViolation(
+                HygieneCode.STATEMENT_FORM_NOT_ALLOWED,
+                "허용되지 않는 문형입니다: ${forms.sorted().joinToString(", ")}",
+            )
+        }
+        if (variables.isNotEmpty()) {
+            out += HygieneViolation(
+                HygieneCode.VARIABLE_NOT_ALLOWED,
+                "변수·바인드 참조는 허용되지 않습니다: ${variables.sorted().joinToString(", ")}",
+            )
+        }
+        if (schemaQualified.isNotEmpty()) {
+            out += HygieneViolation(
+                HygieneCode.SCHEMA_QUALIFIER,
+                "테이블에 스키마 한정자를 붙일 수 없습니다: ${schemaQualified.sorted().joinToString(", ")} " +
+                    "(판정과 실행 대상이 달라집니다)",
+            )
+        }
+        if (bannedFunctions.isNotEmpty()) {
+            out += HygieneViolation(
+                HygieneCode.BANNED_FUNCTION,
+                "금지된 함수입니다: ${bannedFunctions.sorted().joinToString(", ")}",
+            )
+        }
+        // 물리 테이블 판정은 **IR 기준**이다: IR의 AliasResolver가 CTE를 스코프별로 이미 정확히 해석하므로
+        // AST에서 CTE 이름을 전역 수집하면 `WITH user_events AS (SELECT ... FROM user_events)`처럼
+        // 동명 CTE가 실제 물리 테이블까지 지워 정상 쿼리를 오차단한다(적대 검토 결함 3).
+        if (physicalTables(root).isEmpty()) {
+            out += HygieneViolation(
+                HygieneCode.NO_PHYSICAL_TABLE,
+                "물리 테이블을 참조하지 않는 쿼리는 실행할 수 없습니다 (테이블 기반 게이트를 통과해 버립니다)",
+            )
+        }
+        return out
+    }
+
+    /** 전 스코프의 물리 테이블 집합. `dual`은 테이블이 아니다 — `FROM DUAL`이 0-테이블 검사를 만족시켰다(결함 4). */
+    private fun physicalTables(scope: SelectScope): Set<String> =
+        scope.tables.filter { it.physical && it.name.lowercase() !in PSEUDO_TABLES }.map { it.name.lowercase() }.toSet() +
+            scope.children.flatMap { physicalTables(it) }
 
     override fun parsePredicate(predicateSql: String): Predicate? = try {
         val expr = SQLUtils.toSQLExpr(predicateSql, DbType.mysql)
@@ -137,17 +292,29 @@ class DruidMySqlParser(
     }
 
     private fun buildFromSelect(select: SQLSelect, kind: ScopeKind, parentResolver: AliasResolver?): SelectScope {
-        val cteNames = select.withSubQuery?.entries
+        val with = select.withSubQuery
+        val cteNames = with?.entries
             ?.mapNotNull { entry -> norm(entry.alias)?.lowercase() }
             ?.toSet() ?: emptySet()
-        // CTE 이름을 하위 스코프 전체에 전파 — FROM에서 CTE를 참조하면 물리 테이블로 취급하지 않는다
+
+        // CTE 본문의 가시 범위는 **앞서 정의된 CTE만**이다. 비재귀 CTE 본문에서 자기 이름은 MySQL이
+        // **물리 테이블로 해석**하므로(실측: `WITH users AS (SELECT ssn FROM users) …`가 실제 ssn을 반환),
+        // 자기 이름을 CTE로 가려주면 카탈로그 조회가 건너뛰어져 BLOCK 룰이 발화하지 않는 숨김 통로가 된다 (§6.2).
+        val recursive = with?.recursive == true
+        val cteChildren = mutableListOf<SelectScope>()
+        val visible = mutableSetOf<String>()
+        with?.entries?.forEach { entry ->
+            val own = norm(entry.alias)?.lowercase()
+            val bodyNames = if (recursive && own != null) visible + own else visible.toSet()
+            val bodyResolver = if (bodyNames.isEmpty()) parentResolver
+            else AliasResolver(emptyList(), parentResolver, bodyNames)
+            cteChildren += buildFromSelect(entry.subQuery, ScopeKind.CTE, bodyResolver)
+            own?.let { visible += it }
+        }
+
+        // 본문 스코프(메인 쿼리)는 모든 CTE 이름을 본다 — FROM에서 CTE를 참조하면 물리 테이블로 취급하지 않는다
         val resolver = if (cteNames.isEmpty()) parentResolver
         else AliasResolver(emptyList(), parentResolver, cteNames)
-
-        val cteChildren = mutableListOf<SelectScope>()
-        select.withSubQuery?.entries?.forEach { entry ->
-            cteChildren += buildFromSelect(entry.subQuery, ScopeKind.CTE, resolver)
-        }
         val scope = buildFromQuery(select.query, kind, resolver)
         return if (cteChildren.isEmpty()) scope else scope.copy(children = cteChildren + scope.children)
     }
@@ -479,6 +646,21 @@ class DruidMySqlParser(
     }
 
     companion object {
+        /** spec 008 §2.6 즉시 목록 — 파일 읽기·시간 지연·잠금. 실행 계정 권한과 무관하게 문형에서 막는다. */
+        private val BANNED_FUNCTIONS = setOf(
+            "LOAD_FILE",                                              // 파일 읽기
+            "SLEEP", "BENCHMARK",                                     // 시간 지연·자원 소모
+            "GET_LOCK", "RELEASE_LOCK", "IS_USED_LOCK", "IS_FREE_LOCK", // 잠금(읽기 전용 전제 위반)
+            "FOUND_ROWS", "ROW_COUNT",                                // 주입된 LIMIT 우회용 행수 캐시
+            "MASTER_POS_WAIT", "SOURCE_POS_WAIT",                     // 복제 대기 = 시간 지연
+        )
+
+        /** `FOR SHARE`는 Druid의 어떤 플래그에도 담기지 않으므로 어휘로 잡는다 (리터럴 제거 텍스트에만 적용). */
+        private val FOR_SHARE = Regex("(?i)\\bFOR\\s+SHARE\\b")
+
+        /** 테이블처럼 쓰이지만 데이터가 없는 이름 — 0-테이블 검사에서 물리 테이블로 세지 않는다. */
+        private val PSEUDO_TABLES = setOf("dual")
+
         private val INNER_JOIN_TYPES = setOf(
             SQLJoinTableSource.JoinType.COMMA,
             SQLJoinTableSource.JoinType.JOIN,

@@ -160,6 +160,11 @@ INNER JOIN ON의 conjunct는 WHERE와 동치로 인정, **OUTER JOIN ON의 술�
 룰은 루트뿐 아니라 모든 자식 스코프(서브쿼리·파생 테이블·CTE 본문·UNION 팔·IN/EXISTS 서브쿼리)에서 실행된다.
 `WITH x AS (SELECT * FROM user_events) SELECT id FROM x` → `no-select-star`와 의미 룰이 CTE 본문에서 발화.
 
+*(spec 008 M0에서 보강: CTE 이름을 **물리 테이블과 같게** 지으면 그 본문의 물리 테이블 참조가 IR에서
+사라져 카탈로그 룰이 발화하지 않는 은닉 통로가 있었다. MySQL은 비재귀 CTE 본문의 자기 이름 참조를
+물리 테이블로 해석한다 — `WITH users AS (SELECT ssn FROM users) …`가 실제 ssn을 반환함을 실측. CTE 가시
+범위를 "앞서 정의된 CTE만"(RECURSIVE면 자기 포함)으로 고치고 우회 스위트에 고정했다.)*
+
 ### 6.3 Raw는 요건을 충족시키지 못한다
 구조적으로 인식된 술어만 요건을 충족한다. `Raw`(IR로 표현 못 한 조각)는 **절대 충족으로 치지 않으며**,
 요건 대상 테이블의 WHERE 판정이 Raw 때문에 불가능하면 "검증 불가 술어" 사유로 **차단**한다(fail-closed).

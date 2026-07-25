@@ -35,7 +35,10 @@ class RuleFlowIntegrationTest {
     @Autowired
     lateinit var rest: TestRestTemplate
 
-    private fun post(path: String, body: Any) = rest.postForEntity(path, body, Map::class.java)
+    private val client by lazy { SessionClient(rest) }
+
+    /** 무인증 호출은 없다 — 카탈로그·규칙 쓰기·lint는 ADMIN 세션으로 (spec 007 §4·H6). */
+    private fun post(path: String, body: Any) = client.postAs(path, "adm1", body)
 
     @Test
     @Order(1)
@@ -110,10 +113,9 @@ class RuleFlowIntegrationTest {
     @Test
     @Order(5)
     fun `매핑 삭제 역참조 가드 - 규칙이 참조 중이면 409`() {
-        val mappingId = (rest.getForEntity("/api/catalog/mappings?columnId=$consentColId", List::class.java)
+        val mappingId = (client.getListAs("/api/catalog/mappings?columnId=$consentColId", "adm1")
             .body!!.filterIsInstance<Map<*, *>>().first()["id"] as Number).toLong()
-        val del = rest.exchange(org.springframework.http.RequestEntity
-            .delete(java.net.URI("/api/catalog/mappings/$mappingId")).build(), Map::class.java)
+        val del = client.deleteAs("/api/catalog/mappings/$mappingId", "adm1")
         assertEquals(HttpStatus.CONFLICT, del.statusCode)
     }
 
@@ -122,17 +124,14 @@ class RuleFlowIntegrationTest {
     fun `위반 통계 - 저장 시도 차단 시 hit 증가`() {
         // spec 005: 저장은 승인 요청을 요구하지만, 룰 게이트가 선행하므로 요청 없이도 422 + hit 증가여야 한다 (H4)
         val before = ruleHits()
-        val res = rest.exchange(
-            org.springframework.http.RequestEntity.post(java.net.URI("/api/queries"))
-                .header("X-QG-Actor", "u1").header("Content-Type", "application/json")
-                .body(mapOf("name" to "위반쿼리", "dialect" to "MYSQL",
-                    "sql" to "SELECT u.id FROM marketing_consents mc JOIN users u ON mc.user_id = u.id LIMIT 10")),
-            Map::class.java)
+        val res = client.postAs("/api/queries", "u1",
+            mapOf("name" to "위반쿼리", "dialect" to "MYSQL",
+                "sql" to "SELECT u.id FROM marketing_consents mc JOIN users u ON mc.user_id = u.id LIMIT 10"))
         assertEquals(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY, res.statusCode) // 룰 선행
         assertTrue(ruleHits() > before, "저장 시도 위반 후 hit이 증가해야 함")
     }
 
     private fun ruleHits(): Long =
-        (rest.getForEntity("/api/rules", List::class.java).body!!
+        (client.getListAs("/api/rules", "adm1").body!!
             .filterIsInstance<Map<*, *>>().first { (it["id"] as Number).toLong() == ruleId }["hits"] as Number).toLong()
 }

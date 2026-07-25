@@ -8,6 +8,9 @@ import com.loveqoo.queryguardian.api.ConflictException
 import com.loveqoo.queryguardian.api.NotFoundException
 import com.loveqoo.queryguardian.api.RuleSnapshotDto
 import com.loveqoo.queryguardian.api.SaveApprovalRequest
+import com.loveqoo.queryguardian.auth.AccessControl
+import com.loveqoo.queryguardian.auth.AppUserRepository
+import com.loveqoo.queryguardian.auth.Role
 import com.loveqoo.queryguardian.catalog.CatalogPurposeRepository
 import com.loveqoo.queryguardian.catalog.CatalogTableRepository
 import com.loveqoo.queryguardian.rules.RuleRepository
@@ -22,6 +25,8 @@ class ApprovalService(
     private val purposes: CatalogPurposeRepository,
     private val tables: CatalogTableRepository,
     private val rules: RuleRepository,
+    private val appUsers: AppUserRepository,
+    private val access: AccessControl,
 ) {
     private val MAX_STEPS = 10
 
@@ -60,7 +65,7 @@ class ApprovalService(
     // ---- 생성 ----
 
     fun create(actor: String, request: SaveApprovalRequest): ApprovalDetailDto {
-        requireNotNull(Directory.findUser(actor)) { "등록되지 않은 사용자: $actor" }
+        requireNotNull(appUsers.findById(actor).orElse(null)) { "등록되지 않은 사용자: $actor" }
         require(request.purposeTitle.isNotBlank() && request.purposeTitle.length <= 200) { "목적 제목은 1~200자여야 합니다" }
         require(purposes.findByCode(request.purposeCode) != null) { "등록되지 않은 purpose: ${request.purposeCode}" }
 
@@ -68,6 +73,8 @@ class ApprovalService(
         require(request.tables.isNotEmpty()) { "대상 테이블을 1개 이상 선택하세요" }
         request.tables.forEach {
             require(tables.findByNameIgnoreCase(it.tableName) != null) { "카탈로그에 없는 테이블: ${it.tableName}" }
+            // 권한 없는 테이블은 요청에 담을 수 없다 (spec 007 §6.1)
+            require(access.isTableAllowed(actor, it.tableName)) { "권한이 없는 테이블은 요청에 담을 수 없습니다: ${it.tableName}" }
         }
         request.businessReqs.forEach { require(Directory.hasBusinessReq(it)) { "등록되지 않은 비즈니스 요건: $it" } }
 
@@ -77,10 +84,17 @@ class ApprovalService(
         require(approvers.size <= MAX_STEPS) { "승인 단계는 최대 ${MAX_STEPS}단계입니다" }
         require(approvers.map { it.step } == (1..approvers.size).toList()) { "승인 단계는 1부터 연속이어야 합니다" }
         require(approvers.map { it.approverId }.distinct().size == approvers.size) { "같은 승인자를 여러 단계에 지정할 수 없습니다" }
+        // 자가 승인 금지 (spec 007 C1) — 풀 통합으로 열리는 구멍이라 불변식으로 막는다
+        require(approvers.none { it.approverId == actor }) { "REQUESTER_IS_APPROVER: 본인을 자신의 승인 라인에 지정할 수 없습니다" }
         val resolved = approvers.map { input ->
-            val person = Directory.findApprover(input.approverId)
+            val person = appUsers.findById(input.approverId).orElse(null)
                 ?: throw IllegalArgumentException("등록되지 않은 승인자: ${input.approverId}")
-            RequestApprover(approverId = person.id, name = person.name, role = person.role)
+            // 승인자는 STEWARD/ADMIN만 (spec 007 §5)
+            require(person.role == Role.STEWARD || person.role == Role.ADMIN) {
+                "승인자는 STEWARD 또는 ADMIN이어야 합니다: ${input.approverId}(${person.role})"
+            }
+            // role 컬럼에는 직책(title)을 넣는다 — 감사 문자열 보존 (H4-a)
+            RequestApprover(approverId = person.id, name = person.displayName, role = person.title)
         }
 
         // 규칙 내용 스냅샷 (H2) — 선택 규칙 + 항상 강제되는 규칙

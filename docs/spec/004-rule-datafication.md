@@ -125,7 +125,7 @@ POST   /api/rules/{id}/test {sql} → 200 {message:"테스트 실행은 후속 �
 ```
 - **매핑 삭제 역참조 가드 (C4)**: `DELETE /api/catalog/mappings/{id}` — 그 (defId, columnId)를 참조하는 규칙
   조건이 있으면 **409**(먼저 규칙 조건 제거 요구). def 삭제 가드(spec 002 H5)와 대칭.
-- **위반 통계 (H7)**: `createQuery/updateQuery` 저장 시도 시 규칙 위반 탐지분(**BLOCK·WARN 무관**)의 규칙
+- **위반 통계 (H7)** *(spec 007 §6.0 개정: 데이터 권한 통과 후에만 기록)*: `createQuery/updateQuery` 저장 시도 시 규칙 위반 탐지분(**BLOCK·WARN 무관**)의 규칙
   hit_count 증가(debounce lint 미포함). 라벨은 "위반 감지 N회"(WARN 규칙도 카운트되게). 저장 성공/실패 무관, 시도 기준.
 - 빌더 조건 편집(테이블→컬럼→매핑된 제약)은 `/api/catalog/mappings`(컬럼 필터)·`/defs`·`/schema` 재사용.
 

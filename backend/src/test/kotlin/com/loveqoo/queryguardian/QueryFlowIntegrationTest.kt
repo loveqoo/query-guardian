@@ -41,17 +41,13 @@ class QueryFlowIntegrationTest {
     @Autowired
     lateinit var rest: TestRestTemplate
 
-    private fun post(path: String, body: Map<String, Any?>) =
-        rest.postForEntity(path, body, Map::class.java)
+    private val client by lazy { SessionClient(rest) }
 
-    /** actor 헤더가 필요한 API용 (spec 005 §5). */
-    private fun postAs(path: String, actor: String, body: Any? = null) = rest.exchange(
-        org.springframework.http.RequestEntity.post(java.net.URI(path))
-            .header("X-QG-Actor", actor)
-            .header("Content-Type", "application/json")
-            .body(body ?: emptyMap<String, Any>()),
-        Map::class.java,
-    )
+    /** 무인증 호출은 없다 — 카탈로그/lint 등 공통 경로는 ADMIN 세션으로 (spec 007 §4·H6). */
+    private fun post(path: String, body: Map<String, Any?>) = client.postAs(path, "adm1", body)
+
+    /** 세션 주체가 의미를 갖는 API용 (spec 007 §10 — 시그니처 유지). */
+    private fun postAs(path: String, actor: String, body: Any? = null) = client.postAs(path, actor, body)
 
     /** user_events + users를 커버하는 승인 요청을 만들고 승인까지 완료한다 (spec 005 H8 — 저장 게이트 선행 조건). */
     private fun createApprovedRequest() {
@@ -183,15 +179,13 @@ class QueryFlowIntegrationTest {
             mapOf("columnId" to ssnColId, "defId" to blockDefId)).statusCode)
 
         // 매핑 있는 정의 삭제 → 409
-        val defDelete = rest.exchange(org.springframework.http.RequestEntity
-            .delete(java.net.URI("/api/catalog/defs/$blockDefId")).build(), Map::class.java)
+        val defDelete = client.deleteAs("/api/catalog/defs/$blockDefId", "adm1")
         assertEquals(HttpStatus.CONFLICT, defDelete.statusCode)
 
         // purpose 참조 삭제 → 409
-        val purposeId = (rest.getForEntity("/api/catalog/purposes", List::class.java)
+        val purposeId = (client.getListAs("/api/catalog/purposes", "adm1")
             .body!!.filterIsInstance<Map<*, *>>().first { it["code"] == "marketing" }["id"] as Number).toLong()
-        val purposeDelete = rest.exchange(org.springframework.http.RequestEntity
-            .delete(java.net.URI("/api/catalog/purposes/$purposeId")).build(), Map::class.java)
+        val purposeDelete = client.deleteAs("/api/catalog/purposes/$purposeId", "adm1")
         assertEquals(HttpStatus.CONFLICT, purposeDelete.statusCode)
     }
 
@@ -201,7 +195,7 @@ class QueryFlowIntegrationTest {
         val over = post("/api/lint", mapOf("dialect" to "MYSQL", "sql" to "SELECT id FROM users LIMIT 5000"))
         assertTrue(over.body!!["violations"].toString().contains("require-limit"))
 
-        val schema = rest.getForEntity("/api/catalog/schema", Map::class.java)
+        val schema = client.getAs("/api/catalog/schema", "adm1")
         assertTrue((schema.body!!["user_events"] as List<*>).contains("event_date"))
     }
 }

@@ -11,6 +11,7 @@ import com.loveqoo.queryguardian.api.QuerySummaryDto
 import com.loveqoo.queryguardian.api.ReviewRequest
 import com.loveqoo.queryguardian.api.SaveQueryRequest
 import com.loveqoo.queryguardian.approval.ApprovalGate
+import com.loveqoo.queryguardian.auth.AccessControl
 import com.loveqoo.queryguardian.approval.ApprovalRequest
 import com.loveqoo.queryguardian.approval.Directory
 import com.loveqoo.queryguardian.approval.QueryReviewEvent
@@ -32,6 +33,7 @@ class QueryService(
     private val approvalGate: ApprovalGate,
     private val parser: DialectParser,
     private val reviewEvents: QueryReviewEventRepository,
+    private val access: AccessControl,
 ) {
     /** 저장 게이트: 룰(422) 선행 → 승인 검사(403) (spec 005 §4, H4). */
     fun save(actor: String, request: SaveQueryRequest): QueryDto {
@@ -122,7 +124,14 @@ class QueryService(
         // purposeCode는 클라이언트 입력이 아니라 승인 요청에서 주입한다 (C1). 요청이 없으면 null로 lint 후 403.
         val purposeCode = request.requestId?.let { approvalGate.findRequest(it)?.purposeCode }
 
-        // 1) 룰 게이트 선행 — BLOCK이면 422. 규칙 hit 통계도 여기서(spec 004 §7 계약 유지).
+        // 1) 데이터 권한 검사 — 룰보다 **앞** (spec 007 §6.0). 권한 없는 사용자에게 위반 메시지를 주지 않는다.
+        val parsedIr = when (val r = parser.parse(request.sql)) {
+            is ParseResult.Success -> r.ir
+            is ParseResult.Failure -> null // 파싱 실패는 룰 게이트가 BLOCK으로 보고
+        }
+        parsedIr?.let { access.checkTables(actor, approvalGate.physicalTables(it)) }
+
+        // 2) 룰 게이트 — BLOCK이면 422. 규칙 hit 통계는 권한 통과 후에만 기록(spec 004 §7 개정).
         val report = LintReportDto.from(lintService.lint(request.sql, purposeCode))
         val ruleIds = report.violations
             .filter { it.ruleId.startsWith("rule/") }
@@ -131,11 +140,8 @@ class QueryService(
         if (ruleIds.isNotEmpty()) ruleService.recordHits(ruleIds)
         if (report.blocked) throw BlockedException(report)
 
-        // 2~4) 승인 검사 — 요청 존재·승인·요청자·테이블 커버
-        val ir = when (val r = parser.parse(request.sql)) {
-            is ParseResult.Success -> r.ir
-            is ParseResult.Failure -> throw BlockedException(report) // 파싱 실패는 룰 게이트가 이미 BLOCK 처리
-        }
+        // 3) 승인 검사 — 요청 존재·승인·요청자·테이블 커버
+        val ir = parsedIr ?: throw BlockedException(report)
         val approval = approvalGate.check(request.requestId, actor, ir)
         return approval to report
     }

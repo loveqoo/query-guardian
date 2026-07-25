@@ -8,11 +8,9 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.client.TestRestTemplate
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.http.HttpStatus
-import org.springframework.http.RequestEntity
 import org.testcontainers.containers.MySQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -38,13 +36,13 @@ class ApprovalFlowIntegrationTest {
     @Autowired
     lateinit var rest: TestRestTemplate
 
-    private fun postAs(path: String, actor: String, body: Any? = null) = rest.exchange(
-        RequestEntity.post(URI(path)).header("X-QG-Actor", actor)
-            .header("Content-Type", "application/json").body(body ?: emptyMap<String, Any>()),
-        Map::class.java,
-    )
+    private val client by lazy { SessionClient(rest) }
 
-    private fun post(path: String, body: Any) = rest.postForEntity(path, body, Map::class.java)
+    /** 세션 주체가 의미를 갖는 API용 (spec 007 §10 — 시그니처 유지). */
+    private fun postAs(path: String, actor: String, body: Any? = null) = client.postAs(path, actor, body)
+
+    /** 무인증 호출은 없다 — 카탈로그 준비는 ADMIN 세션으로 (spec 007 §4·H6). */
+    private fun post(path: String, body: Any) = client.postAs(path, "adm1", body)
 
     private fun requestBody(tables: List<String>, approverIds: List<String>) = mapOf(
         "purposeTitle" to "마케팅 캠페인 대상자 추출", "purposeCode" to "marketing",
@@ -193,8 +191,20 @@ class ApprovalFlowIntegrationTest {
     @Test
     @Order(9)
     fun `검토 - 자가 검토 409, 타인 승인, 수정 시 재검토 리셋`() {
-        // 자가 검토 금지 (요청자 김도현)
-        assertEquals(HttpStatus.CONFLICT, postAs("/api/queries/$queryId/review", "u1",
+        // 요청자 김도현(u1)은 ANALYST — 검토 권한 자체가 없어 역할 게이트가 먼저 403 (spec 007 §5)
+        assertEquals(HttpStatus.FORBIDDEN, postAs("/api/queries/$queryId/review", "u1",
+            mapOf("decision" to "APPROVED")).statusCode)
+
+        // 자가 검토 금지(409, spec 005)는 검토 권한이 있는 요청자에게만 도달하는 불변식 — STEWARD(u4)로 고정
+        val ownReq = idOf(postAs("/api/approvals", "u4", requestBody(
+            listOf("user_events"), listOf("ap1"))).body!!)
+        postAs("/api/approvals/$ownReq/approve", "ap1")
+        val ownQuery = postAs("/api/queries", "u4", mapOf(
+            "name" to "본인 요청 쿼리", "dialect" to "MYSQL", "requestId" to ownReq,
+            "sql" to "SELECT id FROM user_events WHERE event_date = '2026-03-01' LIMIT 10"))
+        assertEquals(HttpStatus.CREATED, ownQuery.statusCode)
+        val ownQueryId = (ownQuery.body!!["id"] as Number).toLong()
+        assertEquals(HttpStatus.CONFLICT, postAs("/api/queries/$ownQueryId/review", "u4",
             mapOf("decision" to "APPROVED")).statusCode)
 
         val reviewed = postAs("/api/queries/$queryId/review", "u4",
@@ -204,11 +214,9 @@ class ApprovalFlowIntegrationTest {
         assertEquals("u4", reviewed.body!!["reviewer"])
 
         // 검토 승인된 쿼리를 수정 → PENDING_REVIEW로 리셋 (C5)
-        val updated = rest.exchange(RequestEntity.put(URI("/api/queries/$queryId"))
-            .header("X-QG-Actor", "u1").header("Content-Type", "application/json")
-            .body(mapOf("name" to "수정본", "dialect" to "MYSQL", "requestId" to approvedRequestId,
-                "sql" to "SELECT id FROM user_events WHERE event_date = '2026-02-01' LIMIT 10")),
-            Map::class.java)
+        val updated = client.putAs("/api/queries/$queryId", "u1",
+            mapOf("name" to "수정본", "dialect" to "MYSQL", "requestId" to approvedRequestId,
+                "sql" to "SELECT id FROM user_events WHERE event_date = '2026-02-01' LIMIT 10"))
         assertEquals(HttpStatus.OK, updated.statusCode)
         assertEquals("PENDING_REVIEW", updated.body!!["reviewStatus"])
         assertEquals(null, updated.body!!["reviewer"])

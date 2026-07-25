@@ -4,8 +4,22 @@
 # 사용: docker/seed.sh   (재현 가능 — 회고 003/004의 수동 curl 시드 대체)
 set -u
 API="${QG_API:-http://localhost:8080/api}"
+JAR_DIR="${TMPDIR:-/tmp}/qg-seed-cookies"
+mkdir -p "$JAR_DIR"
 jq_id() { python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))'; }
-post() { curl -s -X POST "$API/$1" -H 'Content-Type: application/json' -d "$2"; }
+
+# spec 007: 모든 API가 인증을 요구한다. 사용자별 쿠키 자를 만들어 재사용한다.
+login() { # login <userId>
+  local u="$1"
+  [ -f "$JAR_DIR/$u" ] || curl -s -c "$JAR_DIR/$u" -X POST "$API/auth/login" \
+    -H 'Content-Type: application/json' -d "{\"userId\":\"$u\",\"password\":\"qg-demo\"}" >/dev/null
+}
+as() { # as <userId> <path> <json>
+  local u="$1"; shift; login "$u"
+  curl -s -b "$JAR_DIR/$u" -X POST "$API/$1" -H 'Content-Type: application/json' -d "$2"
+}
+# 카탈로그·규칙 쓰기는 ADMIN 세션으로
+post() { as adm1 "$1" "$2"; }
 
 echo "== purposes =="
 post "catalog/purposes" '{"code":"marketing","description":"마케팅 조회"}' >/dev/null
@@ -59,7 +73,7 @@ post "rules" "{\"name\":\"PII 마스킹 필수\",\"scope\":\"SINGLE\",\"server\"
 
 echo "== approvals (spec 005) =="
 # 승인 요청 생성 → 순차 승인 완료 (에디터에서 바로 쓸 수 있는 승인된 요청)
-post_as() { curl -s -X POST "$API/$1" -H 'Content-Type: application/json' -H "X-QG-Actor: $2" -d "$3"; }
+post_as() { as "$2" "$1" "$3"; }  # 인수 순서 유지 (path, actor, body)
 REQ=$(post_as "approvals" "u1" '{"purposeTitle":"Q3 마케팅 캠페인 대상자 추출","purposeCode":"marketing",
   "tables":[{"tableName":"users"},{"tableName":"marketing_consents"},{"tableName":"user_events"}],
   "ruleIds":[],"businessReqs":["marketing","pii"],
@@ -72,4 +86,5 @@ post_as "approvals" "u2" '{"purposeTitle":"VIP 고객 리텐션 분석","purpose
   "tables":[{"tableName":"users"}],"ruleIds":[],"businessReqs":["pii","mask"],
   "approvers":[{"step":1,"approverId":"ap2"}]}' >/dev/null
 
-echo "seed 완료. rules: $(curl -s "$API/rules" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')건, approvals: $(curl -s "$API/approvals" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')건 (승인됨 REQ=$REQ)"
+echo "로그인 데모: 아이디 u1(분석가)/u4·ap1~ap4(STEWARD)/adm1(ADMIN), 비밀번호 qg-demo — 운영 반입 금지"
+echo "seed 완료. rules: $(curl -s -b "$JAR_DIR/adm1" "$API/rules" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')건, approvals: $(curl -s -b "$JAR_DIR/adm1" "$API/approvals" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')건 (승인됨 REQ=$REQ)"

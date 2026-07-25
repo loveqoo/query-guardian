@@ -82,3 +82,17 @@ data class ReviewRequest(val decision: String, val note: String? = null)
 /** id는 actor 헤더·approverId에 쓰이는 ASCII 식별자 — 반드시 함께 내려야 클라이언트가 추측하지 않는다. */
 data class DirectoryPersonDto(val id: String, val name: String, val role: String)
 data class BusinessReqDto(val code: String, val label: String, val description: String)
+
+// ---- 인증·권한 (spec 007) ----
+
+/** 데이터 권한 차단 — 역할 부족(ErrorResponse)과 구분되는 코드 포함 403. */
+data class AccessBlockedDto(
+    val code: String, // TABLES_NOT_PERMITTED | TABLES_UNKNOWN | REQUESTER_MISMATCH
+    val message: String,
+    val deniedTables: List<String> = emptyList(),
+)
+
+data class LoginRequest(val userId: String, val password: String)
+
+/** password_hash는 어떤 DTO에도 노출하지 않는다 (spec 007 H9). */
+data class MeDto(val id: String, val displayName: String, val title: String, val role: String)

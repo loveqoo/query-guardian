@@ -9,3 +9,4 @@
 - 007 디자인 컨버팅 실행 — 원본이 antd 앱이면 "이식"이라 쉬움(먼저 통독 확인); 기반 직렬+화면 병렬=충돌 0; 내 브리프의 토큰 오지시(pending blue)가 전 화면 전파 → 위임 전 검토와 토큰 교차검증 [컨버팅, 병렬 위임, 토큰, 공유 상수]
 - 008 규칙 데이터화 구현 — IR 축을 판정별 분리(joinEqualities를 §6.1 top-level에 얹어 OUTER·OR 우회 위치만으로 차단); enum ordinal≠심각도(worstSeverity); 미강제는 배지 아닌 규칙 플래그(enforced); 위임은 파일 완결로 중단에 강하게 [규칙 엔진, joinEqualities, severity, enforced, 빈 순환]
 - 009 승인·검토 구현 — 게이트 추가가 기존 게이트를 열 수 있다(purposeCode 유실→승인 요청에서 서버 주입으로 승격); "IR 대상 테이블"은 집합 정의를 식으로(CTE 우회); HTTP 헤더는 ASCII(actor id화가 검증도 강화); 스텁 identity는 한계 명문화가 기능 [purposeCode, 테이블 커버, actor, 검토 리셋, 재-lint]
+- 010 인증·접근 권한 — 권한 도입이 판정을 약화시킬 수 있다(ArchUnit으로 고정); 풀 통합은 암묵적 불변식(자가 승인 불가)을 깬다; changeSessionId는 세션 전제 필요(첫 로그인 500); 헬퍼 시그니처 유지로 이관 비용 제거 [인증, 세션, ArchUnit, 자가 승인, 위임 브리프]

@@ -16,6 +16,8 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-data-jdbc")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
+    // BCrypt만 필요 — starter-security는 필터체인이 자체 인터셉터 설계와 충돌하므로 미도입 (spec 007 H9)
+    implementation("org.springframework.security:spring-security-crypto")
     runtimeOnly("com.mysql:mysql-connector-j")
 
     // SQL 파서 — 파서 API만 사용. DruidDataSource 등 풀 기능 연결 금지(spec 001 §5.1, ArchUnit로 강제)

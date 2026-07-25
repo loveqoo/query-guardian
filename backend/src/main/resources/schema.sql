@@ -134,3 +134,40 @@ CREATE TABLE IF NOT EXISTS saved_query (
     created_at       DATETIME(6) NOT NULL,
     updated_at       DATETIME(6) NOT NULL
 );
+
+-- 인증·권한 (spec 007) -------------------------------------------------------
+CREATE TABLE IF NOT EXISTS app_user (
+    id            VARCHAR(64) PRIMARY KEY,
+    display_name  VARCHAR(64) NOT NULL,
+    title         VARCHAR(64) NOT NULL,
+    role          VARCHAR(16) NOT NULL,
+    password_hash VARCHAR(120) NOT NULL,
+    enabled       BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS user_server_permission (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id    VARCHAR(64) NOT NULL,
+    server_key VARCHAR(64) NOT NULL,
+    allowed    BOOLEAN NOT NULL,
+    CONSTRAINT uq_user_server UNIQUE (user_id, server_key)
+);
+
+CREATE TABLE IF NOT EXISTS user_table_permission (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id    VARCHAR(64) NOT NULL,
+    table_name VARCHAR(128) NOT NULL,
+    allowed    BOOLEAN NOT NULL,
+    CONSTRAINT uq_user_table UNIQUE (user_id, table_name)
+);
+
+CREATE TABLE IF NOT EXISTS permission_change_event (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    target_user_id  VARCHAR(64) NOT NULL,
+    actor           VARCHAR(64) NOT NULL,
+    scope           VARCHAR(16) NOT NULL,
+    target          VARCHAR(128) NOT NULL,
+    before_allowed  BOOLEAN NULL,
+    after_allowed   BOOLEAN NOT NULL,
+    at              DATETIME(6) NOT NULL
+);

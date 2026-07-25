@@ -8,12 +8,10 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.client.TestRestTemplate
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.http.HttpStatus
-import org.springframework.http.RequestEntity
 import org.springframework.jdbc.core.JdbcTemplate
 import org.testcontainers.containers.MySQLContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
-import java.net.URI
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import kotlin.test.Test
@@ -44,11 +42,13 @@ class TestDebtIntegrationTest {
     @Autowired lateinit var rest: TestRestTemplate
     @Autowired lateinit var jdbc: JdbcTemplate
 
-    private fun post(path: String, body: Any) = rest.postForEntity(path, body, Map::class.java)
-    private fun postAs(path: String, actor: String, body: Any? = null) = rest.exchange(
-        RequestEntity.post(URI(path)).header("X-QG-Actor", actor)
-            .header("Content-Type", "application/json").body(body ?: emptyMap<String, Any>()),
-        Map::class.java)
+    private val client by lazy { SessionClient(rest) }
+
+    /** 무인증 호출은 없다 — 카탈로그·규칙 쓰기·lint는 ADMIN 세션으로 (spec 007 §4·H6). */
+    private fun post(path: String, body: Any) = client.postAs(path, "adm1", body)
+
+    /** 세션 주체가 의미를 갖는 API용 (spec 007 §10 — 시그니처 유지). */
+    private fun postAs(path: String, actor: String, body: Any? = null) = client.postAs(path, actor, body)
 
     private fun cond(op: String, table: String, column: String, defId: Long?) = buildMap {
         put("node", "cond"); put("op", op); put("severity", "BLOCK")
@@ -105,7 +105,7 @@ class TestDebtIntegrationTest {
             """{"node":"group","combinator":"all","children":[{"node":"cond","op":"frobnicate","severity":"BLOCK"}]}""",
             brokenId)
 
-        val rules = rest.getForEntity("/api/rules", List::class.java).body!!.filterIsInstance<Map<*, *>>()
+        val rules = client.getListAs("/api/rules", "adm1").body!!.filterIsInstance<Map<*, *>>()
         assertEquals(true, rules.first { (it["id"] as Number).toLong() == brokenId }["corrupt"])
         assertEquals(false, rules.first { (it["id"] as Number).toLong() == goodRuleId }["corrupt"])
 
@@ -130,12 +130,11 @@ class TestDebtIntegrationTest {
         assertEquals(false, post("/api/lint", mapOf("dialect" to "MYSQL", "sql" to sql)).body!!["blocked"])
 
         // consent_yn 컬럼을 빼고 테이블을 수정 → 매핑 연쇄 삭제
-        val tableId = (rest.getForEntity("/api/catalog/tables", List::class.java).body!!
+        val tableId = (client.getListAs("/api/catalog/tables", "adm1").body!!
             .filterIsInstance<Map<*, *>>().first { it["name"] == "marketing_consents" }["id"] as Number).toLong()
-        val updated = rest.exchange(RequestEntity.put(URI("/api/catalog/tables/$tableId"))
-            .header("Content-Type", "application/json")
-            .body(mapOf("name" to "marketing_consents", "columns" to listOf(
-                mapOf("name" to "user_id", "type" to "BIGINT", "isPii" to false)))), Map::class.java)
+        val updated = client.putAs("/api/catalog/tables/$tableId", "adm1",
+            mapOf("name" to "marketing_consents", "columns" to listOf(
+                mapOf("name" to "user_id", "type" to "BIGINT", "isPii" to false))))
         assertEquals(HttpStatus.OK, updated.statusCode)
 
         // 규칙 조건의 defId가 더는 그 컬럼에 매핑되지 않는다 → 평가기가 fail-closed로 차단
@@ -155,6 +154,7 @@ class TestDebtIntegrationTest {
             "approvers" to listOf(mapOf("step" to 1, "approverId" to "ap1"), mapOf("step" to 2, "approverId" to "ap2"))))
         val id = ((created.body!!["summary"] as Map<*, *>)["id"] as Number).toLong()
 
+        client.cookieOf("ap1") // 세션을 미리 확보 — 동시 로그인이 쿠키 캐시를 경합하지 않도록 (두 스레드가 같은 세션 사용)
         val pool = Executors.newFixedThreadPool(2)
         val tasks = List(2) { Callable { postAs("/api/approvals/$id/approve", "ap1").statusCode } }
         val results = pool.invokeAll(tasks).map { it.get() }
@@ -164,7 +164,7 @@ class TestDebtIntegrationTest {
         assertEquals(1, results.count { it != HttpStatus.OK }, "나머지는 실패해야 함: $results")
 
         // 단계는 정확히 1 증가(2단계)이고 요청은 아직 PENDING이어야 한다 — 건너뛰기 없음
-        val detail = rest.getForEntity("/api/approvals/$id", Map::class.java).body!!
+        val detail = client.getAs("/api/approvals/$id", "u1").body!! // 요청자 본인 열람
         val summary = detail["summary"] as Map<*, *>
         assertEquals(2, (summary["currentStep"] as Number).toInt())
         assertEquals("PENDING", summary["status"])
@@ -182,19 +182,18 @@ class TestDebtIntegrationTest {
         val id = ((created.body!!["summary"] as Map<*, *>)["id"] as Number).toLong()
         postAs("/api/approvals/$id/approve", "ap1")
 
-        fun changed() = (rest.getForEntity("/api/approvals/$id", Map::class.java).body!!["rules"] as List<*>)
+        fun changed() = (client.getAs("/api/approvals/$id", "u1").body!!["rules"] as List<*>)
             .filterIsInstance<Map<*, *>>().first { (it["ruleId"] as Number).toLong() == goodRuleId }["changedSinceApproval"]
         assertEquals(false, changed())
 
         // 규칙 트리 편집(조건 severity 변경) → 스냅샷과 달라짐
-        rest.exchange(RequestEntity.put(URI("/api/rules/$goodRuleId"))
-            .header("Content-Type", "application/json")
-            .body(mapOf("name" to "동의 규칙", "scope" to "SINGLE", "tree" to mapOf(
+        client.putAs("/api/rules/$goodRuleId", "adm1",
+            mapOf("name" to "동의 규칙", "scope" to "SINGLE", "tree" to mapOf(
                 "node" to "group", "combinator" to "all", "children" to listOf(
-             buildMap<String, Any> {
-                    put("node", "cond"); put("op", "blocks"); put("severity", "WARN")
-                    put("table", "users"); put("column", "id")
-                })))), Map::class.java)
+                    buildMap<String, Any> {
+                        put("node", "cond"); put("op", "blocks"); put("severity", "WARN")
+                        put("table", "users"); put("column", "id")
+                    }))))
         assertEquals(true, changed(), "승인 후 규칙 변경이 배지에 반영되지 않음")
     }
 

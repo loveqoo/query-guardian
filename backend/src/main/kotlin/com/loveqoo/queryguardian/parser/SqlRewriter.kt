@@ -99,7 +99,11 @@ class SqlRewriter(
                 is SQLUnionQuery -> node.limit = SQLLimit(injected)
                 else -> return refuse(RewriteRefusal.SCOPE_NOT_FOUND, "LIMIT 대상 스코프를 찾을 수 없습니다: ${cap.scopeId}")
             }
-            applied += AppliedRewrite(RewriteKind.LIMIT, "-", null, "LIMIT ${cap.maxRows} 적용")
+            // 화면에 "실행된 SQL"을 그대로 보여주므로, SQL의 LIMIT(상한+1)과 유효 상한이 다른 이유를 적어 둔다 —
+            // 그러지 않으면 사용자가 재작성 SQL을 직접 돌려 한 행 더 받고 불일치로 읽는다(타사 검토 지적).
+            val detail = if (injected == cap.maxRows.toInt()) "LIMIT ${cap.maxRows} 적용"
+            else "행 상한 ${cap.maxRows} — 초과 여부 확인용 1행을 더 조회해(LIMIT $injected) 버립니다"
+            applied += AppliedRewrite(RewriteKind.LIMIT, "-", null, detail)
         }
 
         // **마지막 단계**에서만 물리명으로 바꾼다 (§3 원칙) — 이 앞의 모든 단계는 논리명으로 동작했다.

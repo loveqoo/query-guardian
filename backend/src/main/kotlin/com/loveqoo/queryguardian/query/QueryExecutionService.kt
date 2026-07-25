@@ -3,6 +3,7 @@ package com.loveqoo.queryguardian.query
 import com.loveqoo.queryguardian.api.BlockedException
 import com.loveqoo.queryguardian.api.ForbiddenException
 import com.loveqoo.queryguardian.api.LintReportDto
+import com.loveqoo.queryguardian.approval.ApprovalBlockedException
 import com.loveqoo.queryguardian.approval.ApprovalGate
 import com.loveqoo.queryguardian.auth.AccessBlockedException
 import com.loveqoo.queryguardian.auth.AccessControl
@@ -68,8 +69,16 @@ class QueryExecutionService(
 ) {
 
     fun execute(queryId: Long, actor: String, privileged: Boolean): ExecutedQuery {
-        // 열람 권한 — 없으면 404/403 (감사 대상 아님: 그 쿼리의 존재를 모르는 상태다)
-        val query = queries.visible(queryId, actor, privileged)
+        // 열람 권한. 차단도 **기록한다** — 남의 쿼리 id로 실행을 시도한 것 자체가 감사 대상이다
+        // (열거 시도를 사후에 볼 수 있어야 한다). 처음에는 "존재를 모르는 상태"라며 제외했는데,
+        // 시도한 id가 응답에 이미 드러나 있으므로 기록하지 않을 이유가 없다.
+        val query = try {
+            queries.visible(queryId, actor, privileged)
+        } catch (e: ForbiddenException) {
+            audit.record(queryId, actor, ExecutionOutcome.BLOCKED, "(열람 권한 없음 — 본문을 기록하지 않는다)",
+                errorCode = "FORBIDDEN_READ", errorDetail = e.message)
+            throw e
+        }
         val sql = query.sqlText
 
         fun blocked(code: String, message: String): Nothing {
@@ -144,15 +153,21 @@ class QueryExecutionService(
         val result = try {
             executor.execute(rewritten.sql, cap)
         } catch (e: ExecutionFailure) {
-            // 사용자에게는 분류 코드만, 원문(SQLState·vendor code)은 감사에만 (§6)
-            audit.record(
-                queryId, actor, ExecutionOutcome.ERROR, sql,
-                rewrittenSql = rewritten.sql, applied = rewritten.applied,
-                errorCode = e.kind.name, errorDetail = e.detail,
-            )
+            // 사용자에게는 분류 코드만, 원문(SQLState·vendor code)은 감사에만 (§6).
+            // 감사 저장이 실패해도 **원래 실행 오류가 이긴다** — 감사 예외로 바꿔치면 무엇이 실패했는지 잃는다.
+            // (성공 경로는 반대다: 기록에 실패하면 데이터를 내보내지 않는다 — 아래 참조.)
+            runCatching {
+                audit.record(
+                    queryId, actor, ExecutionOutcome.ERROR, sql,
+                    rewrittenSql = rewritten.sql, applied = rewritten.applied,
+                    errorCode = e.kind.name, errorDetail = e.detail,
+                )
+            }
             throw e
         }
 
+        // **기록 먼저, 반환 나중** — 감사 저장이 실패하면 데이터를 내보내지 않는다(fail-closed).
+        // "누가 그 PII를 봤는가"를 남길 수 없으면 보여주지 않는 것이 이 제품의 통제 방식이다.
         audit.record(
             queryId, actor, ExecutionOutcome.SUCCESS, sql,
             rewrittenSql = rewritten.sql, applied = rewritten.applied, result = result,
@@ -194,8 +209,16 @@ class QueryExecutionService(
             throw e
         }
 
-        // 승인 요청 검사(요청자 본인·승인 완료·테이블 커버) — 저장 게이트와 같은 계약을 쓴다
-        approvalGate.check(requestId, actor, ir)
+        // 승인 요청 검사(요청자 본인·승인 완료·테이블 커버) — 저장 게이트와 같은 계약을 쓴다.
+        // **감사 래퍼 안에서** 호출한다: 예전엔 여기서 예외가 그대로 빠져나가 "403인데 감사 0건"이었다
+        // (타사 검토 실측). "모든 시도를 기록한다"는 §6 계약이 깨지는 자리였다.
+        try {
+            approvalGate.check(requestId, actor, ir)
+        } catch (e: ApprovalBlockedException) {
+            audit.record(null, actor, ExecutionOutcome.BLOCKED, sql,
+                errorCode = e.detail.code, errorDetail = e.detail.message)
+            throw e
+        }
 
         val report = LintReportDto.from(lintService.judge(inspected, approval.purposeCode))
         if (report.blocked) blockedByReport(null, actor, sql, "RULE_BLOCKED", report)

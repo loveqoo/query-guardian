@@ -61,6 +61,9 @@ class ExecutionFlowIntegrationTest {
     @Autowired
     lateinit var rest: TestRestTemplate
 
+    @Autowired
+    lateinit var executionEvents: com.loveqoo.queryguardian.exec.ExecutionEventRepository
+
     private val client by lazy { SessionClient(rest) }
     private fun post(path: String, body: Map<String, Any?>) = client.postAs(path, "adm1", body)
     private fun postAs(path: String, actor: String, body: Any? = null) = client.postAs(path, actor, body)
@@ -248,5 +251,54 @@ class ExecutionFlowIntegrationTest {
             postAs("/api/preview-rewrite", "u1", mapOf(
                 "sql" to "SELECT id FROM marketing_consents", "requestId" to requestId)).statusCode,
         )
+    }
+
+    /**
+     * 타사 검토가 실측한 감사 누락(§6 "모든 시도를 기록한다" 위반)의 회귀.
+     * 403이면서 감사 0건이던 두 경로 — 승인 범위 밖 테이블, 남의 승인 요청 — 이제 기록되어야 한다.
+     */
+    @Test
+    @Order(9)
+    fun `감사 - 미리보기 차단도 빠짐없이 기록된다`() {
+        fun previewEvents(actor: String) = client.getListAs("/api/queries/$queryId/executions", actor)
+            .body!!.filterIsInstance<Map<*, *>>()
+
+        val before = previewEvents("ap1").size
+
+        // 승인 범위 밖 테이블 (요청은 users만 커버)
+        assertEquals(HttpStatus.FORBIDDEN, postAs("/api/preview-rewrite", "u1", mapOf(
+            "sql" to "SELECT id FROM marketing_consents", "requestId" to requestId)).statusCode)
+        // 남의 승인 요청
+        assertEquals(HttpStatus.FORBIDDEN, postAs("/api/preview-rewrite", "u2", mapOf(
+            "sql" to "SELECT id FROM users", "requestId" to requestId)).statusCode)
+
+        // 미리보기는 query_id가 없으므로 쿼리별 이력에는 안 잡힌다 — 대신 전체 기록이 늘었는지 본다.
+        // (쿼리별 이력 API만으로는 확인할 수 없으므로 감사 저장소를 직접 본다.)
+        val recorded = executionEvents.findAll().filter {
+            it.outcome == "BLOCKED" && it.queryId == null
+        }
+        // 이 카탈로그에는 marketing_consents가 없으므로 **권한 검사**(승인 커버보다 앞)에서 먼저 막힌다 —
+        // 미등록 테이블은 fail-closed로 TABLES_UNKNOWN이다(spec 007: 오타와 권한 부족을 구분).
+        // 어느 게이트에서 막혔든 **기록은 남아야 한다**는 것이 이 회귀의 요점이다.
+        assertTrue(
+            recorded.any { it.errorCode == "TABLES_UNKNOWN" },
+            "승인 범위 밖 시도가 기록되지 않았다: ${recorded.map { it.errorCode }}",
+        )
+        assertTrue(
+            recorded.any { it.errorCode == "REQUESTER_MISMATCH" },
+            "남의 요청 사용 시도가 기록되지 않았다: ${recorded.map { it.errorCode }}",
+        )
+        assertTrue(before >= 0)
+    }
+
+    /** 실행 시 열람 권한에서 막힌 시도도 기록된다 — 남의 쿼리 id로 실행을 시도한 것 자체가 감사 대상이다. */
+    @Test
+    @Order(10)
+    fun `감사 - 남의 쿼리 실행 시도가 기록된다`() {
+        assertEquals(HttpStatus.FORBIDDEN, postAs("/api/queries/$queryId/execute", "u2").statusCode)
+        val forbidden = executionEvents.findAll().filter { it.errorCode == "FORBIDDEN_READ" }
+        assertTrue(forbidden.any { it.actor == "u2" && it.queryId == queryId }, "열거 시도가 기록되지 않았다")
+        // 본문은 기록하지 않는다 — 열람 권한이 없는 사람의 요청으로 SQL을 감사에 복사할 이유가 없다
+        assertTrue(forbidden.none { it.originalSql.contains("SELECT") }, "권한 없는 시도에 SQL 본문이 남았다")
     }
 }

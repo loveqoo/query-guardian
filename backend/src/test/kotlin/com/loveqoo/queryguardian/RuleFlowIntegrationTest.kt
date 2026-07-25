@@ -120,9 +120,15 @@ class RuleFlowIntegrationTest {
     @Test
     @Order(6)
     fun `위반 통계 - 저장 시도 차단 시 hit 증가`() {
+        // spec 005: 저장은 승인 요청을 요구하지만, 룰 게이트가 선행하므로 요청 없이도 422 + hit 증가여야 한다 (H4)
         val before = ruleHits()
-        post("/api/queries", mapOf("name" to "위반쿼리", "dialect" to "MYSQL",
-            "sql" to "SELECT u.id FROM marketing_consents mc JOIN users u ON mc.user_id = u.id LIMIT 10"))
+        val res = rest.exchange(
+            org.springframework.http.RequestEntity.post(java.net.URI("/api/queries"))
+                .header("X-QG-Actor", "u1").header("Content-Type", "application/json")
+                .body(mapOf("name" to "위반쿼리", "dialect" to "MYSQL",
+                    "sql" to "SELECT u.id FROM marketing_consents mc JOIN users u ON mc.user_id = u.id LIMIT 10")),
+            Map::class.java)
+        assertEquals(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY, res.statusCode) // 룰 선행
         assertTrue(ruleHits() > before, "저장 시도 위반 후 hit이 증가해야 함")
     }
 

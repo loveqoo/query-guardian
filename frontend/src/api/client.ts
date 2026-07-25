@@ -19,11 +19,19 @@ export const lintReportSchema = z.object({
 });
 export type LintReport = z.infer<typeof lintReportSchema>;
 
+/** 쿼리 검토 상태 (spec 005 §3.2). 이번 스펙에서는 표시·감사용. */
+export const reviewStatusSchema = z.enum(["PENDING_REVIEW", "APPROVED", "REJECTED"]);
+export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
+
 export const queryListItemSchema = z.object({
   id: idSchema,
   name: z.string(),
   dialect: z.string(),
   purposeCode: z.string().nullish(),
+  /** 근거 승인 요청 id (spec 005 §3.2 — NOT NULL). */
+  requestId: idSchema,
+  reviewStatus: reviewStatusSchema,
+  reviewer: z.string().nullish(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -31,9 +39,118 @@ export type QueryListItem = z.infer<typeof queryListItemSchema>;
 
 export const savedQuerySchema = queryListItemSchema.extend({
   sql: z.string(),
+  reviewedAt: z.string().nullish(),
+  reviewNote: z.string().nullish(),
   lintReport: lintReportSchema.nullish(),
 });
 export type SavedQuery = z.infer<typeof savedQuerySchema>;
+
+// ---------- 승인 요청 (spec 005 §3.1 · §7) ----------
+
+export const approvalStatusSchema = z.enum([
+  "PENDING",
+  "APPROVED",
+  "REJECTED",
+  "CANCELLED",
+]);
+export type ApprovalStatus = z.infer<typeof approvalStatusSchema>;
+
+export const approverDecisionSchema = z.enum(["PENDING", "APPROVED", "REJECTED"]);
+export type ApproverDecision = z.infer<typeof approverDecisionSchema>;
+
+export const approverSchema = z.object({
+  step: z.number(),
+  approverId: z.string(),
+  name: z.string(),
+  role: z.string(),
+  decision: approverDecisionSchema,
+  decidedAt: z.string().nullish(),
+});
+export type ApprovalApprover = z.infer<typeof approverSchema>;
+
+export const approvalSummarySchema = z.object({
+  id: idSchema,
+  purposeTitle: z.string(),
+  purposeCode: z.string(),
+  /** 요청자 = 디렉터리 actor id (스텁 identity, §5). */
+  requester: z.string(),
+  status: approvalStatusSchema,
+  currentStep: z.number(),
+  tables: z.array(z.string()),
+  businessReqs: z.array(z.string()),
+  approvers: z.array(approverSchema),
+  submittedAt: z.string(),
+  decidedAt: z.string().nullish(),
+});
+export type ApprovalSummary = z.infer<typeof approvalSummarySchema>;
+
+/** 승인 당시 동결된 규칙 스냅샷 (H2). forced = 요청자가 고르지 않았지만 항상 적용되는 규칙. */
+export const ruleSnapshotSchema = z.object({
+  ruleId: idSchema,
+  ruleName: z.string(),
+  severitySummary: z.string(),
+  forced: z.boolean(),
+  changedSinceApproval: z.boolean(),
+});
+export type RuleSnapshot = z.infer<typeof ruleSnapshotSchema>;
+
+/** append-only 감사 이벤트 (H6). */
+export const approvalEventSchema = z.object({
+  step: z.number().nullish(),
+  actor: z.string(),
+  action: z.string(),
+  note: z.string().nullish(),
+  at: z.string(),
+});
+export type ApprovalEvent = z.infer<typeof approvalEventSchema>;
+
+export const approvalDetailSchema = z.object({
+  summary: approvalSummarySchema,
+  rules: z.array(ruleSnapshotSchema),
+  events: z.array(approvalEventSchema),
+});
+export type ApprovalDetail = z.infer<typeof approvalDetailSchema>;
+
+/** 403 승인 차단 응답 — 422 룰 차단과 구분되는 별도 계약 (§7 H5). */
+export const approvalBlockedSchema = z.object({
+  code: z.enum([
+    "NO_REQUEST",
+    "NOT_APPROVED",
+    "REQUESTER_MISMATCH",
+    "TABLES_NOT_COVERED",
+  ]),
+  message: z.string(),
+  requestId: idSchema.nullish(),
+  requestStatus: z.string().nullish(),
+  uncoveredTables: z.array(z.string()).default([]),
+});
+export type ApprovalBlocked = z.infer<typeof approvalBlockedSchema>;
+
+// ---------- 디렉터리 (spec 005 §7 — 관리형 목록) ----------
+
+/**
+ * `id`가 optional인 이유: 백엔드 `DirectoryPersonDto`는 현재 `{name, role}`만 직렬화한다
+ * (`Directory.Person`은 id를 갖지만 DTO 매핑에서 탈락). actor 헤더·approverId는 **id**를 요구하므로
+ * id가 없으면 이름 → id 매핑, 그래도 없으면 목록 순서(u1.., ap1..)로 복원한다.
+ */
+export const directoryPersonSchema = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  role: z.string(),
+});
+
+export interface DirectoryPerson {
+  id: string;
+  name: string;
+  role: string;
+}
+
+export const businessReqSchema = z.object({
+  code: z.string(),
+  label: z.string(),
+  description: z.string(),
+});
+export type BusinessReq = z.infer<typeof businessReqSchema>;
 
 export const columnClassSchema = z.enum([
   "PII",
@@ -205,17 +322,50 @@ export interface RuleInput {
 
 // ---------- 요청 타입 ----------
 
+/** purposeCode는 보내지 않는다 — 서버가 승인 요청에서 주입한다 (spec 005 C1). */
 export interface LintInput {
   dialect: "MYSQL";
   sql: string;
-  purposeCode?: string;
+  requestId?: Id;
 }
 
+/** purposeCode 없음 · requestId 필수 (spec 005 C1·§4). */
 export interface QueryInput {
   name: string;
   dialect: "MYSQL";
   sql: string;
-  purposeCode?: string;
+  requestId: Id;
+}
+
+export interface ApprovalTableInput {
+  /** 표시·감사 전용 (파서가 스키마를 버려 검증 불가, §2). */
+  db?: string;
+  tableName: string;
+}
+
+export interface ApprovalApproverInput {
+  /** 1부터 연속 */
+  step: number;
+  approverId: string;
+}
+
+export interface ApprovalInput {
+  purposeTitle: string;
+  purposeCode: string;
+  tables: ApprovalTableInput[];
+  ruleIds: number[];
+  businessReqs: string[];
+  approvers: ApprovalApproverInput[];
+}
+
+export interface ApprovalFilter {
+  status?: ApprovalStatus;
+  requester?: string;
+}
+
+export interface ReviewInput {
+  decision: "APPROVED" | "REJECTED";
+  note?: string;
 }
 
 export interface TableColumnInput {
@@ -288,9 +438,63 @@ export function apiErrorMessage(err: unknown): string | null {
 
 const BASE = "/api";
 
-async function rawRequest(path: string, init?: RequestInit): Promise<Response> {
+// ---------- 행위자(actor) 스텁 — 접근 통제가 아님 (spec 005 §5) ----------
+
+/**
+ * actor는 **인증되지 않은 클라이언트 제공 문자열**이다. 순차 승인·자가 검토 금지·요청자 일치 검사는
+ * 워크플로·감사 장치이며 접근 통제가 아니다(위조 가능). 인증 도입 시 이 모듈이 유일한 교체 지점.
+ */
+export const ACTOR_HEADER = "X-QG-Actor";
+const ACTOR_STORAGE_KEY = "qg.actor";
+const DEFAULT_ACTOR = "u1";
+
+function readStoredActor(): string {
+  try {
+    return window.localStorage.getItem(ACTOR_STORAGE_KEY) || DEFAULT_ACTOR;
+  } catch {
+    return DEFAULT_ACTOR;
+  }
+}
+
+let currentActor = readStoredActor();
+const actorListeners = new Set<() => void>();
+
+export function getActor(): string {
+  return currentActor;
+}
+
+export function setActor(actor: string): void {
+  if (!actor || actor === currentActor) return;
+  currentActor = actor;
+  try {
+    window.localStorage.setItem(ACTOR_STORAGE_KEY, actor);
+  } catch {
+    /* storage 비활성 환경은 메모리 값만 사용 */
+  }
+  actorListeners.forEach((fn) => fn());
+}
+
+/** useSyncExternalStore 용 구독자. 반환값은 해지 함수. */
+export function subscribeActor(fn: () => void): () => void {
+  actorListeners.add(fn);
+  return () => {
+    actorListeners.delete(fn);
+  };
+}
+
+interface RequestOptions {
+  /** true면 `X-QG-Actor` 헤더를 현재 actor로 실어 보낸다. */
+  actor?: boolean;
+}
+
+async function rawRequest(
+  path: string,
+  init?: RequestInit,
+  opts?: RequestOptions,
+): Promise<Response> {
   const headers: Record<string, string> = {};
   if (init?.body != null) headers["Content-Type"] = "application/json";
+  if (opts?.actor) headers[ACTOR_HEADER] = getActor();
   return fetch(`${BASE}${path}`, { ...init, headers });
 }
 
@@ -305,20 +509,26 @@ async function readBody(res: Response): Promise<unknown> {
   }
 }
 
-async function request<T>(schema: z.ZodType<T>, path: string, init?: RequestInit): Promise<T> {
-  const res = await rawRequest(path, init);
+async function request<T>(
+  schema: z.ZodType<T>,
+  path: string,
+  init?: RequestInit,
+  opts?: RequestOptions,
+): Promise<T> {
+  const res = await rawRequest(path, init, opts);
   const body = await readBody(res);
   if (!res.ok) throw new ApiError(res.status, body);
   return schema.parse(body);
 }
 
-async function requestVoid(path: string, init?: RequestInit): Promise<void> {
-  const res = await rawRequest(path, init);
+async function requestVoid(path: string, init?: RequestInit, opts?: RequestOptions): Promise<void> {
+  const res = await rawRequest(path, init, opts);
   if (!res.ok) throw new ApiError(res.status, await readBody(res));
 }
 
 // ---------- lint / 쿼리 ----------
 
+/** requestId를 보내면 서버가 그 요청의 purposeCode로 판정한다 (C1 — 저장 게이트와 동일 조건). */
 export function lint(input: LintInput): Promise<LintReport> {
   return request(lintReportSchema, "/lint", {
     method: "POST",
@@ -326,15 +536,22 @@ export function lint(input: LintInput): Promise<LintReport> {
   });
 }
 
-/** 저장 결과: 성공(201/200) 또는 422 차단(위반 리포트) */
+/**
+ * 저장 결과 (spec 005 §7 H5 — 차단 계약 2종):
+ * - 성공(201/200)
+ * - `RULES`: 422 LintReportDto — 룰 게이트 차단
+ * - `APPROVAL`: 403 ApprovalBlockedDto — 승인 게이트 차단
+ */
 export type SaveQueryResult =
   | { ok: true; query: SavedQuery }
-  | { ok: false; report: LintReport };
+  | { ok: false; kind: "RULES"; report: LintReport }
+  | { ok: false; kind: "APPROVAL"; error: ApprovalBlocked };
 
 async function saveQuery(path: string, method: "POST" | "PUT", input: QueryInput): Promise<SaveQueryResult> {
-  const res = await rawRequest(path, { method, body: JSON.stringify(input) });
+  const res = await rawRequest(path, { method, body: JSON.stringify(input) }, { actor: true });
   const body = await readBody(res);
-  if (res.status === 422) return { ok: false, report: lintReportSchema.parse(body) };
+  if (res.status === 422) return { ok: false, kind: "RULES", report: lintReportSchema.parse(body) };
+  if (res.status === 403) return { ok: false, kind: "APPROVAL", error: approvalBlockedSchema.parse(body) };
   if (!res.ok) throw new ApiError(res.status, body);
   return { ok: true, query: savedQuerySchema.parse(body) };
 }
@@ -347,6 +564,16 @@ export function updateQuery(id: Id, input: QueryInput): Promise<SaveQueryResult>
   return saveQuery(`/queries/${id}`, "PUT", input);
 }
 
+/** 검토 결정 — 200 | 409 {message}(자가 검토·현재 BLOCK). */
+export function reviewQuery(id: Id, input: ReviewInput): Promise<SavedQuery> {
+  return request(
+    savedQuerySchema,
+    `/queries/${id}/review`,
+    { method: "POST", body: JSON.stringify(input) },
+    { actor: true },
+  );
+}
+
 export function listQueries(): Promise<QueryListItem[]> {
   return request(z.array(queryListItemSchema), "/queries");
 }
@@ -357,6 +584,102 @@ export function getQuery(id: Id): Promise<SavedQuery> {
 
 export function deleteQuery(id: Id): Promise<void> {
   return requestVoid(`/queries/${id}`, { method: "DELETE" });
+}
+
+// ---------- 승인 요청 (spec 005 §7) ----------
+
+export function listApprovals(filter: ApprovalFilter = {}): Promise<ApprovalSummary[]> {
+  const params = new URLSearchParams();
+  if (filter.status) params.set("status", filter.status);
+  if (filter.requester) params.set("requester", filter.requester);
+  const qs = params.toString();
+  return request(z.array(approvalSummarySchema), `/approvals${qs ? `?${qs}` : ""}`);
+}
+
+export function getApproval(id: Id): Promise<ApprovalDetail> {
+  return request(approvalDetailSchema, `/approvals/${id}`);
+}
+
+/** 201 | 400 {message}(승인자 0·비연속 step·중복 인물·미등록 purpose/요건·카탈로그 밖 테이블) */
+export function createApproval(input: ApprovalInput): Promise<ApprovalDetail> {
+  return request(
+    approvalDetailSchema,
+    "/approvals",
+    { method: "POST", body: JSON.stringify(input) },
+    { actor: true },
+  );
+}
+
+function decide(id: Id, action: "approve" | "reject" | "cancel", note?: string): Promise<ApprovalDetail> {
+  return request(
+    approvalDetailSchema,
+    `/approvals/${id}/${action}`,
+    { method: "POST", body: JSON.stringify({ note: note ?? null }) },
+    { actor: true },
+  );
+}
+
+/** 200 | 409 {message}(순서 아닌 actor·재결정·이미 결정된 요청·동시성) */
+export function approveApproval(id: Id, note?: string): Promise<ApprovalDetail> {
+  return decide(id, "approve", note);
+}
+
+export function rejectApproval(id: Id, note?: string): Promise<ApprovalDetail> {
+  return decide(id, "reject", note);
+}
+
+/** 요청자 본인·PENDING만 (409 otherwise) */
+export function cancelApproval(id: Id): Promise<ApprovalDetail> {
+  return decide(id, "cancel");
+}
+
+/** 에디터 요청 선택용 — 현재 actor가 요청자인 APPROVED 요청. */
+export function listUsableApprovals(): Promise<ApprovalSummary[]> {
+  return request(z.array(approvalSummarySchema), "/approvals/usable", undefined, { actor: true });
+}
+
+// ---------- 디렉터리 (spec 005 §7) ----------
+
+/**
+ * 백엔드 DTO가 id를 빠뜨린 경우의 복원 표 (`Directory` 상수와 1:1).
+ * id가 응답에 들어오면 그 값이 우선한다.
+ */
+const USER_ID_BY_NAME: Record<string, string> = {
+  김도현: "u1",
+  이서연: "u2",
+  박민준: "u3",
+  정하윤: "u4",
+};
+const APPROVER_ID_BY_NAME: Record<string, string> = {
+  최지훈: "ap1",
+  한도윤: "ap2",
+  서준호: "ap3",
+  김영은: "ap4",
+};
+
+async function fetchDirectory(
+  path: string,
+  byName: Record<string, string>,
+  prefix: string,
+): Promise<DirectoryPerson[]> {
+  const people = await request(z.array(directoryPersonSchema), path);
+  return people.map((p, i) => ({
+    id: p.id ?? byName[p.name] ?? `${prefix}${i + 1}`,
+    name: p.name,
+    role: p.role,
+  }));
+}
+
+export function listDirectoryUsers(): Promise<DirectoryPerson[]> {
+  return fetchDirectory("/directory/users", USER_ID_BY_NAME, "u");
+}
+
+export function listDirectoryApprovers(): Promise<DirectoryPerson[]> {
+  return fetchDirectory("/directory/approvers", APPROVER_ID_BY_NAME, "ap");
+}
+
+export function listBusinessReqs(): Promise<BusinessReq[]> {
+  return request(z.array(businessReqSchema), "/directory/business-reqs");
 }
 
 // ---------- 카탈로그 ----------

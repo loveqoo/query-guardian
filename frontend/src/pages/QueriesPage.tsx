@@ -27,16 +27,19 @@ import {
 import {
   MONO_FONT,
   STATUS_COLOR,
-  STATUS_LABEL,
   VENDOR_COLOR,
   sqlHighlight,
 } from "../theme";
+import ActorSelect, { personLabel, useActor, useDirectory } from "../components/ActorSelect";
 import {
+  apiErrorMessage,
   deleteQuery,
   getQuery,
   listQueries,
+  reviewQuery,
   type Id,
   type QueryListItem,
+  type ReviewStatus,
 } from "../api/client";
 
 /* ---------- design tokens (dc.html lines 369-416, 802-835) ---------- */
@@ -46,10 +49,20 @@ const RULE_FAIL_COLOR = "#ff4d4f"; // var(--color-error)
 const TEXT_TERTIARY = "#8c8c8c";
 const TEXT_SECONDARY = "#595959";
 
-/** 승인 상태 라벨/색 — theme의 STATUS_* 에 디자인의 draft(초안)를 확장 (dc.html line 1332). */
-const STATUS_LABEL_EXT: Record<string, string> = { ...STATUS_LABEL, draft: "초안" };
-const STATUS_COLOR_EXT: Record<string, string> = { ...STATUS_COLOR, draft: "default" };
-
+/**
+ * 검토 상태(review_status) 라벨/색 (spec 005 §3.2).
+ * theme STATUS_* 팔레트를 그대로 재사용해 승인 요청 화면과 색 체계를 맞춘다.
+ */
+const REVIEW_LABEL: Record<ReviewStatus, string> = {
+  PENDING_REVIEW: "검토 대기",
+  APPROVED: "검토 승인",
+  REJECTED: "반려",
+};
+const REVIEW_COLOR: Record<ReviewStatus, string> = {
+  PENDING_REVIEW: STATUS_COLOR.pending,
+  APPROVED: STATUS_COLOR.approved,
+  REJECTED: STATUS_COLOR.rejected,
+};
 type RuleState = "passed" | "failed" | "none";
 
 interface Row {
@@ -59,7 +72,10 @@ interface Row {
   vendor: string;
   db: string;
   author: string;
-  status: string;
+  /** 실 review_status (spec 005 §3.2 — 이번 버전은 표시·감사용). */
+  review: ReviewStatus;
+  reviewer?: string | null;
+  requestId?: Id;
   rule: RuleState;
   updated: string;
   /** 예시(디자인 시드) 행이면 sql 을 이미 보유. 실제 행은 상세 조회 시 로드. */
@@ -81,7 +97,7 @@ function fmtDate(s: string): string {
   return s && s.length >= 10 ? s.slice(0, 10) : s;
 }
 
-/** 실제 목록 항목 → 표 행. 승인상태·작성자·데이터베이스는 실 API에 없어 스텁. */
+/** 실제 목록 항목 → 표 행. 작성자·데이터베이스는 실 API에 없어 스텁. */
 function realRow(q: QueryListItem): Row {
   return {
     key: `real-${q.id}`,
@@ -89,8 +105,10 @@ function realRow(q: QueryListItem): Row {
     name: q.name,
     vendor: vendorFromDialect(q.dialect),
     db: "—", // 실 API 미보유
-    author: "김도현", // 스텁
-    status: "draft", // 스텁: 실제 저장 쿼리는 모두 초안
+    author: "—", // 실 API 미보유 (작성자 필드 없음)
+    review: q.reviewStatus, // 실 review_status
+    reviewer: q.reviewer,
+    requestId: q.requestId,
     rule: "none", // 목록 API는 lintReport 미포함 → 상세에서 판정
     updated: fmtDate(q.updatedAt),
     isSample: false,
@@ -100,13 +118,13 @@ function realRow(q: QueryListItem): Row {
 /** 디자인의 7행 샘플 (dc.html lines 1333-1340) — 실제 데이터가 없을 때만 예시로 노출. */
 type SampleSeed = Omit<Row, "key" | "id" | "isSample">;
 const SAMPLE_ROWS: Row[] = ([
-  { name: "marketing_consent_users", db: "prod-main", vendor: "MySQL", author: "김도현", status: "approved", rule: "passed", updated: "2026-07-22", sql: "SELECT u.id, u.email, u.name, m.consent_at\nFROM users u\nJOIN marketing_consents m ON m.user_id = u.id\nWHERE m.is_agreed = TRUE\nLIMIT 100;" },
-  { name: "high_value_customers_q3", db: "analytics-dw", vendor: "PostgreSQL", author: "이서연", status: "pending", rule: "passed", updated: "2026-07-23", sql: "SELECT user_id, SUM(amount) AS total\nFROM fact_orders\nWHERE ordered_at >= '2026-07-01'\nGROUP BY user_id\nORDER BY total DESC\nLIMIT 100;" },
-  { name: "churn_risk_segment", db: "data-lake", vendor: "Trino", author: "박민준", status: "draft", rule: "failed", updated: "2026-07-24", sql: "SELECT user_id, last_active_at\nFROM user_profiles\nWHERE last_active_at < NOW() - INTERVAL '30' DAY;" },
-  { name: "daily_active_users", db: "analytics-dw", vendor: "PostgreSQL", author: "김도현", status: "approved", rule: "passed", updated: "2026-07-20", sql: "SELECT dt, COUNT(DISTINCT user_id) AS dau\nFROM fact_events\nGROUP BY dt\nORDER BY dt DESC;" },
-  { name: "refund_audit_2026", db: "prod-main", vendor: "MySQL", author: "정하윤", status: "rejected", rule: "failed", updated: "2026-07-19", sql: "SELECT o.id, o.amount, o.status\nFROM orders o\nWHERE o.status = 'refunded'\nLIMIT 200;" },
-  { name: "signup_funnel_weekly", db: "analytics-dw", vendor: "PostgreSQL", author: "이서연", status: "approved", rule: "passed", updated: "2026-07-16", sql: "SELECT week, step, COUNT(*) AS cnt\nFROM fact_events\nWHERE event_type = 'signup'\nGROUP BY week, step;" },
-  { name: "ad_click_attribution", db: "data-lake", vendor: "Trino", author: "박민준", status: "pending", rule: "passed", updated: "2026-07-15", sql: "SELECT campaign_id, COUNT(*) AS clicks\nFROM ad_impressions\nWHERE dt >= DATE '2026-07-01'\nGROUP BY campaign_id;" },
+  { name: "marketing_consent_users", db: "prod-main", vendor: "MySQL", author: "김도현", review: "APPROVED", rule: "passed", updated: "2026-07-22", sql: "SELECT u.id, u.email, u.name, m.consent_at\nFROM users u\nJOIN marketing_consents m ON m.user_id = u.id\nWHERE m.is_agreed = TRUE\nLIMIT 100;" },
+  { name: "high_value_customers_q3", db: "analytics-dw", vendor: "PostgreSQL", author: "이서연", review: "PENDING_REVIEW", rule: "passed", updated: "2026-07-23", sql: "SELECT user_id, SUM(amount) AS total\nFROM fact_orders\nWHERE ordered_at >= '2026-07-01'\nGROUP BY user_id\nORDER BY total DESC\nLIMIT 100;" },
+  { name: "churn_risk_segment", db: "data-lake", vendor: "Trino", author: "박민준", review: "PENDING_REVIEW", rule: "failed", updated: "2026-07-24", sql: "SELECT user_id, last_active_at\nFROM user_profiles\nWHERE last_active_at < NOW() - INTERVAL '30' DAY;" },
+  { name: "daily_active_users", db: "analytics-dw", vendor: "PostgreSQL", author: "김도현", review: "APPROVED", rule: "passed", updated: "2026-07-20", sql: "SELECT dt, COUNT(DISTINCT user_id) AS dau\nFROM fact_events\nGROUP BY dt\nORDER BY dt DESC;" },
+  { name: "refund_audit_2026", db: "prod-main", vendor: "MySQL", author: "정하윤", review: "REJECTED", rule: "failed", updated: "2026-07-19", sql: "SELECT o.id, o.amount, o.status\nFROM orders o\nWHERE o.status = 'refunded'\nLIMIT 200;" },
+  { name: "signup_funnel_weekly", db: "analytics-dw", vendor: "PostgreSQL", author: "이서연", review: "APPROVED", rule: "passed", updated: "2026-07-16", sql: "SELECT week, step, COUNT(*) AS cnt\nFROM fact_events\nWHERE event_type = 'signup'\nGROUP BY week, step;" },
+  { name: "ad_click_attribution", db: "data-lake", vendor: "Trino", author: "박민준", review: "PENDING_REVIEW", rule: "passed", updated: "2026-07-15", sql: "SELECT campaign_id, COUNT(*) AS clicks\nFROM ad_impressions\nWHERE dt >= DATE '2026-07-01'\nGROUP BY campaign_id;" },
 ] as SampleSeed[]).map((q, i) => ({ ...q, key: `sample-${i}`, id: `sample-${i}`, isSample: true }));
 
 /** 규칙 검사 아이콘+라벨 (dc.html lines 396, 1346-1348). */
@@ -133,11 +151,17 @@ interface Detail {
   row: Row;
   sql: string;
   rule: RuleState;
+  review: ReviewStatus;
+  reviewer?: string | null;
+  reviewNote?: string | null;
+  requestId?: Id;
 }
 
 export default function QueriesPage() {
   const navigate = useNavigate();
   const { message } = App.useApp();
+  const [actor] = useActor();
+  const { users, approvers } = useDirectory();
 
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
@@ -154,6 +178,7 @@ export default function QueriesPage() {
   // detail modal (dc.html lines 802-835)
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -195,7 +220,7 @@ export default function QueriesPage() {
     return rows.filter(
       (r) =>
         (!q || `${r.name} ${r.db} ${r.author}`.toLowerCase().includes(q)) &&
-        (status === "all" || r.status === status) &&
+        (status === "all" || r.review === status) &&
         (vendor === "all" || r.vendor === vendor) &&
         (author === "all" || r.author === author) &&
         (rule === "all" || r.rule === rule),
@@ -204,21 +229,49 @@ export default function QueriesPage() {
 
   function openDetail(row: Row) {
     if (row.isSample) {
-      setDetail({ row, sql: row.sql ?? "", rule: row.rule });
+      setDetail({ row, sql: row.sql ?? "", rule: row.rule, review: row.review });
       return;
     }
     setDetailLoading(true);
-    setDetail({ row, sql: "", rule: row.rule });
+    setDetail({ row, sql: "", rule: row.rule, review: row.review, requestId: row.requestId });
     getQuery(row.id)
       .then((q) => {
         const r: RuleState = q.lintReport ? (q.lintReport.blocked ? "failed" : "passed") : "none";
-        setDetail({ row, sql: q.sql, rule: r });
+        setDetail({
+          row,
+          sql: q.sql,
+          rule: r,
+          review: q.reviewStatus,
+          reviewer: q.reviewer,
+          reviewNote: q.reviewNote,
+          requestId: q.requestId,
+        });
       })
       .catch(() => {
         message.error("쿼리 상세를 불러오지 못했습니다");
         setDetail(null);
       })
       .finally(() => setDetailLoading(false));
+  }
+
+  /** 검토 결정 — 409(자가 검토·현재 BLOCK)는 서버 메시지를 그대로 보여준다 (spec 005 §3.2). */
+  async function handleReview(decision: "APPROVED" | "REJECTED") {
+    if (!detail || detail.row.isSample) return;
+    setReviewing(true);
+    try {
+      const q = await reviewQuery(detail.row.id, { decision });
+      message.success(decision === "APPROVED" ? "검토 승인했습니다" : "검토 반려했습니다");
+      setDetail((prev) =>
+        prev
+          ? { ...prev, review: q.reviewStatus, reviewer: q.reviewer, reviewNote: q.reviewNote }
+          : prev,
+      );
+      void load();
+    } catch (err) {
+      message.error(apiErrorMessage(err) ?? "검토 처리에 실패했습니다");
+    } finally {
+      setReviewing(false);
+    }
   }
 
   function openInEditor(row: Row) {
@@ -288,12 +341,10 @@ export default function QueriesPage() {
       render: (a: string) => <span style={{ fontSize: 13, color: TEXT_SECONDARY }}>{a}</span>,
     },
     {
-      title: "승인 상태",
-      dataIndex: "status",
+      title: "검토 상태",
+      dataIndex: "review",
       width: "10%",
-      render: (s: string) => (
-        <Tag color={STATUS_COLOR_EXT[s] ?? "default"}>{STATUS_LABEL_EXT[s] ?? s}</Tag>
-      ),
+      render: (s: ReviewStatus) => <Tag color={REVIEW_COLOR[s] ?? "default"}>{REVIEW_LABEL[s] ?? s}</Tag>,
     },
     {
       title: "규칙 검사",
@@ -369,11 +420,10 @@ export default function QueriesPage() {
             onChange={setStatus}
             style={{ width: 140 }}
             options={[
-              { label: "상태 전체", value: "all" },
-              { label: "승인됨", value: "approved" },
-              { label: "승인 대기", value: "pending" },
-              { label: "초안", value: "draft" },
-              { label: "반려됨", value: "rejected" },
+              { label: "검토 상태 전체", value: "all" },
+              { label: "검토 대기", value: "PENDING_REVIEW" },
+              { label: "검토 승인", value: "APPROVED" },
+              { label: "반려", value: "REJECTED" },
             ]}
           />
           <Select
@@ -399,10 +449,20 @@ export default function QueriesPage() {
             ]}
           />
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate("/editor")}>
-          새 쿼리 작성
-        </Button>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <ActorSelect />
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate("/editor")}>
+            새 쿼리 작성
+          </Button>
+        </div>
       </div>
+
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="검토 상태는 이번 버전에서 표시·감사용입니다 — 실행·재사용을 차단하지 않습니다 (spec 005 §2)."
+      />
 
       {usingSample && (
         <Alert
@@ -439,6 +499,24 @@ export default function QueriesPage() {
             닫기
           </Button>,
           <Button
+            key="reject"
+            danger
+            loading={reviewing}
+            disabled={!detailRow || detailRow.isSample}
+            onClick={() => void handleReview("REJECTED")}
+          >
+            검토 반려
+          </Button>,
+          <Button
+            key="approve"
+            icon={<CheckCircleOutlined />}
+            loading={reviewing}
+            disabled={!detailRow || detailRow.isSample}
+            onClick={() => void handleReview("APPROVED")}
+          >
+            검토 승인
+          </Button>,
+          <Button
             key="open"
             type="primary"
             icon={<EditOutlined />}
@@ -469,8 +547,8 @@ export default function QueriesPage() {
               >
                 {detailRow.name}
               </span>
-              <Tag color={STATUS_COLOR_EXT[detailRow.status] ?? "default"}>
-                {STATUS_LABEL_EXT[detailRow.status] ?? detailRow.status}
+              <Tag color={REVIEW_COLOR[detail?.review ?? detailRow.review] ?? "default"}>
+                {REVIEW_LABEL[detail?.review ?? detailRow.review] ?? detailRow.review}
               </Tag>
             </span>
           ) : null
@@ -505,7 +583,32 @@ export default function QueriesPage() {
                 <div style={{ fontSize: 12, color: TEXT_TERTIARY, marginBottom: 6 }}>수정일</div>
                 <div style={{ fontSize: 14 }}>{detailRow.updated}</div>
               </div>
+              <div>
+                <div style={{ fontSize: 12, color: TEXT_TERTIARY, marginBottom: 6 }}>근거 승인 요청</div>
+                <div style={{ fontFamily: MONO_FONT, fontSize: 13 }}>
+                  {detail.requestId != null ? `REQ-${String(detail.requestId)}` : "—"}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: TEXT_TERTIARY, marginBottom: 6 }}>검토자</div>
+                <div style={{ fontSize: 14 }}>
+                  {detail.reviewer
+                    ? personLabel([...users, ...approvers], detail.reviewer)
+                    : "—"}
+                  {detail.reviewNote ? (
+                    <span style={{ fontSize: 12, color: TEXT_SECONDARY }}> · {detail.reviewNote}</span>
+                  ) : null}
+                </div>
+              </div>
             </div>
+
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message={`검토는 현재 사용자(${personLabel([...users, ...approvers], actor)}) 명의로 기록됩니다 — 데모: 신원 위조 가능, 인증 후속. 본인이 요청한 쿼리는 자가 검토 불가(409)이며, 현재 규칙 기준 BLOCK이면 승인할 수 없습니다.`}
+            />
+
             <div style={{ fontSize: 12, color: TEXT_TERTIARY, marginBottom: 8 }}>쿼리 (SQL)</div>
             <div
               style={{

@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  Alert,
   App,
   Button,
   Input,
@@ -28,16 +29,19 @@ import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
 import type { Extension } from "@codemirror/state";
 import { MONO_FONT } from "../theme";
 import { mockSql } from "../mock/design";
+import ActorSelect, { useActor } from "../components/ActorSelect";
 import {
   apiErrorMessage,
   createQuery,
   getQuery,
   getSchemaDict,
   lint,
-  listPurposes,
+  listUsableApprovals,
   updateQuery,
+  type ApprovalBlocked,
+  type ApprovalSummary,
+  type Id,
   type LintReport,
-  type Purpose,
   type SchemaDict,
   type Violation,
 } from "../api/client";
@@ -145,6 +149,14 @@ const PROMPT_CHIPS = [
   { label: "이탈 위험 고객 세그먼트", icon: <ThunderboltOutlined /> },
 ];
 
+/** 403 ApprovalBlockedDto.code → 한국어 라벨 (spec 005 §7 H5). */
+const APPROVAL_BLOCK_LABEL: Record<string, string> = {
+  NO_REQUEST: "승인 요청 미지정",
+  NOT_APPROVED: "승인되지 않은 요청",
+  REQUESTER_MISMATCH: "요청자 불일치",
+  TABLES_NOT_COVERED: "승인 범위 밖 테이블",
+};
+
 type BottomTab = "rulecheck" | "result" | "messages";
 interface AiMessage {
   role: "user" | "assistant";
@@ -161,12 +173,17 @@ export default function EditorPage() {
   const [params] = useSearchParams();
   const editId = params.get("id");
 
+  const [actor] = useActor();
+
   const [queryName, setQueryName] = useState("marketing_consent_users");
   const [sql, setSql] = useState(INITIAL_SQL);
   const [editorVendor] = useState("mysql"); // gate: MySQL 고정
   const [connKey] = useState("mysql-prod"); // gate: prod-main 고정
-  const [purposeCode, setPurposeCode] = useState<string | undefined>(undefined);
-  const [purposes, setPurposes] = useState<Purpose[]>([]);
+  /** 승인된 요청 선택 (spec 005 §8) — purposeCode는 여기서 서버가 승계한다 (C1). */
+  const [requestId, setRequestId] = useState<Id | undefined>(undefined);
+  const [usable, setUsable] = useState<ApprovalSummary[]>([]);
+  const [usableLoading, setUsableLoading] = useState(true);
+  const [approvalBlock, setApprovalBlock] = useState<ApprovalBlocked | null>(null);
   const [schema, setSchema] = useState<SchemaDict>({});
 
   const [showSuggest, setShowSuggest] = useState(false);
@@ -192,7 +209,7 @@ export default function EditorPage() {
         if (!alive) return;
         setQueryName(q.name);
         setSql(q.sql);
-        setPurposeCode(q.purposeCode ?? undefined);
+        setRequestId(q.requestId);
         if (q.lintReport) setReport(q.lintReport);
       })
       .catch(() => {
@@ -206,11 +223,42 @@ export default function EditorPage() {
     };
   }, [editId, message]);
 
-  // ---- catalog: purposes + schema completion -------------------------------
+  // ---- catalog: schema completion ------------------------------------------
   useEffect(() => {
-    listPurposes().then(setPurposes).catch(() => void 0);
     getSchemaDict().then(setSchema).catch(() => void 0);
   }, []);
+
+  // ---- 사용 가능한 승인 요청 (현재 actor 기준) --------------------------------
+  useEffect(() => {
+    let alive = true;
+    setUsableLoading(true);
+    listUsableApprovals()
+      .then((list) => {
+        if (!alive) return;
+        setUsable(list);
+        // 현재 선택이 이 actor의 승인 목록에 없으면(사용자 전환 등) 첫 항목으로 재설정
+        setRequestId((prev) =>
+          prev != null && list.some((r) => String(r.id) === String(prev))
+            ? prev
+            : (list[0]?.id ?? undefined),
+        );
+      })
+      .catch(() => {
+        if (alive) setUsable([]);
+      })
+      .finally(() => {
+        if (alive) setUsableLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [actor]);
+
+  const selectedRequest = useMemo(
+    () => usable.find((r) => String(r.id) === String(requestId)) ?? null,
+    [usable, requestId],
+  );
+  const noUsable = !usableLoading && usable.length === 0;
 
   // ---- REAL lint (debounced 500ms) -----------------------------------------
   const runLint = useCallback(
@@ -223,7 +271,8 @@ export default function EditorPage() {
       const seq = ++lintSeq.current;
       setLinting(true);
       try {
-        const r = await lint({ dialect: "MYSQL", sql: body, purposeCode });
+        // purposeCode는 보내지 않는다 — 서버가 requestId에서 주입한다 (C1).
+        const r = await lint({ dialect: "MYSQL", sql: body, requestId });
         if (seq === lintSeq.current) setReport(r);
       } catch {
         if (seq === lintSeq.current && immediate) message.error("규칙 검사에 실패했습니다");
@@ -231,7 +280,7 @@ export default function EditorPage() {
         if (seq === lintSeq.current) setLinting(false);
       }
     },
-    [sql, purposeCode, message],
+    [sql, requestId, message],
   );
 
   useEffect(() => {
@@ -241,7 +290,7 @@ export default function EditorPage() {
     }
     const t = setTimeout(() => void runLint(false), 500);
     return () => clearTimeout(t);
-  }, [sql, purposeCode, runLint]);
+  }, [sql, requestId, runLint]);
 
   // ---- CodeMirror SQL extension (MySQL dialect + schema completion) ---------
   const cmExtensions = useMemo<Extension[]>(
@@ -299,25 +348,34 @@ export default function EditorPage() {
       message.error("SQL을 입력하세요");
       return;
     }
+    if (requestId == null) {
+      message.error("승인된 요청을 선택하세요 — 먼저 승인을 받으세요");
+      return;
+    }
     setSaving(true);
+    setApprovalBlock(null);
     try {
-      const input = { name, dialect: "MYSQL" as const, sql, purposeCode };
+      const input = { name, dialect: "MYSQL" as const, sql, requestId };
       const result = editId ? await updateQuery(editId, input) : await createQuery(input);
       if (result.ok) {
         message.success(editId ? "쿼리가 수정되었습니다" : "쿼리가 저장되었습니다");
         navigate("/queries");
-      } else {
-        // 422 — 저장 차단: 위반 리포트를 규칙 검사 결과에 노출
+      } else if (result.kind === "RULES") {
+        // 422 — 룰 게이트 차단: 위반 리포트를 규칙 검사 결과에 노출
         setReport(result.report);
         setBottomTab("rulecheck");
-        message.error("저장이 차단되었습니다");
+        message.error("규칙 위반으로 저장이 차단되었습니다");
+      } else {
+        // 403 — 승인 게이트 차단: 규칙 위반과 **별도 영역**에 노출 (§8)
+        setApprovalBlock(result.error);
+        message.error("승인 범위를 벗어나 저장이 차단되었습니다");
       }
     } catch (err) {
       message.error(apiErrorMessage(err) ?? "저장에 실패했습니다");
     } finally {
       setSaving(false);
     }
-  }, [queryName, sql, purposeCode, editId, navigate, message]);
+  }, [queryName, sql, requestId, editId, navigate, message]);
 
   const onRuleCheck = useCallback(() => {
     setBottomTab("rulecheck");
@@ -334,13 +392,13 @@ export default function EditorPage() {
     setShowSuggest(false);
   }, []);
 
-  const purposeOptions = useMemo(
+  const requestOptions = useMemo(
     () =>
-      purposes.map((p) => ({
-        value: p.code,
-        label: p.description ? `${p.code} · ${p.description}` : p.code,
+      usable.map((r) => ({
+        value: String(r.id),
+        label: `REQ-${String(r.id)} · ${r.purposeTitle}`,
       })),
-    [purposes],
+    [usable],
   );
 
   const vendorLabel = VENDOR_LABELS[editorVendor];
@@ -388,16 +446,22 @@ export default function EditorPage() {
               onChange={() => void 0}
             />
           </div>
-          <div style={{ width: 180 }}>
-            <Select
-              style={{ width: "100%" }}
-              value={purposeCode}
-              options={purposeOptions}
-              onChange={(v) => setPurposeCode(v)}
-              allowClear
-              placeholder="목적 (purpose)"
-            />
-          </div>
+          <Tooltip title="쿼리는 승인된 요청 범위 안에서만 저장됩니다 (spec 005 §4)">
+            <div style={{ width: 250 }}>
+              <Select
+                style={{ width: "100%" }}
+                value={requestId != null ? String(requestId) : undefined}
+                options={requestOptions}
+                onChange={(v) => {
+                  setRequestId(v);
+                  setApprovalBlock(null);
+                }}
+                loading={usableLoading}
+                disabled={noUsable}
+                placeholder={noUsable ? "승인된 요청 없음" : "승인 요청 선택"}
+              />
+            </div>
+          </Tooltip>
           <Button icon={<ThunderboltOutlined />} onClick={() => setShowSuggest((s) => !s)}>
             추천
           </Button>
@@ -407,13 +471,102 @@ export default function EditorPage() {
           <Button icon={<ThunderboltOutlined />} onClick={onRun}>
             실행
           </Button>
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>
-            {editId ? "수정 저장" : "저장"}
-          </Button>
+          <Tooltip title={noUsable ? "먼저 승인을 받으세요" : ""}>
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              loading={saving}
+              disabled={noUsable || requestId == null}
+              onClick={handleSave}
+            >
+              {editId ? "수정 저장" : "저장"}
+            </Button>
+          </Tooltip>
           <Button icon={<RobotOutlined />} onClick={() => setAiOpen((v) => !v)}>
             AI 에이전트
           </Button>
+          <ActorSelect showLabel={false} width={190} />
         </div>
+
+        {/* 승인 요청 컨텍스트 — 읽기 전용 (§8) */}
+        {noUsable ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="먼저 승인을 받으세요"
+            description="현재 사용자에게 승인 완료된 요청이 없습니다. '승인 요청' 화면에서 요청서를 제출하고 승인을 받은 뒤 쿼리를 저장할 수 있습니다."
+          />
+        ) : (
+          selectedRequest && (
+            <div
+              style={{
+                ...CARD,
+                padding: "12px 16px",
+                display: "flex",
+                gap: 28,
+                alignItems: "flex-start",
+                flexWrap: "wrap",
+                background: C.gray2,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 11, color: C.textTertiary, marginBottom: 4 }}>목적 (승인됨)</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Tag color="blue" style={{ margin: 0 }}>
+                    {selectedRequest.purposeCode}
+                  </Tag>
+                  <span style={{ fontSize: 13 }}>{selectedRequest.purposeTitle}</span>
+                </div>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 11, color: C.textTertiary, marginBottom: 4 }}>승인 범위 테이블</div>
+                <div style={{ fontFamily: MONO_FONT, fontSize: 12, color: C.textSecondary }}>
+                  {selectedRequest.tables.join(", ") || "—"}
+                </div>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 11, color: C.textTertiary, marginBottom: 4 }}>비즈니스 요건</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {selectedRequest.businessReqs.map((r) => (
+                    <Tag key={r} color="geekblue" style={{ margin: 0 }}>
+                      {r}
+                    </Tag>
+                  ))}
+                  {selectedRequest.businessReqs.length === 0 && (
+                    <span style={{ fontSize: 12, color: C.textTertiary }}>—</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        )}
+
+        {/* 승인 게이트 차단(403) — 규칙 위반과 별도 영역 (§8) */}
+        {approvalBlock && (
+          <Alert
+            type="error"
+            showIcon
+            closable
+            onClose={() => setApprovalBlock(null)}
+            message={`승인 게이트 차단 · ${APPROVAL_BLOCK_LABEL[approvalBlock.code] ?? approvalBlock.code}`}
+            description={
+              <div style={{ fontSize: 13 }}>
+                <div>{approvalBlock.message}</div>
+                {approvalBlock.uncoveredTables.length > 0 && (
+                  <div style={{ marginTop: 6, fontFamily: MONO_FONT }}>
+                    승인 범위에 없는 테이블: {approvalBlock.uncoveredTables.join(", ")}
+                  </div>
+                )}
+                {approvalBlock.requestStatus && (
+                  <div style={{ marginTop: 6 }}>
+                    요청 상태: {approvalBlock.requestStatus}
+                    {approvalBlock.requestId != null ? ` (REQ-${String(approvalBlock.requestId)})` : ""}
+                  </div>
+                )}
+              </div>
+            }
+          />
+        )}
 
         {/* code panel (macOS chrome + CodeMirror) */}
         <div style={{ ...CARD, overflow: "hidden", position: "relative" }}>

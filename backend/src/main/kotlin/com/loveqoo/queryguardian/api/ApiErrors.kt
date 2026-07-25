@@ -33,4 +33,9 @@ class ApiExceptionHandler {
     @ExceptionHandler(ConflictException::class)
     fun conflict(e: ConflictException): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.CONFLICT).body(ErrorResponse(e.message ?: "충돌"))
+
+    /** 승인 차단 — 룰 차단(422)과 구분되는 403 (spec 005 §7). */
+    @ExceptionHandler(com.loveqoo.queryguardian.approval.ApprovalBlockedException::class)
+    fun approvalBlocked(e: com.loveqoo.queryguardian.approval.ApprovalBlockedException): ResponseEntity<ApprovalBlockedDto> =
+        ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.detail)
 }

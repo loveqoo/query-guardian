@@ -6,7 +6,8 @@ import java.time.Instant
 
 // ---- lint ----
 
-data class LintRequest(val dialect: String, val sql: String, val purposeCode: String? = null)
+/** purposeCode는 클라이언트가 보내지 않는다 — 서버가 승인 요청에서 주입 (spec 005 C1). */
+data class LintRequest(val dialect: String, val sql: String, val requestId: Long? = null)
 
 data class ViolationDto(val ruleId: String, val severity: Severity, val message: String)
 
@@ -21,11 +22,12 @@ data class LintReportDto(val violations: List<ViolationDto>, val blocked: Boolea
 
 // ---- queries ----
 
+/** purposeCode 없음 — 승인 요청(requestId)에서 서버가 주입 (spec 005 C1). */
 data class SaveQueryRequest(
     val name: String,
     val dialect: String,
     val sql: String,
-    val purposeCode: String? = null,
+    val requestId: Long? = null,
 )
 
 data class QuerySummaryDto(
@@ -33,6 +35,9 @@ data class QuerySummaryDto(
     val name: String,
     val dialect: String,
     val purposeCode: String?,
+    val requestId: Long,
+    val reviewStatus: String,
+    val reviewer: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
 )
@@ -43,6 +48,11 @@ data class QueryDto(
     val dialect: String,
     val sql: String,
     val purposeCode: String?,
+    val requestId: Long,
+    val reviewStatus: String,
+    val reviewer: String?,
+    val reviewedAt: Instant?,
+    val reviewNote: String?,
     val lintReport: LintReportDto,
     val createdAt: Instant,
     val updatedAt: Instant,

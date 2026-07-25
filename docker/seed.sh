@@ -57,4 +57,19 @@ post "rules" "{\"name\":\"PII 마스킹 필수\",\"scope\":\"SINGLE\",\"server\"
   {\"node\":\"group\",\"combinator\":\"all\",\"children\":[
     {\"node\":\"cond\",\"op\":\"must_be_masked\",\"severity\":\"BLOCK\",\"table\":\"users\",\"column\":\"email\",\"defId\":$MASK}]}}" >/dev/null
 
-echo "seed 완료. rules: $(curl -s "$API/rules" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')건"
+echo "== approvals (spec 005) =="
+# 승인 요청 생성 → 순차 승인 완료 (에디터에서 바로 쓸 수 있는 승인된 요청)
+post_as() { curl -s -X POST "$API/$1" -H 'Content-Type: application/json' -H "X-QG-Actor: $2" -d "$3"; }
+REQ=$(post_as "approvals" "u1" '{"purposeTitle":"Q3 마케팅 캠페인 대상자 추출","purposeCode":"marketing",
+  "tables":[{"tableName":"users"},{"tableName":"marketing_consents"},{"tableName":"user_events"}],
+  "ruleIds":[],"businessReqs":["marketing","pii"],
+  "approvers":[{"step":1,"approverId":"ap1"},{"step":2,"approverId":"ap2"}]}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["summary"]["id"])')
+post_as "approvals/$REQ/approve" "ap1" '{}' >/dev/null
+post_as "approvals/$REQ/approve" "ap2" '{}' >/dev/null
+# 대기 중인 요청 하나 더 (승인 화면 데모용)
+post_as "approvals" "u2" '{"purposeTitle":"VIP 고객 리텐션 분석","purposeCode":"marketing",
+  "tables":[{"tableName":"users"}],"ruleIds":[],"businessReqs":["pii","mask"],
+  "approvers":[{"step":1,"approverId":"ap2"}]}' >/dev/null
+
+echo "seed 완료. rules: $(curl -s "$API/rules" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')건, approvals: $(curl -s "$API/approvals" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')건 (승인됨 REQ=$REQ)"

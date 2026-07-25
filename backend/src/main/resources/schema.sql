@@ -47,12 +47,89 @@ CREATE TABLE IF NOT EXISTS rule (
     hit_count     BIGINT NOT NULL DEFAULT 0
 );
 
+-- 승인 요청 (spec 005) --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS approval_request (
+    id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+    purpose_title  VARCHAR(200) NOT NULL,
+    purpose_code   VARCHAR(64) NOT NULL,
+    requester      VARCHAR(64) NOT NULL,
+    status         VARCHAR(16) NOT NULL,
+    current_step   INT NOT NULL,
+    submitted_at   DATETIME(6) NOT NULL,
+    decided_at     DATETIME(6) NULL,
+    version        BIGINT NULL
+);
+
+CREATE TABLE IF NOT EXISTS request_table (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    request_id BIGINT NOT NULL,
+    table_idx  INT NOT NULL,
+    db         VARCHAR(64) NULL,
+    table_name VARCHAR(128) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS request_rule (
+    id                 BIGINT AUTO_INCREMENT PRIMARY KEY,
+    request_id         BIGINT NOT NULL,
+    rule_idx           INT NOT NULL,
+    rule_id            BIGINT NOT NULL,
+    rule_name          VARCHAR(128) NOT NULL,
+    severity_summary   VARCHAR(16) NOT NULL,
+    tree_json_snapshot TEXT NOT NULL,
+    forced             BOOLEAN NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS request_business_req (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    request_id BIGINT NOT NULL,
+    req_idx    INT NOT NULL,
+    code       VARCHAR(64) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS request_approver (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    request_id  BIGINT NOT NULL,
+    step        INT NOT NULL,
+    approver_id VARCHAR(32) NOT NULL,
+    name       VARCHAR(64) NOT NULL,
+    role       VARCHAR(64) NOT NULL,
+    decision   VARCHAR(16) NOT NULL,
+    decided_at DATETIME(6) NULL,
+    CONSTRAINT uq_request_step UNIQUE (request_id, step)
+);
+
+CREATE TABLE IF NOT EXISTS approval_event (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    request_id BIGINT NOT NULL,
+    step       INT NULL,
+    actor      VARCHAR(64) NOT NULL,
+    action     VARCHAR(16) NOT NULL,
+    note       VARCHAR(500) NULL,
+    at         DATETIME(6) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS query_review_event (
+    id                 BIGINT AUTO_INCREMENT PRIMARY KEY,
+    query_id           BIGINT NOT NULL,
+    actor              VARCHAR(64) NOT NULL,
+    decision           VARCHAR(16) NOT NULL,
+    note               VARCHAR(500) NULL,
+    sql_hash           VARCHAR(64) NOT NULL,
+    lint_snapshot_json TEXT NOT NULL,
+    at                 DATETIME(6) NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS saved_query (
     id               BIGINT AUTO_INCREMENT PRIMARY KEY,
     name             VARCHAR(100) NOT NULL,
     dialect          VARCHAR(16) NOT NULL,
     sql_text         TEXT NOT NULL,
     purpose_code     VARCHAR(64) NULL,
+    request_id       BIGINT NOT NULL,
+    review_status    VARCHAR(24) NOT NULL DEFAULT 'PENDING_REVIEW',
+    reviewer         VARCHAR(64) NULL,
+    reviewed_at      DATETIME(6) NULL,
+    review_note      VARCHAR(500) NULL,
     lint_report_json TEXT NOT NULL,
     created_at       DATETIME(6) NOT NULL,
     updated_at       DATETIME(6) NOT NULL

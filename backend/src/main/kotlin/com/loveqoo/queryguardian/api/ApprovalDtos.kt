@@ -1,0 +1,84 @@
+package com.loveqoo.queryguardian.api
+
+import java.time.Instant
+
+// ---- 요청 ----
+
+data class SaveApprovalRequest(
+    val purposeTitle: String,
+    val purposeCode: String,
+    val tables: List<TableRefDto> = emptyList(),
+    val ruleIds: List<Long> = emptyList(),
+    val businessReqs: List<String> = emptyList(),
+    val approvers: List<ApproverInput> = emptyList(),
+)
+
+data class TableRefDto(val db: String? = null, val tableName: String)
+/** approverId는 디렉터리 id(ASCII) — 이름·역할은 서버가 해석한다. */
+data class ApproverInput(val step: Int, val approverId: String)
+data class DecisionRequest(val note: String? = null)
+
+// ---- 응답 ----
+
+data class ApprovalSummaryDto(
+    val id: Long,
+    val purposeTitle: String,
+    val purposeCode: String,
+    val requester: String,
+    val status: String,
+    val currentStep: Int,
+    val tables: List<String>,
+    val businessReqs: List<String>,
+    val approvers: List<ApproverDto>,
+    val submittedAt: Instant,
+    val decidedAt: Instant?,
+)
+
+data class ApproverDto(
+    val step: Int,
+    val approverId: String,
+    val name: String,
+    val role: String,
+    val decision: String,
+    val decidedAt: Instant?,
+)
+
+data class RuleSnapshotDto(
+    val ruleId: Long,
+    val ruleName: String,
+    val severitySummary: String,
+    val forced: Boolean,
+    /** 승인 당시 스냅샷과 현재 규칙이 다른가 (H2 배지). 규칙 삭제 시에도 true. */
+    val changedSinceApproval: Boolean,
+)
+
+data class ApprovalDetailDto(
+    val summary: ApprovalSummaryDto,
+    val rules: List<RuleSnapshotDto>,
+    val events: List<ApprovalEventDto>,
+)
+
+data class ApprovalEventDto(
+    val step: Int?,
+    val actor: String,
+    val action: String,
+    val note: String?,
+    val at: Instant,
+)
+
+/** 승인 차단 응답 (spec 005 §7 — 룰 차단 422와 구분되는 403). */
+data class ApprovalBlockedDto(
+    val code: String, // NO_REQUEST | NOT_APPROVED | REQUESTER_MISMATCH | TABLES_NOT_COVERED
+    val message: String,
+    val requestId: Long? = null,
+    val requestStatus: String? = null,
+    val uncoveredTables: List<String> = emptyList(),
+)
+
+// ---- 검토 ----
+
+data class ReviewRequest(val decision: String, val note: String? = null)
+
+/** id는 actor 헤더·approverId에 쓰이는 ASCII 식별자 — 반드시 함께 내려야 클라이언트가 추측하지 않는다. */
+data class DirectoryPersonDto(val id: String, val name: String, val role: String)
+data class BusinessReqDto(val code: String, val label: String, val description: String)

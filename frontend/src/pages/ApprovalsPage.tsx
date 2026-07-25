@@ -1,10 +1,15 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   App,
   Button,
   Checkbox,
+  Empty,
   Input,
+  Modal,
+  Popconfirm,
   Select,
+  Spin,
   Tabs,
   Tag,
   theme,
@@ -14,141 +19,258 @@ import {
   DeleteOutlined,
   DownOutlined,
   PlusOutlined,
+  ReloadOutlined,
   SearchOutlined,
   UploadOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
-import { MONO_FONT, STATUS_COLOR, STATUS_LABEL, VENDOR_COLOR } from "../theme";
+import { MONO_FONT, STATUS_COLOR, STATUS_LABEL } from "../theme";
+import ActorSelect, { personLabel, useActor, useDirectory } from "../components/ActorSelect";
 import {
-  approverPool,
-  baseApprovals,
-  businessReqs,
-  reqTableOptions,
-  ruleTrees,
-  rulesMeta,
-} from "../mock/design";
-import type { Approver } from "../mock/design";
-
-/** Stub message for the approval workflow (spec 003 §4-2 → implemented in spec 004). */
-const STUB_MSG = "승인 워크플로는 다음 단계(spec 004)에서 구현됩니다";
-
-/** Approver row in the sequential approval line (local editable state). */
-interface ReqApprover extends Approver {
-  id: string;
-}
+  apiErrorMessage,
+  approveApproval,
+  cancelApproval,
+  createApproval,
+  getApproval,
+  listApprovals,
+  listBusinessReqs,
+  listPurposes,
+  listRules,
+  listTables,
+  rejectApproval,
+  type ApprovalDetail,
+  type ApprovalStatus,
+  type ApprovalSummary,
+  type BusinessReq,
+  type CatalogTable,
+  type Purpose,
+  type RuleDto,
+} from "../api/client";
 
 /**
- * Tables referenced by a rule tree, as `db.table` keys.
- * Ports dc.html ruleTablesOf() (line 1387) — our ruleTrees are flat, so a
- * direct child scan replaces _collectLeaves recursion.
+ * 승인 요청 화면 (spec 005 §8) — 실 API 연결.
+ * 화면 골격은 디자인 원본(dc.html 418–556)을 유지하고 데이터·액션만 실 백엔드로 교체했다.
  */
-function ruleTablesOf(rk: string): string[] {
-  const tree = ruleTrees[rk];
-  if (!tree) return [];
-  return Array.from(
-    new Set(
-      tree.children
-        .filter((n) => n.table)
-        .map((n) => `${n.db}.${n.table}`),
-    ),
-  );
+
+/** §6 필수 카피 (H3) — 문구 변경 금지. */
+const RULE_AUDIT_COPY =
+  "체크한 규칙은 감사 기록용입니다. 실제 판정에는 활성 규칙 전체가 항상 적용되며, 체크를 해제해도 면제되지 않습니다.";
+
+/** 백엔드 상태(대문자) → theme STATUS_* 키(소문자). */
+function statusKey(s: string): string {
+  return s.toLowerCase();
+}
+
+const DECISION_LABEL: Record<string, string> = {
+  PENDING: "대기",
+  APPROVED: "승인",
+  REJECTED: "반려",
+};
+const DECISION_COLOR: Record<string, string> = {
+  PENDING: "default",
+  APPROVED: "green",
+  REJECTED: "red",
+};
+
+const ACTION_LABEL: Record<string, string> = {
+  SUBMIT: "제출",
+  APPROVE: "승인",
+  REJECT: "반려",
+  CANCEL: "취소",
+};
+
+const AVATAR_COLORS = ["#722ed1", "#1677ff", "#13c2c2", "#fa8c16", "#eb2f96"];
+
+function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return iso.length >= 16 ? iso.slice(0, 16).replace("T", " ") : iso;
+}
+
+function fmtDate(iso: string | null | undefined): string {
+  return iso && iso.length >= 10 ? iso.slice(0, 10) : "—";
 }
 
 export default function ApprovalsPage() {
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const GRAY2 = "#fafafa";
+  const label12 = { fontSize: 12, color: token.colorTextTertiary };
+
+  const [actor] = useActor();
+  const { users, approvers: approverPool } = useDirectory();
 
   const [tab, setTab] = useState<"list" | "new">("list");
 
-  // --- 요청 목록 filters ---
+  // ---- 목록 -----------------------------------------------------------------
+  const [items, setItems] = useState<ApprovalSummary[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState<"all" | ApprovalStatus>("all");
   const [requester, setRequester] = useState("all");
-  const [approver, setApprover] = useState("all");
+  const [approverFilter, setApproverFilter] = useState("all");
 
-  // --- 새 요청 작성 form state (seeded from dc.html line 854–859) ---
-  const [purpose, setPurpose] = useState("");
-  const [reqChecks, setReqChecks] = useState<Record<string, boolean>>({
-    marketing: true,
-    pii: true,
-    mask: true,
-    retention: false,
-    external: false,
-  });
-  const [reqTables, setReqTables] = useState<string[]>(["t1", "t2"]);
-  const [reqRules, setReqRules] = useState<string[]>(["r1", "r2"]);
-  const [reqApprovers, setReqApprovers] = useState<ReqApprover[]>([
-    { id: "ap1", name: "최지훈", role: "마케팅본부장", initial: "최", color: "#722ed1" },
-    { id: "ap2", name: "한도윤", role: "데이터플랫폼장", initial: "한", color: "#1677ff" },
-  ]);
+  // ---- 참조 데이터 ----------------------------------------------------------
+  const [purposes, setPurposes] = useState<Purpose[]>([]);
+  const [catalogTables, setCatalogTables] = useState<CatalogTable[]>([]);
+  const [rules, setRules] = useState<RuleDto[]>([]);
+  const [businessReqs, setBusinessReqs] = useState<BusinessReq[]>([]);
 
-  const requesterOptions = useMemo(
-    () => [
-      { label: "요청자 전체", value: "all" },
-      ...Array.from(new Set(baseApprovals.map((a) => a.requester))).map((x) => ({
-        label: x,
-        value: x,
-      })),
-    ],
-    [],
-  );
-  const approverOptions = useMemo(
-    () => [
-      { label: "승인자 전체", value: "all" },
-      ...Array.from(new Set(baseApprovals.map((a) => a.approver))).map((x) => ({
-        label: x,
-        value: x,
-      })),
-    ],
-    [],
-  );
+  // ---- 새 요청 작성 폼 -------------------------------------------------------
+  const [purposeTitle, setPurposeTitle] = useState("");
+  const [purposeCode, setPurposeCode] = useState<string | undefined>(undefined);
+  const [formTables, setFormTables] = useState<string[]>([]);
+  const [formRules, setFormRules] = useState<string[]>([]);
+  const [formReqs, setFormReqs] = useState<string[]>([]);
+  const [formApprovers, setFormApprovers] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
 
-  const filtered = useMemo(
-    () =>
-      baseApprovals.filter(
-        (a) =>
-          (!search ||
-            (a.id + " " + a.purpose).toLowerCase().includes(search.toLowerCase())) &&
-          (status === "all" || a.status === status) &&
-          (requester === "all" || a.requester === requester) &&
-          (approver === "all" || a.approver === approver),
-      ),
-    [search, status, requester, approver],
-  );
+  // ---- 상세 -----------------------------------------------------------------
+  const [detail, setDetail] = useState<ApprovalDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
-  const toggleReqRule = (key: string) =>
-    setReqRules((prev) =>
-      prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key],
+  // ---- 반려 사유 모달 --------------------------------------------------------
+  const [rejectTarget, setRejectTarget] = useState<ApprovalSummary | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
+  const [acting, setActing] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const list = await listApprovals({
+        status: status === "all" ? undefined : status,
+        requester: requester === "all" ? undefined : requester,
+      });
+      setItems(list);
+    } catch {
+      message.error("승인 요청 목록을 불러오지 못했습니다");
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [status, requester, message]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    listPurposes().then(setPurposes).catch(() => void 0);
+    listTables().then(setCatalogTables).catch(() => void 0);
+    listRules().then(setRules).catch(() => void 0);
+    listBusinessReqs().then(setBusinessReqs).catch(() => void 0);
+  }, []);
+
+  // 승인자 풀이 로드되면 기본 2단계 라인을 세팅한다 (디자인 원본과 동일한 초기 상태).
+  useEffect(() => {
+    if (approverPool.length > 0 && formApprovers.length === 0) {
+      setFormApprovers(approverPool.slice(0, 2).map((a) => a.id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approverPool]);
+
+  const reqLabel = useMemo(() => {
+    const m: Record<string, string> = {};
+    businessReqs.forEach((b) => (m[b.code] = b.label));
+    return m;
+  }, [businessReqs]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return items.filter(
+      (a) =>
+        (!q || `REQ-${a.id} ${a.purposeTitle} ${a.purposeCode}`.toLowerCase().includes(q)) &&
+        (approverFilter === "all" || a.approvers.some((x) => x.approverId === approverFilter)),
     );
-  const toggleReqTable = (id: string) =>
-    setReqTables((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
-  const toggleCheck = (key: string) =>
-    setReqChecks((prev) => ({ ...prev, [key]: !prev[key] }));
-  const addApprover = () =>
-    setReqApprovers((prev) => {
-      const next = approverPool[prev.length % approverPool.length];
-      return [...prev, { ...next, id: "ap" + Date.now() }];
-    });
-  const removeApprover = (id: string) =>
-    setReqApprovers((prev) => (prev.length > 1 ? prev.filter((a) => a.id !== id) : prev));
+  }, [items, search, approverFilter]);
 
-  const label12 = { fontSize: 12, color: token.colorTextTertiary };
+  // ---- 액션 -----------------------------------------------------------------
+  /** 성공하면 true. 409(순서 아닌 actor·재결정·이미 결정됨)는 서버 메시지를 그대로 노출한다. */
+  async function runAction(fn: () => Promise<unknown>, okMsg: string): Promise<boolean> {
+    setActing(true);
+    try {
+      await fn();
+      message.success(okMsg);
+      await load();
+      return true;
+    } catch (err) {
+      message.error(apiErrorMessage(err) ?? "처리에 실패했습니다");
+      return false;
+    } finally {
+      setActing(false);
+    }
+  }
 
-  // ========================================================================
+  function openDetail(id: ApprovalSummary["id"]) {
+    setDetailLoading(true);
+    setDetail(null);
+    getApproval(id)
+      .then(setDetail)
+      .catch(() => message.error("요청 상세를 불러오지 못했습니다"))
+      .finally(() => setDetailLoading(false));
+  }
+
+  async function submitRequest() {
+    if (!purposeTitle.trim()) {
+      message.error("쿼리 목적을 입력하세요");
+      return;
+    }
+    if (!purposeCode) {
+      message.error("목적 코드(purpose)를 선택하세요");
+      return;
+    }
+    if (formTables.length === 0) {
+      message.error("조회 대상 테이블을 1개 이상 선택하세요");
+      return;
+    }
+    const line = formApprovers.filter(Boolean);
+    if (line.length === 0) {
+      message.error("승인자를 1명 이상 지정하세요");
+      return;
+    }
+    if (new Set(line).size !== line.length) {
+      message.error("같은 승인자를 여러 단계에 지정할 수 없습니다");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await createApproval({
+        purposeTitle: purposeTitle.trim(),
+        purposeCode,
+        tables: formTables.map((tableName) => ({ tableName })),
+        ruleIds: formRules.map((r) => Number(r)).filter((n) => !Number.isNaN(n)),
+        businessReqs: formReqs,
+        approvers: line.map((approverId, i) => ({ step: i + 1, approverId })),
+      });
+      message.success("승인 요청을 제출했습니다");
+      setPurposeTitle("");
+      setFormTables([]);
+      setFormRules([]);
+      setFormReqs([]);
+      setTab("list");
+      await load();
+    } catch (err) {
+      message.error(apiErrorMessage(err) ?? "승인 요청 제출에 실패했습니다");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // 미선택 강제(BLOCK) 규칙 — 실시간 (§6)
+  const unselectedBlockRules = useMemo(
+    () => rules.filter((r) => r.enabled && r.severity === "BLOCK" && !formRules.includes(String(r.id))),
+    [rules, formRules],
+  );
+
+  const toggle = (setter: (fn: (prev: string[]) => string[]) => void, key: string) =>
+    setter((prev) => (prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]));
+
+  // ==========================================================================
   // 요청 목록
-  // ========================================================================
+  // ==========================================================================
   const listView = (
     <>
       <div
-        style={{
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          flexWrap: "wrap",
-          marginBottom: 16,
-        }}
+        style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}
       >
         <Input
           style={{ width: 240 }}
@@ -161,155 +283,201 @@ export default function ApprovalsPage() {
         <Select
           style={{ width: 140 }}
           value={status}
-          onChange={setStatus}
+          onChange={(v) => setStatus(v)}
           options={[
             { label: "상태 전체", value: "all" },
-            { label: "승인 대기", value: "pending" },
-            { label: "승인됨", value: "approved" },
-            { label: "반려됨", value: "rejected" },
-            { label: "요청 취소됨", value: "cancelled" },
+            { label: "승인 대기", value: "PENDING" },
+            { label: "승인됨", value: "APPROVED" },
+            { label: "반려됨", value: "REJECTED" },
+            { label: "요청 취소됨", value: "CANCELLED" },
           ]}
         />
         <Select
-          style={{ width: 150 }}
+          style={{ width: 160 }}
           value={requester}
           onChange={setRequester}
-          options={requesterOptions}
+          options={[
+            { label: "요청자 전체", value: "all" },
+            ...users.map((u) => ({ label: u.name, value: u.id })),
+          ]}
         />
         <Select
           style={{ width: 220 }}
-          value={approver}
-          onChange={setApprover}
-          options={approverOptions}
+          value={approverFilter}
+          onChange={setApproverFilter}
+          options={[
+            { label: "승인자 전체", value: "all" },
+            ...approverPool.map((a) => ({ label: `${a.name} · ${a.role}`, value: a.id })),
+          ]}
         />
+        <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+          새로고침
+        </Button>
+        <span style={{ marginLeft: "auto" }}>
+          <ActorSelect />
+        </span>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {filtered.map((a) => {
-          const pending = a.status === "pending";
-          return (
-            <div
-              key={a.id}
-              style={{
-                background: "#fff",
-                border: `1px solid ${token.colorBorderSecondary}`,
-                borderRadius: 8,
-                padding: "18px 20px",
-              }}
-            >
+      <Spin spinning={loading}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 120 }}>
+          {filtered.length === 0 && !loading && (
+            <Empty description="승인 요청이 없습니다. '새 요청 작성'에서 제출하세요." />
+          )}
+          {filtered.map((a) => {
+            const pending = a.status === "PENDING";
+            const currentApprover = a.approvers.find((x) => x.step === a.currentStep);
+            const isCurrentApprover = pending && currentApprover?.approverId === actor;
+            const isRequester = a.requester === actor;
+            return (
               <div
+                key={String(a.id)}
                 style={{
-                  display: "flex",
-                  alignItems: "flex-start",
-                  justifyContent: "space-between",
-                  gap: 12,
+                  background: "#fff",
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: 8,
+                  padding: "18px 20px",
                 }}
               >
-                <div style={{ minWidth: 0 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      marginBottom: 4,
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontFamily: MONO_FONT,
-                        fontSize: 12,
-                        color: token.colorTextTertiary,
-                      }}
-                    >
-                      {a.id}
-                    </span>
-                    <Tag color={STATUS_COLOR[a.status]}>{STATUS_LABEL[a.status]}</Tag>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 15,
-                      fontWeight: 600,
-                      color: token.colorTextHeading,
-                    }}
-                  >
-                    {a.purpose}
-                  </div>
-                </div>
-                <div style={{ textAlign: "right", flex: "none" }}>
-                  <div style={label12}>요청일</div>
-                  <div style={{ fontSize: 13 }}>{a.date}</div>
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 32, marginTop: 14, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ ...label12, marginBottom: 4 }}>요청자</div>
-                  <div style={{ fontSize: 13 }}>{a.requester}</div>
-                </div>
-                <div>
-                  <div style={{ ...label12, marginBottom: 4 }}>승인자 (상위 조직장)</div>
-                  <div style={{ fontSize: 13 }}>{a.approver}</div>
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ ...label12, marginBottom: 4 }}>조회 테이블</div>
-                  <div
-                    style={{
-                      fontFamily: MONO_FONT,
-                      fontSize: 12,
-                      color: token.colorTextSecondary,
-                    }}
-                  >
-                    {a.tables.join(", ")}
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 6, marginTop: 14, flexWrap: "wrap" }}>
-                {a.reqs.map((r, i) => (
-                  <Tag key={i} color="geekblue">
-                    {r}
-                  </Tag>
-                ))}
-              </div>
-
-              {pending && (
                 <div
                   style={{
                     display: "flex",
-                    gap: 8,
-                    marginTop: 16,
-                    paddingTop: 14,
-                    borderTop: `1px solid ${token.colorSplit}`,
-                    justifyContent: "flex-end",
-                    alignItems: "center",
+                    alignItems: "flex-start",
+                    justifyContent: "space-between",
+                    gap: 12,
                   }}
                 >
-                  <Button size="small" onClick={() => message.info(STUB_MSG)}>
-                    요청 취소
-                  </Button>
-                  <Button size="small" danger onClick={() => message.info(STUB_MSG)}>
-                    반려
-                  </Button>
-                  <Button
-                    size="small"
-                    type="primary"
-                    icon={<CheckOutlined />}
-                    onClick={() => message.info(STUB_MSG)}
-                  >
-                    승인
-                  </Button>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                      <a
+                        onClick={() => openDetail(a.id)}
+                        style={{ fontFamily: MONO_FONT, fontSize: 12, color: token.colorLink }}
+                      >
+                        REQ-{String(a.id)}
+                      </a>
+                      <Tag color={STATUS_COLOR[statusKey(a.status)] ?? "default"}>
+                        {STATUS_LABEL[statusKey(a.status)] ?? a.status}
+                      </Tag>
+                      <Tag color="blue">{a.purposeCode}</Tag>
+                      {pending && (
+                        <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
+                          {a.currentStep}차 승인 대기
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: token.colorTextHeading }}>
+                      {a.purposeTitle}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", flex: "none" }}>
+                    <div style={label12}>요청일</div>
+                    <div style={{ fontSize: 13 }}>{fmtDate(a.submittedAt)}</div>
+                  </div>
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+
+                <div style={{ display: "flex", gap: 32, marginTop: 14, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ ...label12, marginBottom: 4 }}>요청자</div>
+                    <div style={{ fontSize: 13 }}>{personLabel(users, a.requester)}</div>
+                  </div>
+                  <div>
+                    <div style={{ ...label12, marginBottom: 4 }}>승인 라인 (순차)</div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {a.approvers.map((ap) => (
+                        <Tag
+                          key={ap.step}
+                          color={DECISION_COLOR[ap.decision] ?? "default"}
+                          style={{ margin: 0 }}
+                        >
+                          {ap.step}. {ap.name} · {DECISION_LABEL[ap.decision] ?? ap.decision}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ ...label12, marginBottom: 4 }}>조회 테이블</div>
+                    <div
+                      style={{
+                        fontFamily: MONO_FONT,
+                        fontSize: 12,
+                        color: token.colorTextSecondary,
+                      }}
+                    >
+                      {a.tables.join(", ") || "—"}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 6, marginTop: 14, flexWrap: "wrap" }}>
+                  {a.businessReqs.map((r) => (
+                    <Tag key={r} color="geekblue">
+                      {reqLabel[r] ?? r}
+                    </Tag>
+                  ))}
+                </div>
+
+                {pending && (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      marginTop: 16,
+                      paddingTop: 14,
+                      borderTop: `1px solid ${token.colorSplit}`,
+                      justifyContent: "flex-end",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span style={{ marginRight: "auto", fontSize: 11, color: token.colorTextTertiary }}>
+                      현재 사용자: {personLabel([...users, ...approverPool], actor)}
+                      {isCurrentApprover
+                        ? " · 이 단계의 승인자입니다"
+                        : isRequester
+                          ? " · 요청자 (취소 가능)"
+                          : " · 이 단계의 승인자가 아닙니다 (시도 시 409)"}
+                    </span>
+                    <Popconfirm
+                      title="요청 취소"
+                      description="이 승인 요청을 취소하시겠습니까?"
+                      okText="취소하기"
+                      cancelText="닫기"
+                      onConfirm={() => runAction(() => cancelApproval(a.id), "요청을 취소했습니다")}
+                    >
+                      <Button size="small" loading={acting}>
+                        요청 취소
+                      </Button>
+                    </Popconfirm>
+                    <Button
+                      size="small"
+                      danger
+                      onClick={() => {
+                        setRejectTarget(a);
+                        setRejectNote("");
+                      }}
+                    >
+                      반려
+                    </Button>
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<CheckOutlined />}
+                      loading={acting}
+                      onClick={() => runAction(() => approveApproval(a.id), "승인했습니다")}
+                    >
+                      승인
+                    </Button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </Spin>
     </>
   );
 
-  // ========================================================================
+  // ==========================================================================
   // 새 요청 작성 — 쿼리 작성 요청서
-  // ========================================================================
+  // ==========================================================================
   const newView = (
     <div
       style={{
@@ -319,13 +487,14 @@ export default function ApprovalsPage() {
         padding: "28px 32px",
       }}
     >
-      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>
-        쿼리 작성 요청서
-      </div>
-      <div
-        style={{ fontSize: 13, color: token.colorTextSecondary, marginBottom: 24 }}
-      >
-        요건을 제출하면 지정된 상위 조직장의 승인 후 쿼리 작성이 가능합니다.
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 16, marginBottom: 24 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>쿼리 작성 요청서</div>
+          <div style={{ fontSize: 13, color: token.colorTextSecondary }}>
+            요건을 제출하면 지정된 상위 조직장의 순차 승인 후 쿼리 작성이 가능합니다.
+          </div>
+        </div>
+        <ActorSelect />
       </div>
 
       {/* 1. 쿼리 목적 */}
@@ -335,147 +504,165 @@ export default function ApprovalsPage() {
         </label>
         <Input.TextArea
           rows={2}
+          maxLength={200}
+          showCount
           placeholder="예: Q3 마케팅 캠페인 대상자 추출"
-          value={purpose}
-          onChange={(e) => setPurpose(e.target.value)}
+          value={purposeTitle}
+          onChange={(e) => setPurposeTitle(e.target.value)}
         />
       </div>
 
-      {/* 2. 조회 대상 테이블 · 적용 규칙 */}
+      {/* 2. 목적 코드 (관리형) */}
       <div style={{ marginBottom: 20 }}>
         <label style={{ display: "block", fontSize: 14, fontWeight: 500, marginBottom: 8 }}>
-          조회 대상 테이블 · 적용 규칙 <span style={{ color: token.colorError }}>*</span>
+          목적 코드 (purpose) <span style={{ color: token.colorError }}>*</span>
+        </label>
+        <div style={{ ...label12, marginBottom: 8 }}>
+          판정에 쓰이는 purpose는 이 요청서에서 승인된 값이 사용됩니다 — 에디터에서 임의로 바꿀 수 없습니다.
+        </div>
+        <Select
+          style={{ width: 320 }}
+          value={purposeCode}
+          onChange={setPurposeCode}
+          placeholder="목적 코드 선택"
+          options={purposes.map((p) => ({
+            value: p.code,
+            label: p.description ? `${p.code} · ${p.description}` : p.code,
+          }))}
+        />
+      </div>
+
+      {/* 3. 조회 대상 테이블 (카탈로그 선택만) */}
+      <div style={{ marginBottom: 20 }}>
+        <label style={{ display: "block", fontSize: 14, fontWeight: 500, marginBottom: 8 }}>
+          조회 대상 테이블 <span style={{ color: token.colorError }}>*</span>
         </label>
         <div style={{ ...label12, marginBottom: 10 }}>
-          테이블을 선택하면 연결된 규칙이 펼쳐집니다. 함께 적용할 규칙을 선택하세요.
+          카탈로그에 등록된 테이블만 선택할 수 있습니다(자유 입력 불가). 저장 시 쿼리가 참조하는 모든
+          테이블이 이 집합 안에 있어야 합니다.
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {reqTableOptions.map((o) => {
-            const selected = reqTables.includes(o.id);
-            const qkey = `${o.db}.${o.table}`;
-            const rules = rulesMeta.filter(
-              (r) => r.scope === "global" || ruleTablesOf(r.key).includes(qkey),
-            );
-            const selCount = rules.filter((r) => reqRules.includes(r.key)).length;
-            const ruleCountLabel = selected
-              ? `${selCount}/${rules.length} 규칙 선택`
-              : `${rules.length} 규칙 연결`;
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {catalogTables.map((t) => {
+            const selected = formTables.includes(t.name);
             return (
               <div
-                key={o.id}
+                key={String(t.id)}
+                onClick={() => toggle(setFormTables, t.name)}
                 style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 14px",
                   borderRadius: 8,
-                  overflow: "hidden",
-                  border: `1px solid ${
-                    selected ? token.colorPrimary : token.colorBorderSecondary
-                  }`,
+                  cursor: "pointer",
+                  border: `1px solid ${selected ? token.colorPrimary : token.colorBorderSecondary}`,
+                  background: selected ? token.colorPrimaryBg : "#fff",
                 }}
               >
-                <div
-                  onClick={() => toggleReqTable(o.id)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "10px 14px",
-                    cursor: "pointer",
-                    background: selected ? token.colorPrimaryBg : "#fff",
-                  }}
-                >
-                  <span style={{ width: 92, flex: "none" }}>
-                    <Tag color={VENDOR_COLOR[o.vendor]}>{o.vendor}</Tag>
+                <Checkbox
+                  checked={selected}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggle(setFormTables, t.name)}
+                />
+                <span style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
+                  <span style={{ fontFamily: MONO_FONT, fontSize: 13, color: token.colorText }}>
+                    {t.name}
                   </span>
-                  <span
-                    style={{
-                      display: "flex",
-                      flexDirection: "column",
-                      minWidth: 0,
-                      flex: 1,
-                    }}
-                  >
-                    <span style={{ fontFamily: MONO_FONT, fontSize: 13, color: token.colorText }}>
-                      {o.db}.{o.table}
-                    </span>
-                    <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
-                      {ruleCountLabel}
-                    </span>
+                  <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
+                    {t.description || `${t.columns.length}개 컬럼`}
                   </span>
-                  {selected && (
-                    <span style={{ display: "inline-flex", color: token.colorPrimary }}>
-                      <CheckOutlined />
-                    </span>
-                  )}
-                </div>
+                </span>
                 {selected && (
-                  <div
-                    style={{
-                      padding: "10px 12px 12px",
-                      borderTop: `1px solid ${token.colorBorderSecondary}`,
-                      background: GRAY2,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                    }}
-                  >
-                    {rules.map((r) => {
-                      const checked = reqRules.includes(r.key);
-                      return (
-                        <div
-                          key={r.key}
-                          onClick={() => toggleReqRule(r.key)}
-                          style={{
-                            display: "flex",
-                            gap: 10,
-                            alignItems: "center",
-                            padding: "9px 12px",
-                            borderRadius: 6,
-                            cursor: "pointer",
-                            border: `1px solid ${
-                              checked ? token.colorPrimaryBorder : token.colorBorderSecondary
-                            }`,
-                            background: checked ? token.colorPrimaryBg : "#fff",
-                          }}
-                        >
-                          <Checkbox
-                            checked={checked}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={() => toggleReqRule(r.key)}
-                          />
-                          <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500 }}>
-                            {r.name}
-                          </span>
-                          {r.scope === "global" && <Tag color="gold">전역</Tag>}
-                          <Tag color={r.severity === "error" ? "red" : "gold"}>
-                            {r.severity === "error" ? "오류" : "경고"}
-                          </Tag>
-                        </div>
-                      );
-                    })}
-                    {rules.length === 0 && (
-                      <div style={{ fontSize: 12, color: token.colorTextTertiary, padding: 2 }}>
-                        이 테이블에 연결된 규칙이 없습니다.
-                      </div>
-                    )}
-                  </div>
+                  <span style={{ display: "inline-flex", color: token.colorPrimary }}>
+                    <CheckOutlined />
+                  </span>
                 )}
               </div>
             );
           })}
+          {catalogTables.length === 0 && (
+            <Empty description="카탈로그에 등록된 테이블이 없습니다" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          )}
         </div>
       </div>
 
-      {/* 3. 비즈니스 요건 */}
+      {/* 4. 적용 규칙 (감사 기록용) */}
+      <div style={{ marginBottom: 20 }}>
+        <label style={{ display: "block", fontSize: 14, fontWeight: 500, marginBottom: 8 }}>
+          적용 규칙 (감사 기록용)
+        </label>
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={RULE_AUDIT_COPY} />
+        {unselectedBlockRules.length > 0 && (
+          <Alert
+            type="info"
+            showIcon
+            icon={<WarningOutlined />}
+            style={{ marginBottom: 12 }}
+            message={`미선택 강제(BLOCK) 규칙 ${unselectedBlockRules.length}건 — 선택 여부와 무관하게 항상 적용됩니다`}
+            description={
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                {unselectedBlockRules.map((r) => (
+                  <Tag key={String(r.id)} color="red" style={{ margin: 0 }}>
+                    {r.name}
+                  </Tag>
+                ))}
+              </div>
+            }
+          />
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {rules.map((r) => {
+            const key = String(r.id);
+            const checked = formRules.includes(key);
+            return (
+              <div
+                key={key}
+                onClick={() => toggle(setFormRules, key)}
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "center",
+                  padding: "9px 12px",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  border: `1px solid ${checked ? token.colorPrimaryBorder : token.colorBorderSecondary}`,
+                  background: checked ? token.colorPrimaryBg : "#fff",
+                }}
+              >
+                <Checkbox
+                  checked={checked}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggle(setFormRules, key)}
+                />
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 500 }}>{r.name}</span>
+                {r.scope === "GLOBAL" && <Tag color="gold">전역</Tag>}
+                {!r.enabled && <Tag color="default">비활성</Tag>}
+                <Tag color={r.severity === "BLOCK" ? "red" : r.severity === "WARN" ? "gold" : "default"}>
+                  {r.severity === "BLOCK" ? "차단" : r.severity === "WARN" ? "경고" : "판정없음"}
+                </Tag>
+              </div>
+            );
+          })}
+          {rules.length === 0 && (
+            <div style={{ fontSize: 12, color: token.colorTextTertiary }}>
+              등록된 규칙이 없습니다.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 5. 비즈니스 요건 */}
       <div style={{ marginBottom: 20 }}>
         <label style={{ display: "block", fontSize: 14, fontWeight: 500, marginBottom: 12 }}>
           비즈니스 요건 (해당 항목 체크)
         </label>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {businessReqs.map((b) => {
-            const checked = !!reqChecks[b.key];
+            const checked = formReqs.includes(b.code);
             return (
               <div
-                key={b.key}
-                onClick={() => toggleCheck(b.key)}
+                key={b.code}
+                onClick={() => toggle(setFormReqs, b.code)}
                 style={{
                   display: "flex",
                   gap: 12,
@@ -483,21 +670,19 @@ export default function ApprovalsPage() {
                   padding: "12px 14px",
                   borderRadius: 8,
                   cursor: "pointer",
-                  border: `1px solid ${
-                    checked ? token.colorPrimaryBorder : token.colorBorderSecondary
-                  }`,
+                  border: `1px solid ${checked ? token.colorPrimaryBorder : token.colorBorderSecondary}`,
                   background: checked ? token.colorPrimaryBg : "#fff",
                 }}
               >
                 <Checkbox
                   checked={checked}
                   onClick={(e) => e.stopPropagation()}
-                  onChange={() => toggleCheck(b.key)}
+                  onChange={() => toggle(setFormReqs, b.code)}
                 />
                 <span style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 500 }}>{b.label}</div>
                   <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 2 }}>
-                    {b.desc}
+                    {b.description}
                   </div>
                 </span>
               </div>
@@ -506,117 +691,134 @@ export default function ApprovalsPage() {
         </div>
       </div>
 
-      {/* 4. 승인 라인 (순차 승인) */}
+      {/* 6. 승인 라인 (순차 승인) */}
       <div style={{ marginBottom: 20 }}>
         <label style={{ display: "block", fontSize: 14, fontWeight: 500, marginBottom: 8 }}>
-          승인 라인 (순차 승인)
+          승인 라인 (순차 승인) <span style={{ color: token.colorError }}>*</span>
         </label>
         <div style={{ ...label12, marginBottom: 12 }}>
-          위에서부터 순서대로 승인이 진행됩니다
+          위에서부터 순서대로 승인이 진행됩니다 · 같은 사람을 두 단계에 넣을 수 없습니다 (최대 10단계)
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-          {reqApprovers.map((ap, i) => (
-            <div key={ap.id}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  background: GRAY2,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  borderRadius: 8,
-                  padding: "12px 14px",
-                }}
-              >
-                <span
-                  style={{
-                    width: 24,
-                    height: 24,
-                    flex: "none",
-                    borderRadius: "50%",
-                    background: token.colorPrimary,
-                    color: "#fff",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 12,
-                    fontWeight: 600,
-                  }}
-                >
-                  {i + 1}
-                </span>
-                <span
-                  style={{
-                    width: 34,
-                    height: 34,
-                    flex: "none",
-                    borderRadius: "50%",
-                    background: ap.color,
-                    color: "#fff",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 14,
-                    fontWeight: 600,
-                  }}
-                >
-                  {ap.initial}
-                </span>
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500 }}>{ap.name}</div>
-                  <div style={{ fontSize: 12, color: token.colorTextTertiary }}>{ap.role}</div>
-                </span>
-                <span style={{ fontSize: 11, color: token.colorTextTertiary }}>
-                  {i + 1}차 승인
-                </span>
-                {reqApprovers.length > 1 && (
-                  <span
-                    onClick={() => removeApprover(ap.id)}
-                    style={{
-                      cursor: "pointer",
-                      color: token.colorTextTertiary,
-                      display: "inline-flex",
-                    }}
-                  >
-                    <DeleteOutlined />
-                  </span>
-                )}
-              </div>
-              {i < reqApprovers.length - 1 && (
+          {formApprovers.map((id, i) => {
+            const person = approverPool.find((p) => p.id === id);
+            return (
+              <div key={`${id}-${i}`}>
                 <div
                   style={{
                     display: "flex",
-                    justifyContent: "center",
-                    padding: "6px 0",
-                    color: token.colorTextQuaternary,
+                    alignItems: "center",
+                    gap: 12,
+                    background: GRAY2,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    borderRadius: 8,
+                    padding: "12px 14px",
                   }}
                 >
-                  <DownOutlined />
+                  <span
+                    style={{
+                      width: 24,
+                      height: 24,
+                      flex: "none",
+                      borderRadius: "50%",
+                      background: token.colorPrimary,
+                      color: "#fff",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 12,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {i + 1}
+                  </span>
+                  <span
+                    style={{
+                      width: 34,
+                      height: 34,
+                      flex: "none",
+                      borderRadius: "50%",
+                      background: AVATAR_COLORS[i % AVATAR_COLORS.length],
+                      color: "#fff",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 14,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {(person?.name ?? "?").slice(0, 1)}
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <Select
+                      style={{ width: "100%", maxWidth: 320 }}
+                      value={id}
+                      onChange={(v) =>
+                        setFormApprovers((prev) => prev.map((x, idx) => (idx === i ? v : x)))
+                      }
+                      options={approverPool.map((p) => ({
+                        value: p.id,
+                        label: `${p.name} · ${p.role}`,
+                        disabled: formApprovers.includes(p.id) && p.id !== id,
+                      }))}
+                    />
+                  </span>
+                  <span style={{ fontSize: 11, color: token.colorTextTertiary }}>{i + 1}차 승인</span>
+                  {formApprovers.length > 1 && (
+                    <span
+                      onClick={() =>
+                        setFormApprovers((prev) => prev.filter((_, idx) => idx !== i))
+                      }
+                      style={{ cursor: "pointer", color: token.colorTextTertiary, display: "inline-flex" }}
+                    >
+                      <DeleteOutlined />
+                    </span>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
+                {i < formApprovers.length - 1 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "center",
+                      padding: "6px 0",
+                      color: token.colorTextQuaternary,
+                    }}
+                  >
+                    <DownOutlined />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
         <div style={{ marginTop: 12 }}>
-          <Button type="dashed" block icon={<PlusOutlined />} onClick={addApprover}>
+          <Button
+            type="dashed"
+            block
+            icon={<PlusOutlined />}
+            disabled={formApprovers.length >= Math.min(10, approverPool.length)}
+            onClick={() => {
+              const next = approverPool.find((p) => !formApprovers.includes(p.id));
+              if (next) setFormApprovers((prev) => [...prev, next.id]);
+            }}
+          >
             승인자 추가
           </Button>
         </div>
       </div>
 
-      {/* 5. actions */}
+      {/* 7. actions */}
       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
         <Button onClick={() => setTab("list")}>취소</Button>
-        <Button
-          type="primary"
-          icon={<UploadOutlined />}
-          onClick={() => message.info(STUB_MSG)}
-        >
+        <Button type="primary" icon={<UploadOutlined />} loading={submitting} onClick={submitRequest}>
           승인 요청 제출
         </Button>
       </div>
     </div>
   );
+
+  // ==========================================================================
+  const changedCount = detail?.rules.filter((r) => r.changedSinceApproval).length ?? 0;
 
   return (
     <div style={{ maxWidth: 960 }}>
@@ -628,6 +830,169 @@ export default function ApprovalsPage() {
           { key: "new", label: "새 요청 작성", children: newView },
         ]}
       />
+
+      {/* 반려 사유 */}
+      <Modal
+        open={!!rejectTarget}
+        title={rejectTarget ? `REQ-${String(rejectTarget.id)} 반려` : ""}
+        okText="반려"
+        cancelText="닫기"
+        okButtonProps={{ danger: true, loading: acting }}
+        onCancel={() => setRejectTarget(null)}
+        onOk={async () => {
+          if (!rejectTarget) return;
+          const ok = await runAction(
+            () => rejectApproval(rejectTarget.id, rejectNote.trim() || undefined),
+            "반려했습니다",
+          );
+          if (ok) setRejectTarget(null);
+        }}
+      >
+        <div style={{ fontSize: 13, color: token.colorTextSecondary, marginBottom: 10 }}>
+          반려 사유는 감사 이벤트 로그에 남습니다 (선택).
+        </div>
+        <Input.TextArea
+          rows={3}
+          maxLength={500}
+          value={rejectNote}
+          onChange={(e) => setRejectNote(e.target.value)}
+          placeholder="반려 사유"
+        />
+      </Modal>
+
+      {/* 요청 상세 — 규칙 스냅샷 + 이벤트 로그 */}
+      <Modal
+        open={detailLoading || !!detail}
+        width={720}
+        onCancel={() => setDetail(null)}
+        footer={[
+          <Button key="close" onClick={() => setDetail(null)}>
+            닫기
+          </Button>,
+        ]}
+        title={
+          detail ? (
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontFamily: MONO_FONT, fontSize: 13, color: token.colorTextTertiary }}>
+                REQ-{String(detail.summary.id)}
+              </span>
+              <span style={{ fontSize: 15, fontWeight: 600 }}>{detail.summary.purposeTitle}</span>
+              <Tag color={STATUS_COLOR[statusKey(detail.summary.status)] ?? "default"}>
+                {STATUS_LABEL[statusKey(detail.summary.status)] ?? detail.summary.status}
+              </Tag>
+            </span>
+          ) : (
+            "요청 상세"
+          )
+        }
+      >
+        <Spin spinning={detailLoading}>
+          {detail && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 20, paddingTop: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 24px" }}>
+                <div>
+                  <div style={label12}>목적 코드</div>
+                  <Tag color="blue" style={{ marginTop: 4 }}>
+                    {detail.summary.purposeCode}
+                  </Tag>
+                </div>
+                <div>
+                  <div style={label12}>요청자</div>
+                  <div style={{ fontSize: 13, marginTop: 4 }}>
+                    {personLabel(users, detail.summary.requester)}
+                  </div>
+                </div>
+                <div>
+                  <div style={label12}>조회 테이블</div>
+                  <div style={{ fontFamily: MONO_FONT, fontSize: 12, marginTop: 4 }}>
+                    {detail.summary.tables.join(", ") || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={label12}>비즈니스 요건</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+                    {detail.summary.businessReqs.map((r) => (
+                      <Tag key={r} color="geekblue" style={{ margin: 0 }}>
+                        {reqLabel[r] ?? r}
+                      </Tag>
+                    ))}
+                    {detail.summary.businessReqs.length === 0 && <span style={label12}>—</span>}
+                  </div>
+                </div>
+              </div>
+
+              {/* 규칙 스냅샷 */}
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>규칙 스냅샷 (승인 당시)</span>
+                  {changedCount > 0 && (
+                    <Tag color="orange" icon={<WarningOutlined />} style={{ margin: 0 }}>
+                      승인 당시와 규칙이 달라졌습니다 ({changedCount}건)
+                    </Tag>
+                  )}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {detail.rules.map((r) => (
+                    <div
+                      key={String(r.ruleId)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "8px 12px",
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        borderRadius: 6,
+                        background: GRAY2,
+                      }}
+                    >
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{r.ruleName}</span>
+                      {r.forced && <Tag color="red">미선택 · 강제 적용</Tag>}
+                      <Tag color={r.severitySummary === "ACTIVE" ? "green" : "default"}>
+                        {r.severitySummary}
+                      </Tag>
+                      {r.changedSinceApproval && <Tag color="orange">변경됨</Tag>}
+                    </div>
+                  ))}
+                  {detail.rules.length === 0 && <span style={label12}>규칙 스냅샷 없음</span>}
+                </div>
+              </div>
+
+              {/* 이벤트 로그 */}
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
+                  감사 이벤트 로그 (append-only)
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {detail.events.map((e, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        fontSize: 12,
+                        padding: "6px 10px",
+                        borderLeft: `2px solid ${token.colorSplit}`,
+                      }}
+                    >
+                      <span style={{ fontFamily: MONO_FONT, color: token.colorTextTertiary, width: 120 }}>
+                        {fmtDateTime(e.at)}
+                      </span>
+                      <Tag style={{ margin: 0 }}>{ACTION_LABEL[e.action] ?? e.action}</Tag>
+                      <span>{e.step != null ? `${e.step}단계 · ` : ""}</span>
+                      <span>{personLabel([...users, ...approverPool], e.actor)}</span>
+                      {e.note && (
+                        <span style={{ color: token.colorTextSecondary }}>— {e.note}</span>
+                      )}
+                    </div>
+                  ))}
+                  {detail.events.length === 0 && <span style={label12}>이벤트 없음</span>}
+                </div>
+              </div>
+            </div>
+          )}
+        </Spin>
+      </Modal>
     </div>
   );
 }

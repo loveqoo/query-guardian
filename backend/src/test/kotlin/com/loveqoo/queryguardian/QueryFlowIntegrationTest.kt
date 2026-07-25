@@ -35,6 +35,7 @@ class QueryFlowIntegrationTest {
         var eventDateColId = 0L
         var consentColId = 0L
         var ssnColId = 0L
+        var requestId = 0L
     }
 
     @Autowired
@@ -42,6 +43,27 @@ class QueryFlowIntegrationTest {
 
     private fun post(path: String, body: Map<String, Any?>) =
         rest.postForEntity(path, body, Map::class.java)
+
+    /** actor 헤더가 필요한 API용 (spec 005 §5). */
+    private fun postAs(path: String, actor: String, body: Any? = null) = rest.exchange(
+        org.springframework.http.RequestEntity.post(java.net.URI(path))
+            .header("X-QG-Actor", actor)
+            .header("Content-Type", "application/json")
+            .body(body ?: emptyMap<String, Any>()),
+        Map::class.java,
+    )
+
+    /** user_events + users를 커버하는 승인 요청을 만들고 승인까지 완료한다 (spec 005 H8 — 저장 게이트 선행 조건). */
+    private fun createApprovedRequest() {
+        val created = postAs("/api/approvals", "u1", mapOf(
+            "purposeTitle" to "통합 테스트", "purposeCode" to "marketing",
+            "tables" to listOf(mapOf("tableName" to "user_events"), mapOf("tableName" to "users")),
+            "ruleIds" to emptyList<Long>(), "businessReqs" to listOf("marketing"),
+            "approvers" to listOf(mapOf("step" to 1, "approverId" to "ap1")),
+        ))
+        requestId = ((created.body!!["summary"] as Map<*, *>)["id"] as Number).toLong()
+        postAs("/api/approvals/$requestId/approve", "ap1")
+    }
 
     private fun columnId(table: Map<*, *>, name: String): Long =
         ((table["columns"] as List<*>).first { (it as Map<*, *>)["name"] == name } as Map<*, *>)
@@ -98,21 +120,26 @@ class QueryFlowIntegrationTest {
     @Test
     @Order(2)
     fun `대표 시나리오 - 신모델 경로로 차단과 통과`() {
-        val noPartition = post("/api/queries", mapOf(
-            "name" to "잘못된 쿼리", "dialect" to "MYSQL", "sql" to "SELECT id FROM user_events LIMIT 10"))
-        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, noPartition.statusCode)
+        createApprovedRequest() // 저장 게이트는 승인된 요청을 요구한다 (spec 005 §4)
+
+        val noPartition = postAs("/api/queries", "u1", mapOf(
+            "name" to "잘못된 쿼리", "dialect" to "MYSQL", "requestId" to requestId,
+            "sql" to "SELECT id FROM user_events LIMIT 10"))
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, noPartition.statusCode) // 룰 선행(H4)
         assertTrue(noPartition.body!!["violations"].toString().contains("require-partition-key"))
 
-        val noConsent = post("/api/queries", mapOf(
-            "name" to "동의 누락", "dialect" to "MYSQL", "purposeCode" to "marketing",
+        // purposeCode는 클라이언트가 안 보낸다 — 요청의 purpose_code(marketing)에서 서버가 주입 (C1)
+        val noConsent = postAs("/api/queries", "u1", mapOf(
+            "name" to "동의 누락", "dialect" to "MYSQL", "requestId" to requestId,
             "sql" to "SELECT id FROM user_events WHERE event_date = '2026-01-01' LIMIT 10"))
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, noConsent.statusCode)
         assertTrue(noConsent.body!!["violations"].toString().contains("require-predicate"))
 
-        val ok = post("/api/queries", mapOf(
-            "name" to "정상 쿼리", "dialect" to "MYSQL", "purposeCode" to "marketing",
+        val ok = postAs("/api/queries", "u1", mapOf(
+            "name" to "정상 쿼리", "dialect" to "MYSQL", "requestId" to requestId,
             "sql" to "SELECT id FROM user_events WHERE event_date = '2026-01-01' AND consent_yn = 'Y' LIMIT 10"))
         assertEquals(HttpStatus.CREATED, ok.statusCode)
+        assertEquals("PENDING_REVIEW", ok.body!!["reviewStatus"])
 
         val ssnBlocked = post("/api/lint", mapOf(
             "dialect" to "MYSQL", "sql" to "SELECT COUNT(ssn) FROM users LIMIT 10"))

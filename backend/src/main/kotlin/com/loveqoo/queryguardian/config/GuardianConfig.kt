@@ -9,6 +9,7 @@ import com.loveqoo.queryguardian.exec.RewritePlanner
 import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.parser.DialectParser
 import com.loveqoo.queryguardian.parser.DruidMySqlParser
+import com.loveqoo.queryguardian.parser.SqlRewriter
 import com.loveqoo.queryguardian.rules.RuleEngine
 import com.loveqoo.queryguardian.rules.TableCatalog
 import com.loveqoo.queryguardian.rules.UserRuleEvaluator
@@ -50,6 +51,10 @@ class GuardianConfig {
         @Value("\${guardian.exec.max-rows:1000}") maxRows: Long,
         rewriteCatalog: RewriteCatalog,
     ): RewritePlanner = RewritePlanner(rewriteCatalog, maxRows)
+
+    /** 재작성기 — 검증기를 생성자에서 함께 받아 검증을 건너뛸 수 없게 한다(§3.0.3). */
+    @Bean
+    fun sqlRewriter(parser: DialectParser): SqlRewriter = SqlRewriter(parser)
 
     @Bean
     fun lintService(parser: DialectParser, engine: RuleEngine, catalog: TableCatalog): LintService =

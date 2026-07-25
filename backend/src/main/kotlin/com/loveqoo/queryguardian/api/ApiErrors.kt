@@ -24,6 +24,15 @@ data class ErrorResponse(val message: String)
 @RestControllerAdvice
 class ApiExceptionHandler {
 
+    /**
+     * 실행 실패 (spec 008 §6): 사용자에게는 **분류 코드와 안내문만** 준다.
+     * MySQL 오류 메시지는 데이터 값을 에코하므로(`Truncated incorrect ... value: '...'`) 원문은 감사에만 남는다.
+     */
+    @ExceptionHandler(com.loveqoo.queryguardian.exec.ExecutionFailure::class)
+    fun onExecutionFailure(e: com.loveqoo.queryguardian.exec.ExecutionFailure) =
+        ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+            .body(mapOf("code" to e.kind.name, "message" to e.kind.userMessage))
+
     @ExceptionHandler(BlockedException::class)
     fun blocked(e: BlockedException): ResponseEntity<LintReportDto> =
         ResponseEntity.unprocessableEntity().body(e.report)

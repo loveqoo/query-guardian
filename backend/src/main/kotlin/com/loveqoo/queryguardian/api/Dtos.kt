@@ -121,3 +121,36 @@ data class SaveMappingRequest(
 )
 
 data class PurposeDto(val id: Long? = null, val code: String, val description: String? = null)
+
+/** 실행 결과 (spec 008 §7). 결과 행은 응답에만 담기고 어디에도 저장되지 않는다(§6 불변식). */
+data class ExecutionResultDto(
+    val columns: List<ExecutionColumnDto>,
+    val rows: List<List<String?>>,
+    val rowCount: Int,
+    val elapsedMs: Long,
+    val truncated: Boolean,
+    val rewrittenSql: String,
+    val applied: List<AppliedRewriteDto>,
+)
+
+data class ExecutionColumnDto(val name: String, val type: String)
+
+/** 무엇이 자동 적용됐는지 — 화면에 그대로 보여준다(사용자가 결과를 해석할 수 있어야 한다). */
+data class AppliedRewriteDto(val kind: String, val table: String, val column: String?, val detail: String)
+
+/**
+ * 실행 이력 항목. [errorDetail]은 **STEWARD/ADMIN에게만** 채워진다 —
+ * MySQL 오류 메시지는 데이터 값을 에코하므로(§6) 일반 사용자에게는 분류 코드까지만 준다.
+ */
+data class ExecutionEventDto(
+    val id: Long,
+    val actor: String,
+    val outcome: String,
+    val rowCount: Int?,
+    val elapsedMs: Long?,
+    val truncated: Boolean,
+    val errorCode: String?,
+    val errorDetail: String?,
+    val rewrittenSql: String?,
+    val at: java.time.Instant,
+)

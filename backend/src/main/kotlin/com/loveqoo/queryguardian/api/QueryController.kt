@@ -21,6 +21,7 @@ class QueryController(
     private val queryService: QueryService,
     private val validation: RequestValidation,
     private val auth: AuthService,
+    private val executionService: com.loveqoo.queryguardian.query.QueryExecutionService,
 ) {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -58,6 +59,41 @@ class QueryController(
     /** STEWARD·ADMIN은 검토가 업무이므로 전체를 본다. 그 외는 본인 것만 (spec 008 결정 15). */
     private fun privileged(user: com.loveqoo.queryguardian.auth.AppUser): Boolean =
         user.role == Role.STEWARD || user.role == Role.ADMIN
+
+    /**
+     * 저장·검토 승인된 쿼리 실행 (spec 008 §7). **요청자 본인만**(결정 14 — 대행 실행 불허).
+     * 실행 직전에 권한·접수·룰을 현재 기준으로 다시 판정하고, 차단·오류도 감사에 남는다.
+     */
+    @PostMapping("/{id}/execute")
+    fun execute(@PathVariable id: Long, http: HttpServletRequest): ExecutionResultDto {
+        val me = auth.currentUser(http)
+        val executed = executionService.execute(id, me.id, privileged(me))
+        return ExecutionResultDto(
+            columns = executed.result.columns.map { ExecutionColumnDto(it.name, it.type) },
+            rows = executed.result.rows,
+            rowCount = executed.result.rowCount,
+            elapsedMs = executed.result.elapsedMs,
+            truncated = executed.result.truncated,
+            rewrittenSql = executed.rewrittenSql,
+            applied = executed.applied.map { AppliedRewriteDto(it.kind.name, it.table, it.column, it.detail) },
+        )
+    }
+
+    /** 실행 이력. 오류 **원문**은 STEWARD/ADMIN에게만 — 일반 사용자에게는 분류 코드까지만(§6). */
+    @GetMapping("/{id}/executions")
+    fun executions(@PathVariable id: Long, http: HttpServletRequest): List<ExecutionEventDto> {
+        val me = auth.currentUser(http)
+        val canSeeRawErrors = privileged(me)
+        return executionService.history(id, me.id, canSeeRawErrors).map {
+            ExecutionEventDto(
+                id = it.id!!, actor = it.actor, outcome = it.outcome,
+                rowCount = it.rowCount, elapsedMs = it.elapsedMs, truncated = it.truncated,
+                errorCode = it.errorCode,
+                errorDetail = if (canSeeRawErrors) it.errorDetail else null,
+                rewrittenSql = it.rewrittenSql, at = it.at,
+            )
+        }
+    }
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)

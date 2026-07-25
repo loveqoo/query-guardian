@@ -16,7 +16,16 @@ import kotlin.test.assertTrue
  */
 class RewriteVerifierTest {
 
-    private val verifier = RewriteVerifier(DruidMySqlParser())
+    private val parser = DruidMySqlParser()
+    private val verifier = RewriteVerifier(parser)
+
+    /** 계획 기반 검사만 보려는 테스트용 — 마스킹 기대치를 두지 않는다. */
+    private val noMasks: (String) -> Set<String> = { emptySet() }
+
+    private fun irOf(sql: String) = (parser.parse(sql) as ParseResult.Success).ir
+
+    /** 판정 IR을 명시하지 않는 테스트는 재작성 결과 자체를 원본으로 삼는다(계획 축만 검증). */
+    private fun RewriteVerifier.verify(sql: String, plan: RewritePlan) = verify(sql, plan, irOf(sql), noMasks)
 
     private val maskPlan = RewritePlan(
         maskProjections = listOf(MaskProjection("s0", "users", "email", "mask_email({col})", "email")),
@@ -98,7 +107,8 @@ class RewriteVerifierTest {
 
     @Test
     fun `파싱 불가한 결과는 즉시 잡는다`() {
-        val problems = verifier.verify("SELECT FROM WHERE ((", maskPlan)
+        // 판정 IR은 정상이고 **재작성 산출물만** 깨진 상황 — 재작성이 문장을 부순 경우다
+        val problems = verifier.verify("SELECT FROM WHERE ((", maskPlan, irOf("SELECT email FROM users"), noMasks)
         assertEquals(1, problems.size)
         assertTrue(problems.single().contains("다시 파싱할 수 없습니다"), "$problems")
     }
@@ -135,5 +145,33 @@ class RewriteVerifierTest {
         val plan = RewritePlan(maskProjections = listOf(MaskProjection("s0", "users", "email", "mask_email({col})", "email")))
         assertEquals(emptyList(), verifier.verify("SELECT mask_email(users.email) AS email FROM users", plan))
         assertEquals(emptyList(), verifier.verify("SELECT mask_email(email) AS email FROM users", plan))
+    }
+
+    /**
+     * 적대 검토 CRITICAL 7: 기대치를 계획에서만 뽑으면 **계획이 마스킹을 빠뜨린 경우**에 검증기가 눈이 먼다.
+     * 검토자는 마스킹이 없는 계획을 다른 파싱의 핸들에 적용해 평문 `email`을 반환시키고 `verify() == []`를 확인했다.
+     * 이제 판정 IR + 카탈로그로 기대 마스킹을 **스스로 재도출**해 대조한다.
+     */
+    @Test
+    fun `계획이 마스킹을 빠뜨리면 잡는다`() {
+        val judged = irOf("SELECT email FROM users")
+        val problems = verifier.verify(
+            "SELECT email FROM demo_users users LIMIT 1001",
+            RewritePlan(limitCap = LimitCap("s0", 1000)), // 마스킹 계획이 없다
+            judged,
+        ) { table -> if (table.equals("users", true)) setOf("email") else emptySet() }
+        assertTrue(problems.any { it.contains("계획이 마스킹을 빠뜨렸습니다") }, "$problems")
+    }
+
+    /** 표현 불가한 사용이 남아 있는데 재작성이 진행됐다면(거부되어야 했다) 검증에서 잡힌다. */
+    @Test
+    fun `표현 불가 사용을 재작성했으면 잡는다`() {
+        val judged = irOf("SELECT CONCAT(email, '') AS e FROM users")
+        val problems = verifier.verify(
+            "SELECT CONCAT(email, '') AS e FROM demo_users users LIMIT 1001",
+            RewritePlan(limitCap = LimitCap("s0", 1000)),
+            judged,
+        ) { table -> if (table.equals("users", true)) setOf("email") else emptySet() }
+        assertTrue(problems.any { it.contains("표현할 수 없는 마스킹 사용") }, "$problems")
     }
 }

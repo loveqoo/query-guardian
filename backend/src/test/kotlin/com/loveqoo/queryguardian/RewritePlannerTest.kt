@@ -238,4 +238,51 @@ class RewritePlannerTest {
         )
         assertEquals(RewriteRefusal.OUTER_JOIN_FILTER, refused.refusal)
     }
+
+    /**
+     * 적대 검토 HIGH(실측): `NOT EXISTS` 스코프에 "동의 필수"를 주입하니 결과가 정확히 **비동의자만** 남았다
+     * (`{3,6,9,12}`). 거버넌스가 보호하려던 모집단을 골라내는 도구가 된다 — 주입하지 않는 것이 정답이다.
+     */
+    @Test
+    fun `부정 문맥 스코프에는 주입하지 않는다`() {
+        for (sql in listOf(
+            "SELECT u.id FROM users u WHERE NOT EXISTS " +
+                "(SELECT 1 FROM marketing_consents mc WHERE mc.user_id = u.id) LIMIT 10",
+            "SELECT u.id FROM users u WHERE u.id NOT IN " +
+                "(SELECT mc.user_id FROM marketing_consents mc) LIMIT 10",
+        )) {
+            val outcome = assertIs<PlanOutcome.Planned>(plan(sql), sql)
+            assertTrue(outcome.plan.injections.isEmpty(), "부정 문맥에 주입하면 필터가 반전된다: $sql → ${outcome.plan.injections}")
+        }
+    }
+
+    /**
+     * 적대 검토 HIGH(실측): 파생 테이블로 한 겹 감싸면 인스턴스 키가 `d`로 바뀌어 null 생성 검사를 우회하고,
+     * 필터가 파생 스코프 안에 들어가 **행을 제한하지 못했다**(재작성 결과 12행 vs 의도 8행).
+     */
+    @Test
+    fun `null 생성 쪽 파생 래퍼 안에도 주입하지 않는다`() {
+        val outcome = assertIs<PlanOutcome.Planned>(
+            plan(
+                "SELECT u.id, d.consent_yn FROM users u LEFT JOIN " +
+                    "(SELECT user_id, consent_yn FROM marketing_consents) d ON d.user_id = u.id LIMIT 10",
+            ),
+        )
+        assertTrue(outcome.plan.injections.isEmpty(), "래퍼로 감싼 우회 경로: ${outcome.plan.injections}")
+    }
+
+    /** 대조군: INNER JOIN으로 감싼 파생 스코프에는 정상 주입된다(완화가 방어를 없애지 않았음). */
+    @Test
+    fun `INNER 파생 래퍼 안에는 주입한다`() {
+        val outcome = assertIs<PlanOutcome.Planned>(
+            plan(
+                "SELECT u.id, d.consent_yn FROM users u JOIN " +
+                    "(SELECT user_id, consent_yn FROM marketing_consents) d ON d.user_id = u.id LIMIT 10",
+            ),
+        )
+        assertEquals(
+            "marketing_consents.consent_yn = 'Y'",
+            outcome.plan.injections.single().predicateSql,
+        )
+    }
 }

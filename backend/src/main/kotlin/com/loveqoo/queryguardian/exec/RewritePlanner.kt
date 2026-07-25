@@ -125,6 +125,11 @@ class RewritePlanner(
         val filters = catalog.filterExpressions(instance.name, purposeCode).map { it to "FILTER" }
         val integrity = catalog.integrityExpressions(instance.name).map { it to "INTEGRITY" }
 
+        // 주입이 의미를 바꾸는 스코프(부정 문맥·null 생성 경로)에는 넣지 않는다 — 넣으면 필터가 **반전**되거나
+        // 조인이 INNER로 바뀐다. 자동 보정만 포기하는 것이고, 필수 술어 자체는 판정 층이 모든 스코프에서
+        // 계속 요구한다(분석가가 직접 써야 통과).
+        if (!scope.injectable) return null
+
         for ((expression, kind) in filters + integrity) {
             // **주입 생략 단축 경로를 두지 않는다.** 한때 "그 컬럼에 이미 최상위 조건이 있으면 생략"을 넣어
             // OUTER JOIN 오차단을 완화했는데, 적대 검토가 그것이 fail-open임을 지적했다:

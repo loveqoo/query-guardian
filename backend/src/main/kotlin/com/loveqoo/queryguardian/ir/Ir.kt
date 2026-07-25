@@ -61,6 +61,20 @@ data class SelectScope(
      * 마스킹된 값으로 바뀌어 결과 의미가 달라진다 → 재작성 거부 근거.
      */
     val outputRefs: Set<String> = emptySet(),
+    /**
+     * 이 스코프의 WHERE에 술어를 주입해도 **의미가 보존되는가**.
+     *
+     * false인 경우와 이유:
+     * - **부정 문맥**(`NOT EXISTS`/`NOT IN`/`NOT (...)` 안, 표현식 수준 서브쿼리): 주입이 필터를 **반전**시킨다.
+     *   적대 검토 실측 — "동의 필수" 필터를 `NOT EXISTS` 스코프에 주입하니 결과가 정확히 **비동의자만** 남았다.
+     *   거버넌스가 보호하려던 모집단을 골라내는 도구가 된다.
+     * - **OUTER JOIN의 null 생성 쪽을 통해 도달한 스코프**(파생 래퍼 포함): 주입이 조인을 사실상 INNER로 바꾼다.
+     *   래퍼로 한 겹 감싸면 인스턴스 키가 달라져 `nullProducingInstances` 검사를 우회함이 실측됐다.
+     *
+     * 주입하지 않아도 **판정은 그대로 강제된다** — require-predicate가 모든 스코프에서 필수 술어를 요구하므로,
+     * 주입 불가 스코프에서는 분석가가 조건을 직접 써야 통과한다(자동 보정만 포기, 방어는 유지).
+     */
+    val injectable: Boolean = true,
 )
 
 /** 컬럼=컬럼 등식. 방향 무관(a=b ≡ b=a). 어느 한쪽이라도 귀속 불가(table=null)면 joins는 fail-closed 미충족. */

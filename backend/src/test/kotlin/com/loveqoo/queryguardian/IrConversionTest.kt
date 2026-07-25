@@ -73,4 +73,15 @@ class IrConversionTest {
         val root = ir("SELECT (SELECT MAX(id) FROM user_events) AS m FROM orders").root
         assertNotNull(root.children.singleOrNull { it.kind == ScopeKind.SUBQUERY })
     }
+
+    /**
+     * 적대 검토 MEDIUM: `number.toLong()`이 BigInteger 하위 64비트만 취해
+     * `LIMIT 18446744073709551621`(=2^64+5)이 IR에서 **5**로 보였다 — 판정·표시·승인 화면이 실제 SQL과
+     * 다른 숫자를 본다. Long 범위를 넘으면 미지정(null)으로 두어 상한이 그대로 적용되게 한다.
+     */
+    @Test
+    fun `Long 범위를 넘는 LIMIT은 미지정으로 둔다`() {
+        assertEquals(null, ir("SELECT id FROM users LIMIT 18446744073709551621").root.limit)
+        assertEquals(5L, ir("SELECT id FROM users LIMIT 5").root.limit)
+    }
 }

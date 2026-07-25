@@ -23,6 +23,7 @@ import com.loveqoo.queryguardian.ir.MaskProjection
 import com.loveqoo.queryguardian.ir.PredicateInjection
 import com.loveqoo.queryguardian.ir.RewriteKind
 import com.loveqoo.queryguardian.ir.RewriteOutcome
+import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewritePlan
 import com.loveqoo.queryguardian.ir.RewriteRefusal
 import com.loveqoo.queryguardian.ir.TableRename
@@ -45,7 +46,17 @@ class SqlRewriter(
     private val verifier: RewriteVerifier = RewriteVerifier(parser),
 ) {
 
-    fun rewrite(statement: ParsedStatement, plan: RewritePlan): RewriteOutcome {
+    /**
+     * [judgedIr]는 [statement] 핸들과 **같은 파싱**에서 나온 IR이고, [maskedColumnsOf]는 논리 테이블 →
+     * MASK 컬럼 집합이다. 둘은 검증이 계획을 맹신하지 않게 하는 독립 근거다(§3.0.3, 기본값을 두지 않는다 —
+     * 호출자가 빠뜨리면 컴파일이 실패해야 한다).
+     */
+    fun rewrite(
+        statement: ParsedStatement,
+        plan: RewritePlan,
+        judgedIr: QueryIR,
+        maskedColumnsOf: (String) -> Set<String>,
+    ): RewriteOutcome {
         val handle = statement as? DruidMySqlParser.DruidParsedStatement
             ?: return refuse(RewriteRefusal.SCOPE_NOT_FOUND, "이 방언의 재작성 핸들이 아닙니다")
 
@@ -101,7 +112,7 @@ class SqlRewriter(
         val rewritten = SQLUtils.toSQLString(handle.statement, DbType.mysql)
 
         // §3.0.3 이중 방어: 실제로 실행될 **텍스트**를 다시 읽어 계획대로 됐는지 단정한다.
-        val problems = verifier.verify(rewritten, plan)
+        val problems = verifier.verify(rewritten, plan, judgedIr, maskedColumnsOf)
         if (problems.isNotEmpty()) {
             return refuse(RewriteRefusal.VERIFY_FAILED, "재작성 결과 검증 실패 — ${problems.joinToString("; ")}")
         }

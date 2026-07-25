@@ -1,8 +1,11 @@
 package com.loveqoo.queryguardian.parser
 
+import com.loveqoo.queryguardian.ir.MaskUsage
 import com.loveqoo.queryguardian.ir.Predicate
+import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewritePlan
 import com.loveqoo.queryguardian.ir.SelectItem
+import com.loveqoo.queryguardian.ir.maskFindings
 import com.loveqoo.queryguardian.ir.SelectScope
 
 /**
@@ -16,9 +19,41 @@ import com.loveqoo.queryguardian.ir.SelectScope
  */
 class RewriteVerifier(private val parser: DialectParser) {
 
-    /** 위반 사유 목록. 비어 있으면 통과. */
-    fun verify(rewrittenSql: String, plan: RewritePlan): List<String> {
+    /**
+     * 위반 사유 목록. 비어 있으면 통과.
+     *
+     * [judgedIr]와 [maskedColumnsOf]는 **계획 밖의 근거**다. 기대치를 계획에서만 뽑으면 검증기는 정의상
+     * "계획이 마스킹을 빠뜨린 경우"에 눈이 먼다 — 적대 검토가 실제로 그 경로(계획 A를 핸들 B에 적용)로
+     * 평문이 나가는 것을 실증했다. 그래서 판정에 쓰인 IR과 카탈로그로 **기대 마스킹을 다시 도출**해 대조한다.
+     */
+    fun verify(
+        rewrittenSql: String,
+        plan: RewritePlan,
+        judgedIr: QueryIR,
+        maskedColumnsOf: (String) -> Set<String>,
+    ): List<String> {
         val problems = mutableListOf<String>()
+
+        // ⓐ 계획 밖의 근거: 판정 IR에서 마스킹이 필요했던 지점을 재도출해 계획과 대조한다.
+        for (scope in allScopes(judgedIr.root)) {
+            for (finding in maskFindings(scope) { table -> maskedColumnsOf(table) }) {
+                when (finding.usage) {
+                    MaskUsage.ABSENT -> Unit
+                    MaskUsage.NOT_EXPRESSIBLE -> problems +=
+                        "표현할 수 없는 마스킹 사용이 남아 있는데 재작성이 진행됐습니다: " +
+                            "${finding.logicalTable}.${finding.column}"
+                    MaskUsage.PROJECTION_ONLY -> {
+                        val planned = plan.maskProjections.any {
+                            it.instanceKey == finding.instanceKey && it.column.equals(finding.column, ignoreCase = true)
+                        }
+                        if (!planned) {
+                            problems += "계획이 마스킹을 빠뜨렸습니다: ${finding.logicalTable}.${finding.column} " +
+                                "(인스턴스 ${finding.instanceKey})"
+                        }
+                    }
+                }
+            }
+        }
         val inspected = parser.inspect(rewrittenSql)
 
         // ⑴ 문 1개·SELECT — 재작성이 문장을 깨뜨렸거나 문 종류를 바꾸지 않았는가

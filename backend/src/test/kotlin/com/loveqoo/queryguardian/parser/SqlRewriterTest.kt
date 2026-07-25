@@ -34,17 +34,24 @@ class SqlRewriterTest {
     private fun scopes(scope: SelectScope): List<SelectScope> =
         listOf(scope) + scope.children.flatMap { scopes(it) }
 
+    /**
+     * 이 스위트는 **재작성 메커니즘**을 검증한다(어떻게 AST를 고치는가). 그래서 기본 카탈로그는 비어 있다 —
+     * 손으로 쓴 부분 계획(예: 셀프 조인의 한 인스턴스만 치환)을 쓰기 때문이다.
+     * "계획이 마스킹을 빠뜨렸는가"라는 **정책 축**은 `RewriteVerifierTest`가 실제 카탈로그로 검증한다.
+     */
+    private val maskedColumns: (String) -> Set<String> = { emptySet() }
+
     /** 재작성 결과 SQL — 개행·탭을 공백 하나로 눌러 비교하기 쉽게 만든다. */
     private fun rewrite(sql: String, plan: (QueryIR) -> RewritePlan): String {
         val (ir, handle) = inspect(sql)
-        val outcome = rewriter.rewrite(handle, plan(ir))
+        val outcome = rewriter.rewrite(handle, plan(ir), ir, maskedColumns)
         val rewritten = assertIs<RewriteOutcome.Rewritten>(outcome, "재작성이 거부됨: $outcome")
         return rewritten.sql.replace(Regex("\\s+"), " ").trim()
     }
 
     private fun refusal(sql: String, plan: (QueryIR) -> RewritePlan): RewriteOutcome.Refused {
         val (ir, handle) = inspect(sql)
-        return assertIs<RewriteOutcome.Refused>(rewriter.rewrite(handle, plan(ir)))
+        return assertIs<RewriteOutcome.Refused>(rewriter.rewrite(handle, plan(ir), ir, maskedColumns))
     }
 
     private fun mask(ir: QueryIR, instance: String, column: String, template: String = "mask_email({col})") =
@@ -186,6 +193,8 @@ class SqlRewriterTest {
         val outcome = rewriter.rewrite(
             handle,
             RewritePlan(maskProjections = listOf(MaskProjection(inner.scopeId, "users", "email", "mask_email({col})", "email"))),
+            ir,
+            maskedColumns,
         )
         val out = assertIs<RewriteOutcome.Rewritten>(outcome).sql.replace(Regex("\\s+"), " ")
         assertTrue(out.contains("SELECT mask_email(email) AS email FROM users"), out)
@@ -202,6 +211,8 @@ class SqlRewriterTest {
         val outcome = rewriter.rewrite(
             handle,
             RewritePlan(maskProjections = arms.map { MaskProjection(it.scopeId, "users", "email", "mask_email({col})", "email") }),
+            ir,
+            maskedColumns,
         )
         val out = assertIs<RewriteOutcome.Rewritten>(outcome).sql
         assertEquals(2, Regex("mask_email").findAll(out).count(), "두 팔 모두 치환되어야 함: $out")
@@ -242,17 +253,22 @@ class SqlRewriterTest {
     fun `핸들은 한 번만 쓸 수 있다`() {
         val (ir, handle) = inspect("SELECT email FROM users")
         val plan = RewritePlan(maskProjections = listOf(mask(ir, "users", "email")))
-        assertIs<RewriteOutcome.Rewritten>(rewriter.rewrite(handle, plan))
-        val second = assertIs<RewriteOutcome.Refused>(rewriter.rewrite(handle, plan))
+        assertIs<RewriteOutcome.Rewritten>(rewriter.rewrite(handle, plan, ir, maskedColumns))
+        val second = assertIs<RewriteOutcome.Refused>(rewriter.rewrite(handle, plan, ir, maskedColumns))
         assertEquals(RewriteRefusal.SCOPE_NOT_FOUND, second.refusal)
     }
 
     /** 다른 파싱의 계획을 적용하면 엉뚱한 노드를 고칠 수 있다 — id 집합으로 막는다. */
     @Test
     fun `다른 파싱의 스코프를 가리키는 계획은 거부한다`() {
-        val (_, handle) = inspect("SELECT email FROM users")
+        val (ir, handle) = inspect("SELECT email FROM users")
         val refused = assertIs<RewriteOutcome.Refused>(
-            rewriter.rewrite(handle, RewritePlan(maskProjections = listOf(MaskProjection("s999", "users", "email", "mask_email({col})", "email")))),
+            rewriter.rewrite(
+                handle,
+                RewritePlan(maskProjections = listOf(MaskProjection("s999", "users", "email", "mask_email({col})", "email"))),
+                ir,
+                maskedColumns,
+            ),
         )
         assertEquals(RewriteRefusal.SCOPE_NOT_FOUND, refused.refusal)
     }
@@ -284,6 +300,8 @@ class SqlRewriterTest {
                 maskProjections = listOf(mask(ir, "users", "email")),
                 limitCap = LimitCap(ir.root.scopeId, 1000),
             ),
+            ir,
+            maskedColumns,
         )
         val applied = assertIs<RewriteOutcome.Rewritten>(outcome).applied
         assertEquals(setOf(RewriteKind.MASK, RewriteKind.LIMIT), applied.map { it.kind }.toSet())

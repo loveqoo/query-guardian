@@ -173,7 +173,7 @@ class DruidMySqlParser(
             ?: return InspectResult(ParseResult.Failure(FailureKind.NOT_SELECT, "SELECT 문만 저장할 수 있습니다"), lexical)
 
         val registry = ScopeRegistry(parseCounter.incrementAndGet())
-        val root = buildFromSelect(statement.select, ScopeKind.ROOT, parentResolver = null, registry = registry)
+        val root = buildFromSelect(statement.select, ScopeKind.ROOT, parentResolver = null, registry = registry, injectable = true)
         return InspectResult(
             ParseResult.Success(QueryIR(root, sql)),
             lexical + astHygiene(statement, root),
@@ -350,7 +350,7 @@ class DruidMySqlParser(
             cteNames.contains(name.lowercase()) || (parent?.isCte(name) ?: false)
     }
 
-    private fun buildFromSelect(select: SQLSelect, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry): SelectScope {
+    private fun buildFromSelect(select: SQLSelect, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry, injectable: Boolean): SelectScope {
         val with = select.withSubQuery
         val cteNames = with?.entries
             ?.mapNotNull { entry -> norm(entry.alias)?.lowercase() }
@@ -367,30 +367,31 @@ class DruidMySqlParser(
             val bodyNames = if (recursive && own != null) visible + own else visible.toSet()
             val bodyResolver = if (bodyNames.isEmpty()) parentResolver
             else AliasResolver(emptyList(), parentResolver, bodyNames)
-            cteChildren += buildFromSelect(entry.subQuery, ScopeKind.CTE, bodyResolver, registry)
+            cteChildren += buildFromSelect(entry.subQuery, ScopeKind.CTE, bodyResolver, registry, injectable)
             own?.let { visible += it }
         }
 
         // 본문 스코프(메인 쿼리)는 모든 CTE 이름을 본다 — FROM에서 CTE를 참조하면 물리 테이블로 취급하지 않는다
         val resolver = if (cteNames.isEmpty()) parentResolver
         else AliasResolver(emptyList(), parentResolver, cteNames)
-        val scope = buildFromQuery(select.query, kind, resolver, registry)
+        val scope = buildFromQuery(select.query, kind, resolver, registry, injectable)
         return if (cteChildren.isEmpty()) scope else scope.copy(children = cteChildren + scope.children)
     }
 
-    private fun buildFromQuery(query: SQLSelectQuery, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry): SelectScope {
+    private fun buildFromQuery(query: SQLSelectQuery, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry, injectable: Boolean): SelectScope {
         return when (query) {
-            is SQLSelectQueryBlock -> buildFromQueryBlock(query, kind, parentResolver, registry)
+            is SQLSelectQueryBlock -> buildFromQueryBlock(query, kind, parentResolver, registry, injectable)
             is SQLUnionQuery -> {
-                val arms = unionArms(query).map { buildFromQuery(it, ScopeKind.UNION_ARM, parentResolver, registry) }
+                val arms = unionArms(query).map { buildFromQuery(it, ScopeKind.UNION_ARM, parentResolver, registry, injectable) }
                 SelectScope(
                     kind = kind,
                     tables = emptyList(),
                     selectItems = emptyList(),
                     whereConjuncts = emptyList(),
-                    limit = query.limit?.rowCount?.let { (it as? SQLIntegerExpr)?.number?.toLong() },
+                    limit = limitOf(query.limit),
                     children = arms,
                     scopeId = registry.register(query),
+                    injectable = injectable,
                 )
             }
             // 표현 불가한 SELECT 변형(VALUES 등)은 fail-open이 아니라 검증 불가 차단으로 떨어뜨린다 (§3)
@@ -402,16 +403,28 @@ class DruidMySqlParser(
         }
     }
 
+    /**
+     * LIMIT 행수를 Long으로 읽는다. **Long 범위를 넘는 값은 null**(미지정)로 둔다 —
+     * `number.toLong()`은 BigInteger 하위 64비트만 취해서 `LIMIT 18446744073709551621`이 `5`로 보였다
+     * (적대 검토 MEDIUM: 판정·표시·승인 화면이 실제 SQL과 다른 숫자를 본다). 미지정이면 상한이 그대로 적용된다.
+     */
+    private fun limitOf(limit: SQLLimit?): Long? {
+        val number = (limit?.rowCount as? SQLIntegerExpr)?.number ?: return null
+        val big = java.math.BigInteger(number.toString())
+        return if (big.bitLength() < 64) big.toLong() else null
+    }
+
     private fun unionArms(union: SQLUnionQuery): List<SQLSelectQuery> {
         val relations = union.relations
         val arms = if (!relations.isNullOrEmpty()) relations else listOfNotNull(union.left, union.right)
         return arms.flatMap { if (it is SQLUnionQuery) unionArms(it) else listOf(it) }
     }
 
-    private fun buildFromQueryBlock(block: SQLSelectQueryBlock, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry): SelectScope {
+    private fun buildFromQueryBlock(block: SQLSelectQueryBlock, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry, injectable: Boolean): SelectScope {
         val tables = mutableListOf<TableRef>()
         val children = mutableListOf<SelectScope>()
         val innerOnExprs = mutableListOf<SQLExpr>()
+        val outerOnExprs = mutableListOf<SQLExpr>()
         val allOnExprs = mutableListOf<SQLExpr>()
 
         // FROM: 테이블 수집을 먼저 끝내야 resolver가 완성된다. 파생 테이블 스코프는 resolver 완성 후에 만든다.
@@ -423,20 +436,31 @@ class DruidMySqlParser(
         block.from?.let {
             collectTables(
                 it, tables, derivedSources, unionSources, unsupportedSources,
-                innerOnExprs, allOnExprs, nullProducing, isCte,
+                innerOnExprs, outerOnExprs, allOnExprs, nullProducing, isCte,
             )
         }
         val resolver = AliasResolver(tables, parentResolver)
-        derivedSources.forEach { children += buildFromSelect(it.select, ScopeKind.DERIVED, resolver, registry) }
+        // 래퍼의 alias가 null 생성 쪽이면 그 **안쪽 스코프도** 주입 불가다 — 감싸서 우회하는 경로를 막는다
+        derivedSources.forEach { source ->
+            val throughNull = norm(source.alias)?.let { it in nullProducing } ?: false
+            children += buildFromSelect(source.select, ScopeKind.DERIVED, resolver, registry, injectable && !throughNull)
+        }
         // 파생 테이블 본문이 UNION인 경우(`FROM (SELECT … UNION ALL SELECT …) d`)도 스코프로 등록한다.
         // 버리면 그 안의 BLOCK 컬럼·거버넌스 테이블이 IR에서 사라져 룰이 발화하지 않는다 (§6.2).
-        unionSources.forEach { children += buildFromQuery(it.union, ScopeKind.DERIVED, resolver, registry) }
+        unionSources.forEach { source ->
+            val throughNull = norm(source.alias)?.let { it in nullProducing } ?: false
+            children += buildFromQuery(source.union, ScopeKind.DERIVED, resolver, registry, injectable && !throughNull)
+        }
 
         // WHERE·INNER ON의 최상위 AND conjunct만 평탄화 (§6.1). 같은 경로에서 컬럼=컬럼 등식(joins 근거)도 수집 (§5).
         val conjuncts = mutableListOf<Predicate>()
         val joinEqualities = mutableListOf<ColumnEquality>()
         block.where?.let { flattenAnd(it, conjuncts, resolver, children, registry, joinEqualities) }
         innerOnExprs.forEach { flattenAnd(it, conjuncts, resolver, children, registry, joinEqualities) }
+        // OUTER JOIN ON의 서브쿼리도 **스코프**다. INNER ON은 위 flattenAnd 경로에서 이미 등록되지만
+        // OUTER ON은 술어로 채택하지 않으므로(§6.1) 그 경로를 타지 않는다 — 등록하지 않으면 그 안의 테이블이
+        // IR에서 사라져 권한·필수조건·매핑 허용목록이 무발화한다(구조 불변식 테스트가 잡아낸 구멍).
+        outerOnExprs.forEach { collectSubqueries(it, resolver, children, registry) }
 
         val selectItems = mutableListOf<SelectItem>()
         for (item in block.selectList) {
@@ -491,7 +515,7 @@ class DruidMySqlParser(
         block.orderBy?.items?.forEach { clauseExprs += it.expr }
         clauseExprs.forEach { collectSubqueries(it, resolver, children, registry) }
 
-        val limit = block.limit?.rowCount?.let { (it as? SQLIntegerExpr)?.number?.toLong() }
+        val limit = limitOf(block.limit)
         return SelectScope(kind, tables, selectItems, conjuncts, limit, children,
             // 모르는 FROM 형태는 **차단**한다. 조용히 버리면 그 스코프의 위반이 함께 사라진다(스코프 은닉).
             unverifiable = unsupportedSources.takeIf { it.isNotEmpty() }
@@ -499,7 +523,7 @@ class DruidMySqlParser(
             columnRefs = columnRefs, joinEqualities = joinEqualities, scopeId = registry.register(block),
             nullProducingInstances = nullProducing,
             distinct = block.distionOption == SQLSetQuantifier.DISTINCT,
-            outputRefs = outputRefs)
+            outputRefs = outputRefs, injectable = injectable)
     }
 
     /**
@@ -539,6 +563,7 @@ class DruidMySqlParser(
         unions: MutableList<SQLUnionQueryTableSource>,
         unsupported: MutableList<String>,
         innerOnExprs: MutableList<SQLExpr>,
+        outerOnExprs: MutableList<SQLExpr>,
         allOnExprs: MutableList<SQLExpr>,
         nullProducing: MutableSet<String>,
         isCte: (String) -> Boolean,
@@ -563,8 +588,8 @@ class DruidMySqlParser(
                 }
             }
             is SQLJoinTableSource -> {
-                collectTables(source.left, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, nullProducing, isCte)
-                collectTables(source.right, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, nullProducing, isCte)
+                collectTables(source.left, tables, derived, unions, unsupported, innerOnExprs, outerOnExprs, allOnExprs, nullProducing, isCte)
+                collectTables(source.right, tables, derived, unions, unsupported, innerOnExprs, outerOnExprs, allOnExprs, nullProducing, isCte)
                 // OUTER JOIN의 보존되지 않는 쪽은 null이 생성된다 → 그 인스턴스에 WHERE 술어를 주입하면
                 // 조인이 사실상 INNER로 바뀌어 의미가 변한다 (spec 008 §3.0.2). 모르는 종류는 양쪽 다 담는다.
                 when (source.joinType) {
@@ -587,9 +612,7 @@ class DruidMySqlParser(
                 if (condition != null) {
                     // 컬럼 참조 수집은 조인 종류 불문(§5.1). WHERE 동치 인정은 INNER 계열만(§6.1).
                     allOnExprs += condition
-                    if (source.joinType in INNER_JOIN_TYPES) {
-                        innerOnExprs += condition
-                    }
+                    if (source.joinType in INNER_JOIN_TYPES) innerOnExprs += condition else outerOnExprs += condition
                 }
             }
             is SQLSubqueryTableSource -> {
@@ -714,11 +737,11 @@ class DruidMySqlParser(
             else Predicate.Between(column, literalText(expr.beginExpr), literalText(expr.endExpr))
         }
         expr is SQLInSubQueryExpr -> {
-            children += buildFromSelect(expr.subQuery, ScopeKind.SUBQUERY, resolver, registry)
+            children += buildFromSelect(expr.subQuery, ScopeKind.SUBQUERY, resolver, registry, injectable = false)
             Predicate.Raw(expr.toString())
         }
         expr is SQLExistsExpr -> {
-            children += buildFromSelect(expr.subQuery, ScopeKind.EXISTS, resolver, registry)
+            children += buildFromSelect(expr.subQuery, ScopeKind.EXISTS, resolver, registry, injectable = false)
             Predicate.Raw(expr.toString())
         }
         else -> {
@@ -787,13 +810,13 @@ class DruidMySqlParser(
     private fun collectSubqueries(expr: SQLExpr, resolver: AliasResolver, children: MutableList<SelectScope>, registry: ScopeRegistry) {
         expr.accept(object : SQLASTVisitorAdapter() {
             override fun visit(x: SQLQueryExpr): Boolean {
-                children += buildFromSelect(x.subQuery, ScopeKind.SUBQUERY, resolver, registry); return false
+                children += buildFromSelect(x.subQuery, ScopeKind.SUBQUERY, resolver, registry, injectable = false); return false
             }
             override fun visit(x: SQLInSubQueryExpr): Boolean {
-                children += buildFromSelect(x.subQuery, ScopeKind.SUBQUERY, resolver, registry); return false
+                children += buildFromSelect(x.subQuery, ScopeKind.SUBQUERY, resolver, registry, injectable = false); return false
             }
             override fun visit(x: SQLExistsExpr): Boolean {
-                children += buildFromSelect(x.subQuery, ScopeKind.EXISTS, resolver, registry); return false
+                children += buildFromSelect(x.subQuery, ScopeKind.EXISTS, resolver, registry, injectable = false); return false
             }
         })
     }

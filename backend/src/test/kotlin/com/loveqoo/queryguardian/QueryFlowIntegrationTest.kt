@@ -41,6 +41,12 @@ class QueryFlowIntegrationTest {
     @Autowired
     lateinit var rest: TestRestTemplate
 
+    @Autowired
+    lateinit var judgmentCatalog: com.loveqoo.queryguardian.rules.TableCatalog
+
+    @Autowired
+    lateinit var rewriteCatalog: com.loveqoo.queryguardian.exec.RewriteCatalog
+
     private val client by lazy { SessionClient(rest) }
 
     /** 무인증 호출은 없다 — 카탈로그/lint 등 공통 경로는 ADMIN 세션으로 (spec 007 §4·H6). */
@@ -220,5 +226,35 @@ class QueryFlowIntegrationTest {
             "dialect" to "MYSQL", "sql" to "SELECT id FROM otherdb.user_events LIMIT 10"))
         assertEquals(true, qualified.body!!["blocked"])
         assertTrue(qualified.body!!["violations"].toString().contains("hygiene/schema-qualifier"))
+    }
+
+    /**
+     * spec 008 — **판정 축과 재작성 축이 같은 집합을 봐야 한다**는 계약.
+     *
+     * 적대 검토가 지적한 대로, 재작성의 안전성은 여러 곳에서 "판정 층이 이미 그 조건을 강제했다"에 기대고 있다.
+     * 그런데 판정은 `TableCatalog.requiredPredicates`를, 재작성은 `RewriteCatalog.filterExpressions`를 읽는다 —
+     * 두 축이 같은 매핑 집합을 본다는 보장이 코드에 없었다. 어긋나면 "판정은 요구하지 않는데 재작성이 주입"
+     * 또는 그 반대(주입도 없고 요구도 없음 = 조용한 무적용)가 된다.
+     */
+    @Test
+    @Order(7)
+    fun `판정 축과 재작성 축이 같은 FILTER 집합을 본다`() {
+        for (table in listOf("users", "marketing_consents", "user_events")) {
+            for (purpose in listOf(null, "marketing")) {
+                val judged = judgmentCatalog.requiredPredicates(table, purpose).size
+                val rewritten = rewriteCatalog.filterExpressions(table, purpose).size
+                assertEquals(
+                    judged, rewritten,
+                    "FILTER 매핑 개수가 축마다 다르다: table=$table purpose=$purpose " +
+                        "(판정 $judged / 재작성 $rewritten)",
+                )
+            }
+        }
+        // MASK 축도 같은 근거를 공유해야 한다(판정은 컬럼 집합만, 재작성은 강제식까지)
+        assertEquals(
+            judgmentCatalog.maskedColumns("users"),
+            rewriteCatalog.maskExpressions("users").map { it.column.lowercase() }.toSet(),
+            "MASK 컬럼 집합이 축마다 다르다",
+        )
     }
 }

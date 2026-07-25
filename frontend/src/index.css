@@ -58,10 +58,51 @@ body,
     grid-template-columns: 1fr !important;
   }
 
-  /* 그리드·플렉스 자식이 자기 min-content 때문에 부모를 넘기지 못하게 (넘침의 표준 원인) */
-  main [style*="grid-template-columns"] > *,
-  main [style*="display: flex"] > * {
+  /* 그리드·플렉스 자식이 자기 min-content 때문에 부모를 넘기지 못하게 (넘침의 표준 원인).
+     단 **버튼·태그는 제외**한다 — 실측으로 폭 2px 버튼이 만들어졌고, 그건 누를 수 없다. */
+  main [style*="grid-template-columns"] > *:not(.ant-btn):not(.ant-tag),
+  main [style*="display: flex"] > *:not(.ant-btn):not(.ant-tag) {
     min-width: 0;
+  }
+
+  /* 가로 행은 줄바꿈한다 — 좁은 화면에서 [이름 … 버튼] 행을 한 줄에 억지로 넣으면
+     텍스트가 넘치고 버튼이 짜부라진다. 줄바꿈이 잘림·짜부라짐보다 낫다. */
+  main [style*="display: flex"]:not([style*="flex-direction: column"]) {
+    flex-wrap: wrap;
+  }
+
+  /* 인라인 고정 폭은 좁은 화면에서 **상한**으로만 작동한다 — 150·170·250px 같은 값이 모여
+     컨테이너의 min-content를 뷰포트 밖으로 밀어낸다(실측: 366px 부모 안에서 399px 컨테이너).
+     의도된 가로 스크롤 영역(표·코드)은 제외한다 — 거기서는 넓은 것이 정상이다. */
+  main [style*="width:"]:not([data-scroll-x]):not([data-scroll-x] *) {
+    max-width: 100%;
+  }
+
+  /* 조작 요소는 절대 줄어들지 않는다(터치 대상 크기 유지) */
+  main .ant-btn,
+  main .ant-tag {
+    flex-shrink: 0;
+  }
+
+  /* ---- 높이: 데스크톱의 "뷰포트에 맞춘 패널"을 좁은 화면에서는 **내용 높이**로 바꾼다 ----
+     데스크톱은 3단 패널이 화면 높이를 나눠 갖고 각자 내부 스크롤한다. 그 구조를 세로로 쌓으면
+     패널마다 한 조각만 보인다 — 실측: 컬럼 표 컨테이너가 높이 79px인데 내용은 861px이었다
+     (사용자 지적 "컬럼이 보이지 않는다"의 실제 원인). 좁은 화면에서는 내용대로 늘어나고 페이지가 스크롤한다. */
+  main [style*="height: 100%"] {
+    height: auto !important;
+  }
+  main [style*="min-height"] {
+    min-height: 0 !important;
+  }
+  /* 내부 세로 스크롤 해제 — 스크롤 주체는 페이지 하나여야 한다(중첩 스크롤은 모바일에서 조작이 어렵다).
+     가로는 건드리지 않는다: overflow-x가 auto인 표는 계속 가로 스크롤해야 한다. */
+  main [style*="overflow-y: auto"] {
+    overflow-y: visible !important;
+    max-height: none !important;
+  }
+  /* 세로 스택에서 남은 공간 분배(flex:1)는 패널을 눌러버린다 — 내용 높이를 쓰게 한다 */
+  main [style*="flex: 1"] {
+    flex: none !important;
   }
 }
 

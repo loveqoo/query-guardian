@@ -59,6 +59,31 @@ async function expectNoClippedContent(page: Page, label: string) {
   ).toEqual([]);
 }
 
+/**
+ * **높이 눌림 측정** — 폭만 재다가 놓친 축이다.
+ *
+ * 데스크톱은 "뷰포트 높이를 나눠 갖는 패널"이 각자 내부 스크롤한다. 그 구조를 좁은 화면에서 세로로 쌓으면
+ * 패널마다 한 조각만 보인다 — 실측으로 높이 79px 컨테이너가 861px 내용을 담고 있었고, 사용자에게는
+ * "컬럼이 보이지 않는다"로 나타났다. 스크롤 주체는 페이지(main) 하나여야 한다.
+ */
+async function expectNoSqueezedPanels(page: Page, label: string) {
+  const squeezed = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll<HTMLElement>("main div"))
+      .filter((el) => {
+        const height = el.getBoundingClientRect().height;
+        if (!el.children.length || height === 0) return false;
+        // 내용이 컨테이너보다 훨씬 큰데 그 안에서 스크롤해야 하는 상태 = 한 조각만 보인다
+        return el.scrollHeight > height + 40;
+      })
+      .slice(0, 5)
+      .map((el) => `h=${Math.round(el.getBoundingClientRect().height)}/${el.scrollHeight} "${el.textContent?.trim().slice(0, 30)}"`);
+  });
+  expect(
+    squeezed,
+    `${label}: 내용이 눌린 컨테이너 ${squeezed.length}개(내부 세로 스크롤 — 좁은 화면에서는 페이지가 스크롤해야 한다)\n  ${squeezed.join("\n  ")}`,
+  ).toEqual([]);
+}
+
 test.describe("레이아웃", () => {
   test("로그인 화면", async ({ page }, testInfo) => {
     await page.goto("/login");
@@ -75,6 +100,10 @@ test.describe("레이아웃", () => {
       // antd 카드·표가 자리를 잡을 시간 (스냅샷 흔들림 방지)
       await page.waitForTimeout(400);
       await expectNoClippedContent(page, `${screen.name}@${testInfo.project.name}`);
+      // 좁은 화면에서만 검사한다 — 데스크톱의 패널 내부 스크롤은 의도된 설계다
+      if (testInfo.project.name !== "desktop") {
+        await expectNoSqueezedPanels(page, `${screen.name}@${testInfo.project.name}`);
+      }
       await expect(page).toHaveScreenshot(`${screen.name}.png`, { fullPage: true });
     });
   }

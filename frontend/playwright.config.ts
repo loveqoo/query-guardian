@@ -31,5 +31,8 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } } },
     { name: "tablet", use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } } },
     { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } } },
+    // 긴 뷰포트: 앱이 main 안에서 스크롤하므로 `fullPage`가 첫 화면만 담는다.
+    // 이 프로젝트가 화면 **아래쪽**(표·이력 등)까지 스냅샷에 넣는다 — 그 사각에서 실제로 결함을 놓쳤다.
+    { name: "mobile-tall", use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 2000 } } },
   ],
 });

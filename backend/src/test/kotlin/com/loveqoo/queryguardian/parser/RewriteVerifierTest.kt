@@ -98,11 +98,11 @@ class RewriteVerifierTest {
         )
     }
 
-    /** 재작성 산출물도 형식 검사를 통과해야 한다 — 왕복 정합성(§2.8-4)의 실행 지점. */
+    /** 재작성 산출물도 접수 검사를 통과해야 한다 — 왕복 정합성(§2.8-4)의 실행 지점. */
     @Test
-    fun `재작성 결과가 형식 위반이면 잡는다`() {
+    fun `재작성 결과가 접수 위반이면 잡는다`() {
         val problems = verifier.verify("SELECT id FROM users -- 주석", RewritePlan())
-        assertTrue(problems.any { it.contains("형식 검사에 걸립니다") }, "$problems")
+        assertTrue(problems.any { it.contains("접수 검사에 걸립니다") }, "$problems")
     }
 
     @Test

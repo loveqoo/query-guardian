@@ -9,7 +9,7 @@ import kotlin.test.assertTrue
 /**
  * spec 008 §3.0.3이 의존하는 **왕복 정합성**:
  *
- *     checkForm(sql) 통과  ⟹  checkForm(Druid가 출력한 sql) 통과
+ *     checkIntake(sql) 통과  ⟹  checkIntake(Druid가 출력한 sql) 통과
  *
  * M1의 재작성은 AST를 고친 뒤 **다시 프린트해서** 실행한다. 이 성질이 깨지면 저장 시점엔 통과한 쿼리가
  * 실행 시점에 자기 재작성 결과 때문에 거부된다(저장/실행 분기). 실제 반례가 있었다:
@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
  * 이 테스트는 타사 모델 검토가 160개 입력으로 측정한 카테고리를 축약해 영구 고정한 것이다.
  * **Druid를 직접 쓰므로 parser 테스트 패키지에 둔다** — 방언 타입의 parser 패키지 봉인(ArchUnit)을 지키기 위해.
  */
-class FormRoundTripTest {
+class IntakeRoundTripTest {
 
     private val parser = DruidMySqlParser()
 
@@ -78,18 +78,18 @@ class FormRoundTripTest {
     )
 
     @Test
-    fun `형식 검사 통과 SQL은 프린터 출력도 형식 검사를 통과한다`() {
+    fun `접수 검사 통과 SQL은 프린터 출력도 접수 검사를 통과한다`() {
         val violations = mutableListOf<String>()
         var checked = 0
         for (sql in corpus) {
-            val before = parser.checkForm(sql)
+            val before = parser.checkIntake(sql)
             if (before.isNotEmpty()) continue // 원문이 이미 거부면 이 성질의 대상이 아니다
             checked++
             val printed = SQLUtils.toSQLString(
                 SQLUtils.parseStatements(sql, DbType.mysql).single(),
                 DbType.mysql,
             )
-            val after = parser.checkForm(printed)
+            val after = parser.checkIntake(printed)
             if (after.isNotEmpty()) {
                 violations += "원문: $sql\n출력: $printed\n출력 판정: ${after.map { it.code }}"
             }
@@ -99,11 +99,11 @@ class FormRoundTripTest {
         assertTrue(checked >= 35, "왕복 검증 대상이 너무 적다: $checked/${corpus.size} — 코퍼스가 과도하게 거부되고 있다")
     }
 
-    /** 코퍼스의 정상 쿼리가 형식 검사에 걸리면 그것 자체가 오차단이다 — 어느 문장이 걸렸는지 드러낸다. */
+    /** 코퍼스의 정상 쿼리가 접수 검사에 걸리면 그것 자체가 오차단이다 — 어느 문장이 걸렸는지 드러낸다. */
     @Test
-    fun `코퍼스의 정상 쿼리는 형식 위반이 없다`() {
+    fun `코퍼스의 정상 쿼리는 접수 위반이 없다`() {
         val rejected = corpus.mapNotNull { sql ->
-            parser.checkForm(sql).takeIf { it.isNotEmpty() }?.let { "$sql → ${it.map { v -> v.code }}" }
+            parser.checkIntake(sql).takeIf { it.isNotEmpty() }?.let { "$sql → ${it.map { v -> v.code }}" }
         }
         assertEquals(emptyList(), rejected, "정상 쿼리가 거부됨:\n${rejected.joinToString("\n")}")
     }

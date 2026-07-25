@@ -1,14 +1,14 @@
 package com.loveqoo.queryguardian.parser
 
 /**
- * 형식 검사 (spec 008 §2.6) — 재작성·실행 대상 SQL이 통과해야 하는 형태 제약.
+ * 접수 검사 (spec 008 §2.6) — 재작성·실행 대상 SQL이 통과해야 하는 형태 제약.
  *
  * **왜 IR이 아니라 원문·AST에서 검사하는가**: IR은 lossy하다. 적대 검토가 실측으로 밝힌 대로
  * MySQL 실행 주석(여는 `slash-star-!`, 예 `!50000 UNION SELECT ssn FROM users`)으로 감싼 UNION은 IR에서
  * **전혀 보이지 않지만** MySQL은 그것을 실행한다. IR로 검사하는 게이트는 이 형태를 원리적으로 볼 수 없다.
  * (KDoc 안에는 여는 주석 기호를 그대로 쓸 수 없어 풀어 적는다 — Kotlin은 블록 주석을 중첩 처리한다.)
  */
-enum class FormCode {
+enum class IntakeCode {
     /** 모든 주석 금지 — MySQL 실행 주석(여는 `slash-star-!`)은 실제로 실행되고, 후행 `--`·`#`은 주입한 LIMIT을 삼킨다. */
     COMMENT_NOT_ALLOWED,
 
@@ -36,13 +36,13 @@ enum class FormCode {
     /**
      * 검사 자체가 불가능했다 — 파싱 실패·비-SELECT·AST 순회 예외.
      *
-     * 형식 검사가 "볼 수 없었다"를 빈 목록(=위반 없음)으로 보고하면 형식 검사를 **단독으로** 호출하는 경로
+     * 접수 검사가 "볼 수 없었다"를 빈 목록(=위반 없음)으로 보고하면 접수 검사를 **단독으로** 호출하는 경로
      * (spec 008 §5의 독립 단계)가 그대로 fail-open한다. 그래서 검사 불가는 명시적 위반이다.
      */
     UNVERIFIABLE,
 }
 
-data class FormViolation(val code: FormCode, val message: String)
+data class IntakeViolation(val code: IntakeCode, val message: String)
 
 /**
  * 리터럴·백틱 식별자를 인식하는 어휘 스캔.
@@ -82,7 +82,7 @@ object SqlCommentScanner {
                 }
                 // MySQL에서 `--`는 **뒤에 공백류나 문장 끝이 와야** 주석이다. `SELECT 5--1`은 뺄셈이고,
                 // Druid 프린터도 `- -1`을 `--1`로 출력하므로(적대 검토 결함 6) 이 규칙을 맞추지 않으면
-                // "형식 검사 통과 → 재작성 → 형식 위반"이라는 비고정점이 생겨 §3.0.3 재작성 검증이 성립하지 않는다.
+                // "접수 검사 통과 → 재작성 → 접수 위반"이라는 비고정점이 생겨 §3.0.3 재작성 검증이 성립하지 않는다.
                 '-' -> {
                     if (i + 1 < n && sql[i + 1] == '-' && (i + 2 >= n || sql[i + 2].isWhitespace())) {
                         if (commentAt == null) commentAt = i

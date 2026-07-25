@@ -7,7 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 
-/** spec 008 §2.7-3: demo_table_map은 매핑표이면서 실행 허용목록이다 — 총체성·식별자 형식 검사 회귀. */
+/** spec 008 §2.7-3: demo_table_map은 매핑표이면서 실행 허용목록이다 — 총체성·식별자 접수 검사 회귀. */
 class DemoTableMapTest {
 
     private val mappings = listOf(
@@ -46,7 +46,7 @@ class DemoTableMapTest {
     }
 
     @Test
-    fun `식별자 형식 검사를 위반한 물리명은 거부한다`() {
+    fun `식별자 접수 검사를 위반한 물리명은 거부한다`() {
         val poisoned = mappings + DemoTableMapping(4, "orders", "demo_orders; DROP TABLE app_user --")
         assertIs<DemoMapping.Invalid>(resolve(poisoned, setOf("orders")))
         assertIs<DemoMapping.Invalid>(resolve(listOf(DemoTableMapping(5, "t", "back`tick")), setOf("t")))

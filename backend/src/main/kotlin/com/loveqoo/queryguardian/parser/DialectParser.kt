@@ -17,16 +17,16 @@ interface DialectParser {
     fun predicateContainsSubquery(predicateSql: String): Boolean
 
     /**
-     * 형식 검사 (spec 008 §2.6) — 원문·AST에서만 볼 수 있는 형태 위반 목록. 위반 없으면 빈 목록.
+     * 접수 검사 (spec 008 §2.6) — 원문·AST에서만 볼 수 있는 형태 위반 목록. 위반 없으면 빈 목록.
      *
      * [parse]와 별개인 이유: IR은 lossy해서 주석·변수·스키마 한정자·문형이 IR에 남지 않는다.
-     * **검사 불가(파싱 실패·비-SELECT)는 빈 목록이 아니라 [FormCode.UNVERIFIABLE]** — 빈 목록은
+     * **검사 불가(파싱 실패·비-SELECT)는 빈 목록이 아니라 [IntakeCode.UNVERIFIABLE]** — 빈 목록은
      * "위반 없음"으로 읽혀 단독 호출 경로를 fail-open시킨다.
      */
-    fun checkForm(sql: String): List<FormViolation>
+    fun checkIntake(sql: String): List<IntakeViolation>
 
     /**
-     * 파싱 **1회**로 IR과 형식 위반을 함께 얻는다. 게이트는 이 경로를 쓴다 — 두 번 파싱하면
+     * 파싱 **1회**로 IR과 접수 위반을 함께 얻는다. 게이트는 이 경로를 쓴다 — 두 번 파싱하면
      * 판정 대상과 검사 대상이 갈라질 수 있다(타임아웃 레이스로 실측됨).
      */
     fun inspect(sql: String): InspectResult
@@ -40,7 +40,7 @@ interface DialectParser {
  */
 data class InspectResult(
     val parse: ParseResult,
-    val formViolations: List<FormViolation>,
+    val intakeViolations: List<IntakeViolation>,
     val statement: ParsedStatement? = null,
 )
 

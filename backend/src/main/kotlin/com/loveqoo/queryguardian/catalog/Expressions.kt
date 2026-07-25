@@ -30,6 +30,22 @@ object Expressions {
         return if (missing) null else result
     }
 
+    /**
+     * `:param`만 치환하고 `{col}`은 **그대로 남긴다** (spec 008 §3.5 M1-2).
+     * 재작성기가 그 자리에 원본 컬럼 표현식(`u.email`)을 넣어야 한정자가 보존되기 때문이다 —
+     * 여기서 컬럼명으로 미리 바꿔버리면 조인 쿼리에서 어느 테이블의 컬럼인지 잃는다.
+     */
+    fun substituteParams(expression: String, params: Map<String, String>): String? {
+        var missing = false
+        val result = PARAM.replace(expression) { m ->
+            val value = params[m.groupValues[1]]
+            if (value == null) { missing = true; m.value }
+            else if (NUMERIC.matches(value)) value
+            else "'" + value.replace("'", "''") + "'"
+        }
+        return if (missing) null else result
+    }
+
     /** params_json 파싱: JSON 객체 + 스칼라 값만 허용 (§3.3). 위반 시 null. */
     fun parseParams(objectMapper: ObjectMapper, paramsJson: String?): Map<String, String>? {
         if (paramsJson.isNullOrBlank()) return emptyMap()

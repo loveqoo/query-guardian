@@ -401,9 +401,13 @@ class DruidMySqlParser(
         val derivedSources = mutableListOf<SQLSubqueryTableSource>()
         val unionSources = mutableListOf<SQLUnionQueryTableSource>()
         val unsupportedSources = mutableListOf<String>()
+        val nullProducing = mutableSetOf<String>()
         val isCte: (String) -> Boolean = { name -> parentResolver?.isCte(name) ?: false }
         block.from?.let {
-            collectTables(it, tables, derivedSources, unionSources, unsupportedSources, innerOnExprs, allOnExprs, isCte)
+            collectTables(
+                it, tables, derivedSources, unionSources, unsupportedSources,
+                innerOnExprs, allOnExprs, nullProducing, isCte,
+            )
         }
         val resolver = AliasResolver(tables, parentResolver)
         derivedSources.forEach { children += buildFromSelect(it.select, ScopeKind.DERIVED, resolver, registry) }
@@ -440,7 +444,8 @@ class DruidMySqlParser(
             // 모르는 FROM 형태는 **차단**한다. 조용히 버리면 그 스코프의 위반이 함께 사라진다(스코프 은닉).
             unverifiable = unsupportedSources.takeIf { it.isNotEmpty() }
                 ?.let { "지원하지 않는 FROM 형태: ${it.distinct().joinToString(", ")}" },
-            columnRefs = columnRefs, joinEqualities = joinEqualities, scopeId = registry.register(block))
+            columnRefs = columnRefs, joinEqualities = joinEqualities, scopeId = registry.register(block),
+            nullProducingInstances = nullProducing)
     }
 
     /**
@@ -481,6 +486,7 @@ class DruidMySqlParser(
         unsupported: MutableList<String>,
         innerOnExprs: MutableList<SQLExpr>,
         allOnExprs: MutableList<SQLExpr>,
+        nullProducing: MutableSet<String>,
         isCte: (String) -> Boolean,
     ) {
         when (source) {
@@ -495,8 +501,26 @@ class DruidMySqlParser(
                 tables += TableRef(normalized, norm(source.alias), physical = !isCte(normalized))
             }
             is SQLJoinTableSource -> {
-                collectTables(source.left, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, isCte)
-                collectTables(source.right, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, isCte)
+                collectTables(source.left, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, nullProducing, isCte)
+                collectTables(source.right, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, nullProducing, isCte)
+                // OUTER JOIN의 보존되지 않는 쪽은 null이 생성된다 → 그 인스턴스에 WHERE 술어를 주입하면
+                // 조인이 사실상 INNER로 바뀌어 의미가 변한다 (spec 008 §3.0.2). 모르는 종류는 양쪽 다 담는다.
+                when (source.joinType) {
+                    SQLJoinTableSource.JoinType.LEFT_OUTER_JOIN,
+                    SQLJoinTableSource.JoinType.NATURAL_LEFT_JOIN,
+                    SQLJoinTableSource.JoinType.OUTER_APPLY,
+                    -> nullProducing += instanceKeysOf(source.right, isCte)
+
+                    SQLJoinTableSource.JoinType.RIGHT_OUTER_JOIN,
+                    SQLJoinTableSource.JoinType.NATURAL_RIGHT_JOIN,
+                    -> nullProducing += instanceKeysOf(source.left, isCte)
+
+                    in INNER_JOIN_TYPES -> Unit
+                    else -> {
+                        nullProducing += instanceKeysOf(source.left, isCte)
+                        nullProducing += instanceKeysOf(source.right, isCte)
+                    }
+                }
                 val condition = source.condition
                 if (condition != null) {
                     // 컬럼 참조 수집은 조인 종류 불문(§5.1). WHERE 동치 인정은 INNER 계열만(§6.1).
@@ -520,6 +544,27 @@ class DruidMySqlParser(
             // 미지원 FROM 형태는 조용히 버리지 않는다 — 버리면 그 스코프의 위반이 사라진다(스코프 은닉).
             else -> unsupported += source.javaClass.simpleName
         }
+    }
+
+    /** 테이블 소스 하위 트리의 인스턴스 키 전부 — OUTER JOIN의 어느 쪽이 null 생성인지 표시할 때 쓴다. */
+    private fun instanceKeysOf(source: SQLTableSource, isCte: (String) -> Boolean): Set<String> {
+        val keys = mutableSetOf<String>()
+        when (source) {
+            is SQLExprTableSource -> {
+                val name = when (val e = source.expr) {
+                    is SQLIdentifierExpr -> e.name
+                    is SQLPropertyExpr -> e.name
+                    else -> source.expr.toString()
+                }
+                keys += norm(source.alias) ?: norm(name)!!
+            }
+            is SQLJoinTableSource -> {
+                keys += instanceKeysOf(source.left, isCte)
+                keys += instanceKeysOf(source.right, isCte)
+            }
+            else -> source.alias?.let { keys += norm(it)!! }
+        }
+        return keys
     }
 
     // ---- 술어 변환 ----

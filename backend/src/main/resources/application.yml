@@ -13,4 +13,7 @@ server:
 guardian:
   limit:
     max: 1000
+  exec:
+    # 행 상한 — 재작성이 LIMIT N+1을 넣고 N+1번째 행이 오면 truncated로 확정한다 (spec 008 §3.0-2).
+    max-rows: 1000
 

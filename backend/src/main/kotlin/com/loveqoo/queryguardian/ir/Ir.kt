@@ -42,6 +42,14 @@ data class SelectScope(
      * 그 파싱이 만든 `ParsedStatement` 핸들과 **짝으로만** 사용한다.
      */
     val scopeId: String = "",
+    /**
+     * 이 스코프 FROM에서 **null을 생성하는 쪽**(OUTER JOIN의 보존되지 않는 쪽) 테이블 인스턴스 키들.
+     *
+     * WHERE에 술어를 주입하면 LEFT JOIN이 사실상 INNER로 바뀌어 **의미가 변한다** — spec 008 §3.0.2는
+     * 그런 대상에 대한 재작성을 거부하라고 요구하고, 그 판단의 근거가 이 집합이다.
+     * 알 수 없는 조인 종류는 **양쪽 모두** 담는다(fail-closed — 의미 변경보다 거부가 안전).
+     */
+    val nullProducingInstances: Set<String> = emptySet(),
 )
 
 /** 컬럼=컬럼 등식. 방향 무관(a=b ≡ b=a). 어느 한쪽이라도 귀속 불가(table=null)면 joins는 fail-closed 미충족. */

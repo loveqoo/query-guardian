@@ -15,22 +15,13 @@ import com.loveqoo.queryguardian.rules.requiredForm
  */
 class DbTableCatalog(
     private val parser: DialectParser,
-    private val tables: CatalogTableRepository,
+    private val bindings: ConstraintBindingReader,
     private val defs: ConstraintDefRepository,
     private val mappings: ConstraintMappingRepository,
     private val objectMapper: ObjectMapper,
 ) : TableCatalog {
 
-    private data class Bound(val column: CatalogColumn, val mapping: ConstraintMapping, val def: ConstraintDef)
-
-    private fun boundFor(tableName: String): List<Bound> {
-        val table = tables.findByNameIgnoreCase(tableName) ?: return emptyList()
-        val columnsById = table.columns.filter { it.id != null }.associateBy { it.id!! }
-        if (columnsById.isEmpty()) return emptyList()
-        return mappings.findByColumnIdIn(columnsById.keys).mapNotNull { m ->
-            defs.findById(m.defId).orElse(null)?.let { d -> Bound(columnsById[m.columnId]!!, m, d) }
-        }
-    }
+    private fun boundFor(tableName: String): List<ConstraintBinding> = bindings.forTable(tableName)
 
     override fun partitionKeys(tableName: String): List<String> =
         boundFor(tableName).filter { it.def.kind == DefKind.PARTITION }.map { it.column.name }
@@ -49,10 +40,10 @@ class DbTableCatalog(
                 RequiredPredicate("${bound.def.name} ($sql)", parser.parsePredicate(sql) ?: Predicate.Raw(sql))
             }
 
-    private fun unverifiable(bound: Bound) =
+    private fun unverifiable(bound: ConstraintBinding) =
         RequiredPredicate("${bound.def.name} (검증 불가)", Predicate.Raw(bound.def.expression ?: ""))
 
-    override fun exists(tableName: String): Boolean = tables.findByNameIgnoreCase(tableName) != null
+    override fun exists(tableName: String): Boolean = bindings.tableExists(tableName)
 
     /**
      * 사용자 규칙 requires 조건의 술어 해석 (spec 004 §4.2). def(FILTER)의 강제식을 컬럼·params로 치환·파싱해

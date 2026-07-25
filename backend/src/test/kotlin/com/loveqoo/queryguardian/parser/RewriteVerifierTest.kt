@@ -112,4 +112,28 @@ class RewriteVerifierTest {
         )
         assertEquals(emptyList(), problems)
     }
+
+    /**
+     * 적대 검토 CRITICAL: "bare 투영으로 남지 않았다"만 보면 **아무 항등 표현식**으로 감싸도 통과한다.
+     * `CONCAT(users.email, '')`은 사실상 평문 이메일을 반환한다 — 계획한 강제식과 대조해야 한다.
+     */
+    @Test
+    fun `계획한 강제식이 아닌 표현식으로 감싸면 잡는다`() {
+        val problems = verifier.verify(
+            "SELECT CONCAT(users.email, '') AS email FROM demo_users users LIMIT 1001",
+            RewritePlan(
+                maskProjections = listOf(MaskProjection("s0", "users", "email", "mask_email({col})", "email")),
+                limitCap = LimitCap("s0", 1000),
+                tableRenames = listOf(TableRename("s0", "users", "users", "demo_users")),
+            ),
+        )
+        assertTrue(problems.any { it.contains("계획한 마스킹 강제식이 적용되지 않았습니다") }, "$problems")
+    }
+
+    @Test
+    fun `한정 비한정 두 형태의 강제식을 모두 인정한다`() {
+        val plan = RewritePlan(maskProjections = listOf(MaskProjection("s0", "users", "email", "mask_email({col})", "email")))
+        assertEquals(emptyList(), verifier.verify("SELECT mask_email(users.email) AS email FROM users", plan))
+        assertEquals(emptyList(), verifier.verify("SELECT mask_email(email) AS email FROM users", plan))
+    }
 }

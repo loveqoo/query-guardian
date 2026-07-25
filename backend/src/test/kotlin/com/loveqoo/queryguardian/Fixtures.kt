@@ -27,6 +27,8 @@ object Fixtures {
         ),
         // spec 002: users.ssn은 BLOCK 매핑 (디자인 표본 — 조회 전면 차단)
         blocked = mapOf("users" to setOf("ssn")),
+        // spec 008: users.email은 MASK 매핑 (실행 시 자동 마스킹, 표현 불가 위치는 BLOCK)
+        masked = mapOf("users" to setOf("email")),
         tables = setOf("user_events", "users"),
     )
 

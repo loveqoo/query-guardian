@@ -6,7 +6,7 @@ import com.loveqoo.queryguardian.ir.ResolvedColumn
 import com.loveqoo.queryguardian.ir.ScopeKind
 import com.loveqoo.queryguardian.ir.MaskUsage
 import com.loveqoo.queryguardian.ir.SelectScope
-import com.loveqoo.queryguardian.ir.maskUsageOf
+import com.loveqoo.queryguardian.ir.maskFindings
 import com.loveqoo.queryguardian.ir.SelectItem
 
 /** select-item `*`/`t.*` 금지. COUNT(*)는 Star가 아니며, EXISTS 스코프는 관용구로 면제 (§6.7). */
@@ -81,20 +81,19 @@ class MustBeMaskedRule : Rule {
     override val severity = Severity.BLOCK
 
     override fun check(scope: SelectScope, catalog: TableCatalog, context: LintContext): List<Violation> =
-        scope.tables.filter { it.physical }.flatMap { instance ->
-            catalog.maskedColumns(instance.name).mapNotNull { column ->
-                when (maskUsageOf(scope, instance.instanceKey, column)) {
-                    MaskUsage.ABSENT -> null
-                    MaskUsage.PROJECTION_ONLY -> Violation(
-                        id, Severity.WARN,
-                        "컬럼 ${instance.name}.${column}은(는) 실행 시 자동으로 마스킹됩니다.",
-                    )
-                    MaskUsage.NOT_EXPRESSIBLE -> Violation(
-                        id, Severity.BLOCK,
-                        "컬럼 ${instance.name}.${column}은(는) 마스킹 대상인데 투영이 아닌 위치" +
-                            "(함수 인자·CASE·조건·GROUP BY·`*`)에서 사용됐습니다 — 마스킹을 적용할 수 없습니다.",
-                    )
-                }
+        maskFindings(scope) { table -> catalog.maskedColumns(table) }.mapNotNull { finding ->
+            when (finding.usage) {
+                MaskUsage.ABSENT -> null
+                MaskUsage.PROJECTION_ONLY -> Violation(
+                    id, Severity.WARN,
+                    "컬럼 ${finding.logicalTable}.${finding.column}은(는) 실행 시 자동으로 마스킹됩니다.",
+                )
+                MaskUsage.NOT_EXPRESSIBLE -> Violation(
+                    id, Severity.BLOCK,
+                    "컬럼 ${finding.logicalTable}.${finding.column}은(는) 마스킹 대상인데 치환으로 표현할 수 없는 " +
+                        "형태입니다(투영 아닌 위치·`*`·DISTINCT·그룹/정렬 기준·테이블 귀속 불명) — " +
+                        "컬럼을 한정해 select 목록에 그대로 두고 조건에서 빼 주세요.",
+                )
             }
         }
 }

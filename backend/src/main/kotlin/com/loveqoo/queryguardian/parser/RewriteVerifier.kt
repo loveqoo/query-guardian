@@ -52,6 +52,7 @@ class RewriteVerifier(private val parser: DialectParser) {
         //    (재파싱하면 scopeId가 새로 발급되므로 스코프를 id로 지목할 수 없다 — 존재로 검증한다.
         //     whereConjuncts 자체가 "최상위 AND만" 담는 축이므로, 여기 있다는 것이 곧 최상위라는 뜻이다.)
         for (injection in plan.injections) {
+            if (injection.alreadySatisfied) continue // 주입하지 않았으므로 검증 대상이 아니다
             val expected = parser.parsePredicate(injection.predicateSql)
             val found = scopes.any { scope ->
                 scope.whereConjuncts.any { matches(it, expected, injection.predicateSql) }
@@ -61,7 +62,11 @@ class RewriteVerifier(private val parser: DialectParser) {
             }
         }
 
-        // ⑷ MASK 컬럼이 **원본 그대로** 투영으로 남아 있지 않은가 — 남아 있으면 평문이 반환된다
+        // ⑷ MASK가 **계획한 그 강제식으로** 적용됐는가.
+        //
+        //    "bare 투영으로 남지 않았다"만 확인하면 부족하다 — 적대 검토가 실증한 대로
+        //    `CONCAT(users.email, '')`처럼 **항등에 가까운 아무 표현식**으로 감싸도 통과하고, 그것은 평문을 반환한다.
+        //    그래서 계획의 강제식 템플릿을 실제로 적용한 형태와 **텍스트로 대조**한다.
         for (mask in plan.maskProjections) {
             val bare = scopes.any { scope ->
                 scope.selectItems.any { item ->
@@ -72,6 +77,19 @@ class RewriteVerifier(private val parser: DialectParser) {
             }
             if (bare) {
                 problems += "마스킹 대상이 원본 투영으로 남아 있습니다: ${mask.instanceKey}.${mask.column}"
+                continue
+            }
+            // 한정·비한정 두 형태 모두 정상이다: `mask_email(u.email)` / `mask_email(email)`
+            val expected = setOf(
+                normalize(mask.expressionTemplate.replace("{col}", "${mask.instanceKey}.${mask.column}")),
+                normalize(mask.expressionTemplate.replace("{col}", mask.column)),
+            )
+            val applied = scopes.any { scope ->
+                scope.selectItems.any { item -> item is SelectItem.Expr && normalize(item.text) in expected }
+            }
+            if (!applied) {
+                problems += "계획한 마스킹 강제식이 적용되지 않았습니다: ${mask.instanceKey}.${mask.column} " +
+                    "(기대: ${mask.expressionTemplate})"
             }
         }
 
@@ -117,7 +135,9 @@ class RewriteVerifier(private val parser: DialectParser) {
      * `Raw` 원문이 `(u.id IS NOT NULL)`로 나오는데, 그것과 `u.id IS NOT NULL`은 같은 술어다.
      */
     private fun normalize(text: String): String =
-        stripOuterParens(text.replace(Regex("\\s+"), " ").trim()).lowercase()
+        // 백틱은 식별자 인용일 뿐이다 — `mask_email(`u`.`email`)`과 `mask_email(u.email)`은 같은 표현식이다
+        // (적대 검토가 찾은 오차단: 백틱을 쓴 정상 쿼리가 전부 실행 거부됐다).
+        stripOuterParens(text.replace(Regex("\\s+"), " ").trim()).replace("`", "").lowercase()
 
     private fun stripOuterParens(text: String): String {
         var current = text

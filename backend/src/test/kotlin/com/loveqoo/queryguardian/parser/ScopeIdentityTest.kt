@@ -63,14 +63,19 @@ class ScopeIdentityTest {
     }
 
     /**
-     * 같은 SQL을 두 번 파싱하면 각각의 핸들·IR 짝만 유효하다. id 자체는 재현되지만(같은 순회) 그 값에
-     * 의존하지 말라는 계약을 명시한다 — 계획은 **자기 파싱의 핸들과 함께** 쓰여야 한다.
+     * **다른 파싱의 id는 절대 겹치지 않는다.** 순번만 쓰면 모든 파싱이 `s0`부터 시작해 계획 A를 핸들 B에
+     * 적용해도 짝 검증이 통과했고, 적대 검토가 그 경로로 평문이 나가는 것을 실증했다.
+     * spec 008 결정 13("판정-실행 분기를 구조적으로 제거")은 이 성질 위에서만 성립한다.
      */
     @Test
-    fun `id는 파싱마다 자기 핸들과 짝으로만 쓴다`() {
+    fun `다른 파싱의 스코프 id는 겹치지 않는다`() {
         val a = parser.inspect(nested)
         val b = parser.inspect(nested)
-        assertEquals(a.statement!!.scopeIds, b.statement!!.scopeIds, "같은 순회이므로 집합은 같다")
         assertTrue(a.statement !== b.statement, "핸들은 파싱마다 별개다")
+        assertEquals(
+            emptySet(),
+            a.statement!!.scopeIds intersect b.statement!!.scopeIds,
+            "같은 SQL이라도 파싱이 다르면 id가 겹쳐선 안 된다",
+        )
     }
 }

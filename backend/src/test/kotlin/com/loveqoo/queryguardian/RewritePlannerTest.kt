@@ -116,15 +116,19 @@ class RewritePlannerTest {
         assertEquals(RewriteRefusal.EXPRESSION_NOT_USABLE, refused.refusal)
     }
 
-    /** 파생 테이블 안에서 투영되면 **가장 안쪽 스코프**에 계획이 붙어야 한다(외곽 alias는 물리 테이블이 아니다). */
+    /**
+     * 파생 테이블 안에서 투영되면 **가장 안쪽 스코프**에 계획이 붙어야 한다(외곽 alias는 물리 테이블이 아니다).
+     * IR을 **한 번만** 파싱해 비교한다 — 스코프 id는 파싱마다 달라지므로(짝 검증의 근거) 두 번 파싱하면 못 맞춘다.
+     */
     @Test
     fun `파생 테이블 내부 투영은 그 스코프에 계획된다`() {
-        val query = "SELECT d.email FROM (SELECT email FROM users) d LIMIT 10"
-        val outcome = assertIs<PlanOutcome.Planned>(plan(query))
+        val parsed = ir("SELECT d.email FROM (SELECT email FROM users) d LIMIT 10")
+        val outcome = assertIs<PlanOutcome.Planned>(
+            RewritePlanner(FakeCatalog(), 1000).plan(parsed, "marketing", mapOf("users" to "demo_users")),
+        )
         val mask = outcome.plan.maskProjections.single()
-        val root = ir(query).root
-        assertTrue(mask.scopeId != root.scopeId, "루트가 아니라 파생 스코프에 붙어야 함")
-        assertEquals(root.children.single().scopeId, mask.scopeId)
+        assertTrue(mask.scopeId != parsed.root.scopeId, "루트가 아니라 파생 스코프에 붙어야 함")
+        assertEquals(parsed.root.children.single().scopeId, mask.scopeId)
     }
 
     // ---- FILTER / INTEGRITY ----
@@ -201,5 +205,37 @@ class RewritePlannerTest {
         // 계획의 다른 항목은 전부 **논리명·인스턴스 키**로만 말한다 — 물리명이 새면 카탈로그 조회가 0건이 된다
         assertTrue(outcome.plan.maskProjections.none { it.instanceKey.contains("demo_") })
         assertTrue(outcome.plan.injections.none { it.predicateSql.contains("demo_") })
+    }
+
+    /** 적대 검토 HIGH: `LIMIT 0`을 "미지정"으로 취급하면 0행 요청이 상한(1000)행으로 확대된다. */
+    @Test
+    fun `LIMIT 0도 사용자 의도로 존중한다`() {
+        val outcome = assertIs<PlanOutcome.Planned>(plan("SELECT id FROM users LIMIT 0"))
+        assertEquals(0, outcome.plan.limitCap!!.maxRows)
+    }
+
+    /**
+     * 한때 "이미 최상위 조건이 있으면 주입 생략"을 넣었다가 철회했다 — `WHERE mc.consent_yn <> 'Y'`도
+     * "제약됨"으로 읽혀 필수 조건이 아예 주입되지 않는 fail-open이었다(적대 검토 지적).
+     * 지금은 조건이 이미 있어도 **거부**한다(OUTER JOIN 오차단은 알려진 한계, INNER JOIN으로 우회).
+     */
+    @Test
+    fun `조건이 이미 있어도 OUTER JOIN null 생성 쪽은 거부한다`() {
+        val refused = assertIs<PlanOutcome.Refused>(
+            plan(
+                "SELECT u.id FROM users u LEFT JOIN marketing_consents mc ON mc.user_id = u.id " +
+                    "WHERE mc.consent_yn <> 'Y' LIMIT 10",
+            ),
+        )
+        assertEquals(RewriteRefusal.OUTER_JOIN_FILTER, refused.refusal)
+    }
+
+    /** 조건이 없으면 여전히 거부한다 — 완화가 OUTER 방어를 없애지 않았음을 고정한다. */
+    @Test
+    fun `조건이 없는 OUTER JOIN은 여전히 거부한다`() {
+        val refused = assertIs<PlanOutcome.Refused>(
+            plan("SELECT u.id FROM users u LEFT JOIN marketing_consents mc ON mc.user_id = u.id LIMIT 10"),
+        )
+        assertEquals(RewriteRefusal.OUTER_JOIN_FILTER, refused.refusal)
     }
 }

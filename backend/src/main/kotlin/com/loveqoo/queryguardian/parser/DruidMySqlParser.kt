@@ -5,6 +5,7 @@ import com.alibaba.druid.sql.SQLUtils
 import com.alibaba.druid.sql.ast.SQLExpr
 import com.alibaba.druid.sql.ast.SQLLimit
 import com.alibaba.druid.sql.ast.SQLObject
+import com.alibaba.druid.sql.ast.SQLSetQuantifier
 import com.alibaba.druid.sql.ast.expr.SQLAggregateExpr
 import com.alibaba.druid.sql.ast.expr.SQLAllColumnExpr
 import com.alibaba.druid.sql.ast.expr.SQLBetweenExpr
@@ -65,10 +66,16 @@ class DruidMySqlParser(
      * 발급 순서대로 `s0`,`s1`,… id를 주고 그 스코프를 만든 AST 노드를 같이 기억한다 —
      * 재작성이 **판정된 그 AST**를 지목할 수 있게 하는 유일한 연결이다.
      */
-    private class ScopeRegistry {
+    private class ScopeRegistry(private val parseNonce: Long) {
         private var next = 0
         val nodes = linkedMapOf<String, SQLObject>()
-        fun register(node: SQLObject): String = "s${next++}".also { nodes[it] = node }
+
+        /**
+         * id에 **파싱별 난스**를 넣는다. 순번만 쓰면 모든 파싱이 `s0`부터 시작해 다른 파싱의 계획이
+         * 우연히 맞아떨어진다 — 적대 검토가 "계획 A를 핸들 B에 적용해 평문이 나갔다"로 실증했다.
+         * 결정 13("판정-실행 분기를 구조적으로 제거")이 실제로 성립하려면 짝 검증이 실패할 수 있어야 한다.
+         */
+        fun register(node: SQLObject): String = "p${parseNonce}s${next++}".also { nodes[it] = node }
     }
 
     /** Druid AST를 감싼 불투명 핸들 — Druid 타입은 이 클래스 밖으로 나가지 않는다. */
@@ -85,6 +92,9 @@ class DruidMySqlParser(
         override val dialect = Dialect.MYSQL
         override val scopeIds: Set<String> get() = scopeNodes.keys
     }
+
+    /** 파싱마다 증가 — scopeId가 파싱 간에 충돌하지 않게 한다. */
+    private val parseCounter = java.util.concurrent.atomic.AtomicLong()
 
     private val executor: ExecutorService = Executors.newCachedThreadPool { r ->
         Thread(r, "druid-parse").apply { isDaemon = true }
@@ -162,7 +172,7 @@ class DruidMySqlParser(
         val statement = statements[0] as? SQLSelectStatement
             ?: return InspectResult(ParseResult.Failure(FailureKind.NOT_SELECT, "SELECT 문만 저장할 수 있습니다"), lexical)
 
-        val registry = ScopeRegistry()
+        val registry = ScopeRegistry(parseCounter.incrementAndGet())
         val root = buildFromSelect(statement.select, ScopeKind.ROOT, parentResolver = null, registry = registry)
         return InspectResult(
             ParseResult.Success(QueryIR(root, sql)),
@@ -286,7 +296,8 @@ class DruidMySqlParser(
 
     override fun parsePredicate(predicateSql: String): Predicate? = try {
         val expr = SQLUtils.toSQLExpr(predicateSql, DbType.mysql)
-        toPredicate(expr, AliasResolver(emptyList(), null), mutableListOf(), ScopeRegistry())
+        // 술어만 파싱하는 경로 — 스코프를 만들지 않으므로 난스는 의미 없다(버려지는 등록부)
+        toPredicate(expr, AliasResolver(emptyList(), null), mutableListOf(), ScopeRegistry(0))
     } catch (e: Exception) {
         null
     }
@@ -429,8 +440,31 @@ class DruidMySqlParser(
 
         val selectItems = mutableListOf<SelectItem>()
         for (item in block.selectList) {
-            selectItems += toSelectItem(item.expr, resolver, children, registry)
+            val converted = toSelectItem(item.expr, resolver, children, registry)
+            // 별칭은 출력 이름이다 — GROUP BY/ORDER BY가 이 이름으로 투영을 가리킬 수 있으므로 IR에 남긴다
+            selectItems += if (converted is SelectItem.Column) converted.copy(alias = norm(item.alias)) else converted
         }
+
+        // GROUP BY·ORDER BY·HAVING이 참조하는 출력 이름·서수 — 마스킹 치환이 그룹·정렬 기준을 바꾸는지 판단
+        val outputRefs = mutableSetOf<String>()
+        val collectOutputRef: (SQLExpr) -> Unit = { expr ->
+            when (expr) {
+                is SQLIdentifierExpr -> norm(expr.name)?.let { outputRefs += it.lowercase() }
+                is SQLIntegerExpr -> outputRefs += expr.number.toString()
+                else -> Unit
+            }
+        }
+        block.groupBy?.let { groupBy ->
+            groupBy.items.filterIsInstance<SQLExpr>().forEach(collectOutputRef)
+            // HAVING은 별칭을 참조할 수 있다(`HAVING e LIKE …`) — 식 안의 식별자를 훑는다
+            groupBy.having?.accept(object : SQLASTVisitorAdapter() {
+                override fun visit(x: SQLIdentifierExpr): Boolean {
+                    norm(x.name)?.let { outputRefs += it.lowercase() }
+                    return false
+                }
+            })
+        }
+        block.orderBy?.items?.forEach { collectOutputRef(it.expr) }
 
         // 컬럼 참조 수집 (spec 002 §5.1) — BLOCK 판정의 근거. 술어 모델과 독립적으로 전 절을 훑는다.
         val columnRefs = mutableListOf<ColumnRef>()
@@ -445,13 +479,27 @@ class DruidMySqlParser(
         refExprs += allOnExprs
         refExprs.forEach { collectColumnRefs(it, resolver, columnRefs) }
 
+        // ORDER BY·GROUP BY·HAVING 안의 서브쿼리도 **스코프**다. 여기서 수집하지 않으면 그 안의 테이블·컬럼이
+        // IR에서 완전히 사라져 권한·BLOCK·마스킹·매핑 허용목록이 **전부 무발화**한다 —
+        // `ORDER BY (SELECT u.ssn LIKE '90%')`가 주민번호 불리언 오라클이 됨을 적대 검토가 실측했다(CRITICAL 4).
+        // select 목록·WHERE 경로는 이미 collectSubqueries를 거치므로 여기서는 나머지 절만 훑는다(중복 등록 방지).
+        val clauseExprs = mutableListOf<SQLExpr>()
+        block.groupBy?.let { groupBy ->
+            clauseExprs += groupBy.items.filterIsInstance<SQLExpr>()
+            groupBy.having?.let { clauseExprs += it }
+        }
+        block.orderBy?.items?.forEach { clauseExprs += it.expr }
+        clauseExprs.forEach { collectSubqueries(it, resolver, children, registry) }
+
         val limit = block.limit?.rowCount?.let { (it as? SQLIntegerExpr)?.number?.toLong() }
         return SelectScope(kind, tables, selectItems, conjuncts, limit, children,
             // 모르는 FROM 형태는 **차단**한다. 조용히 버리면 그 스코프의 위반이 함께 사라진다(스코프 은닉).
             unverifiable = unsupportedSources.takeIf { it.isNotEmpty() }
                 ?.let { "지원하지 않는 FROM 형태: ${it.distinct().joinToString(", ")}" },
             columnRefs = columnRefs, joinEqualities = joinEqualities, scopeId = registry.register(block),
-            nullProducingInstances = nullProducing)
+            nullProducingInstances = nullProducing,
+            distinct = block.distionOption == SQLSetQuantifier.DISTINCT,
+            outputRefs = outputRefs)
     }
 
     /**
@@ -497,14 +545,22 @@ class DruidMySqlParser(
     ) {
         when (source) {
             is SQLExprTableSource -> {
+                // **아는 형태만** 테이블로 인정한다. `LATERAL (...)`도 SQLExprTableSource로 오는데,
+                // 예전의 `else -> expr.toString()` 폴백은 그것을 이름이 `LATERAL(…)`인 **물리 테이블**로 만들어
+                // 그 안의 컬럼 참조가 IR에서 사라졌다 — BLOCK 컬럼 평문 유출로 실측됨(적대 검토 CRITICAL 1).
+                // spec 008 §2.8에서 UNION 테이블 소스에 대해 고친 것과 같은 결함이 다른 노드 타입으로 남아 있었다.
                 val name = when (val e = source.expr) {
                     is SQLIdentifierExpr -> e.name
-                    is SQLPropertyExpr -> e.name // schema.table → table
-                    else -> source.expr.toString()
+                    is SQLPropertyExpr -> e.name // schema.table → table (위생 게이트가 별도로 거부)
+                    else -> null
                 }
-                val normalized = norm(name)!!
-                // CTE 참조는 물리 테이블이 아니다 — 카탈로그 조회·미등록 경고 대상에서 제외
-                tables += TableRef(normalized, norm(source.alias), physical = !isCte(normalized))
+                if (name == null) {
+                    unsupported += source.expr.javaClass.simpleName
+                } else {
+                    val normalized = norm(name)!!
+                    // CTE 참조는 물리 테이블이 아니다 — 카탈로그 조회·미등록 경고 대상에서 제외
+                    tables += TableRef(normalized, norm(source.alias), physical = !isCte(normalized))
+                }
             }
             is SQLJoinTableSource -> {
                 collectTables(source.left, tables, derived, unions, unsupported, innerOnExprs, allOnExprs, nullProducing, isCte)

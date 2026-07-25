@@ -50,6 +50,17 @@ data class SelectScope(
      * 알 수 없는 조인 종류는 **양쪽 모두** 담는다(fail-closed — 의미 변경보다 거부가 안전).
      */
     val nullProducingInstances: Set<String> = emptySet(),
+    /**
+     * `SELECT DISTINCT`인가. 마스킹은 **many-to-one**이므로(실측: `jimin@naver.com`·`jaeho@naver.com` → 같은
+     * `j***@naver.com`) 치환 후 중복 제거하면 원본과 행 수가 달라진다 → 재작성 거부 근거 (spec 008 §3.1).
+     */
+    val distinct: Boolean = false,
+    /**
+     * GROUP BY·ORDER BY·HAVING이 참조하는 **출력 이름과 서수**(소문자). `SELECT email AS e … GROUP BY e`나
+     * `GROUP BY 1`처럼 투영을 이름·위치로 가리키면, 그 투영을 마스킹 표현식으로 바꾸는 순간 그룹·정렬 기준이
+     * 마스킹된 값으로 바뀌어 결과 의미가 달라진다 → 재작성 거부 근거.
+     */
+    val outputRefs: Set<String> = emptySet(),
 )
 
 /** 컬럼=컬럼 등식. 방향 무관(a=b ≡ b=a). 어느 한쪽이라도 귀속 불가(table=null)면 joins는 fail-closed 미충족. */
@@ -71,7 +82,8 @@ data class TableRef(val name: String, val alias: String?, val physical: Boolean 
 }
 
 sealed interface SelectItem {
-    data class Column(val column: ResolvedColumn) : SelectItem
+    /** [alias]는 `AS` 별칭 — 마스킹 치환 후 출력 이름이 유지되는지, GROUP BY/ORDER BY가 그 이름을 참조하는지 판단에 쓴다. */
+    data class Column(val column: ResolvedColumn, val alias: String? = null) : SelectItem
     /** select-item 수준의 `*` / `t.*` 만 Star. COUNT(*) 등 집계 star는 Expr이다 (§6.7). */
     data class Star(val qualifier: String?) : SelectItem
     data class Expr(val text: String) : SelectItem

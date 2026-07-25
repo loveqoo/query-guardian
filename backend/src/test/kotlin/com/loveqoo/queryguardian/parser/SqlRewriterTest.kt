@@ -290,4 +290,11 @@ class SqlRewriterTest {
         // 강제식 원문이 남아야 STEWARD가 마스크 식을 약화시켜도 사후 탐지가 가능하다 (§6)
         assertTrue(applied.first { it.kind == RewriteKind.MASK }.detail.contains("mask_email(email)"))
     }
+
+    /** 상한 0이면 `LIMIT 0`을 넣는다 — `0+1`을 넣으면 0행을 요청한 쿼리가 1행을 읽는다. */
+    @Test
+    fun `상한 0은 LIMIT 0으로 주입된다`() {
+        val out = rewrite("SELECT id FROM users LIMIT 0") { ir -> RewritePlan(limitCap = LimitCap(ir.root.scopeId, 0)) }
+        assertTrue(out.endsWith("LIMIT 0"), out)
+    }
 }

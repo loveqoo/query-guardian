@@ -1,7 +1,9 @@
 package com.loveqoo.queryguardian
 
 import com.loveqoo.queryguardian.Fixtures.assertBlockedBy
+import com.loveqoo.queryguardian.rules.Severity
 import kotlin.test.Test
+import kotlin.test.assertTrue
 
 /** spec 001 §12 우회 시도 스위트 — 전부 차단되어야 한다. 하나라도 통과하면 게이트가 아니라 제안함이다. */
 class BypassSuiteTest {
@@ -129,6 +131,61 @@ class BypassSuiteTest {
             "SELECT u.id FROM users u JOIN (SELECT ssn AS c FROM users UNION ALL SELECT ssn AS c FROM users) d " +
                 "ON u.id = d.c LIMIT 10",
             "no-blocked-column",
+        )
+    }
+
+    /**
+     * 적대 검토 CRITICAL 1(실측): `LATERAL (...)`은 Druid에서 `SQLExprTableSource`로 오는데,
+     * 예전의 `else -> expr.toString()` 폴백이 그것을 **이름이 `LATERAL(…)`인 물리 테이블**로 만들어
+     * 안쪽의 `u.ssn` 참조가 IR에서 사라졌다 → MySQL에서 실제 주민번호가 반환됐다.
+     * 스코프가 없으면 BLOCK·마스킹·권한·매핑 허용목록이 **동시에** 무발화한다.
+     */
+    @Test
+    fun `LATERAL 파생 테이블은 물리 테이블로 위장할 수 없다`() {
+        for (sql in listOf(
+            "SELECT u.id, d.s FROM users u JOIN LATERAL (SELECT u.ssn AS s) d ON TRUE LIMIT 10",
+            "SELECT u.id, d.s FROM users u, LATERAL (SELECT u.ssn AS s) d LIMIT 10",
+        )) {
+            val report = Fixtures.lint(sql)
+            assertTrue(report.blocked, "차단되어야 함: $sql\n$report")
+        }
+    }
+
+    /**
+     * 적대 검토 CRITICAL 2(실측): FROM에 인스턴스가 둘 이상이면 IR이 컬럼 귀속을 포기하는데(table=null),
+     * 마스킹 판정이 인스턴스 키로만 세어 **ABSENT**로 떨어졌다 → 평문 이메일이 반환됐다.
+     * `no-blocked-column`은 같은 상황에 fail-closed 폴백이 있었으므로 ssn은 막히고 email만 뚫렸다.
+     */
+    @Test
+    fun `다중 테이블 FROM의 비한정 마스킹 컬럼은 통과하지 못한다`() {
+        for (sql in listOf(
+            "SELECT email FROM users, user_events LIMIT 10",
+            "SELECT u.id, email FROM users u JOIN user_events e ON e.id = u.id LIMIT 10",
+        )) {
+            val report = Fixtures.lint(sql)
+            assertTrue(
+                report.violations.any { it.ruleId == "must-be-masked" && it.severity == Severity.BLOCK },
+                "귀속 불가한 마스킹 컬럼은 표현 불가로 차단되어야 함: $sql\n$report",
+            )
+        }
+    }
+
+    /**
+     * 적대 검토 CRITICAL 4(실측): ORDER BY/GROUP BY 안의 서브쿼리가 스코프로 등록되지 않아
+     * `ORDER BY (SELECT u.ssn LIKE '90%')`가 **주민번호 불리언 오라클**이 됐다(정렬 순서로 값을 복원).
+     * 첫 쿼리는 테이블 자체가 IR에 안 나타나 권한·필수조건·매핑 허용목록이 전부 무발화했다.
+     */
+    @Test
+    fun `정렬 그룹 절의 서브쿼리도 스코프로 검사한다`() {
+        val oracle = Fixtures.lint("SELECT u.id FROM users u ORDER BY (SELECT u.ssn LIKE '90%') DESC LIMIT 10")
+        assertTrue(
+            oracle.violations.any { it.ruleId.startsWith("no-blocked-column") },
+            "ORDER BY 서브쿼리의 BLOCK 컬럼이 잡혀야 함: $oracle",
+        )
+        val hidden = Fixtures.lint("SELECT u.id FROM users u ORDER BY (SELECT COUNT(*) FROM user_events) LIMIT 10")
+        assertTrue(
+            hidden.violations.any { it.ruleId.startsWith("require-partition-key") },
+            "ORDER BY 서브쿼리의 거버넌스 테이블이 판정 대상이어야 함: $hidden",
         )
     }
 }

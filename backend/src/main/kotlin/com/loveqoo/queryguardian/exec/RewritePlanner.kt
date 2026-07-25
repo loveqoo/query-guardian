@@ -3,7 +3,7 @@ package com.loveqoo.queryguardian.exec
 import com.loveqoo.queryguardian.catalog.Expressions
 import com.loveqoo.queryguardian.ir.LimitCap
 import com.loveqoo.queryguardian.ir.MaskUsage
-import com.loveqoo.queryguardian.ir.maskUsageOf
+import com.loveqoo.queryguardian.ir.maskFindings
 import com.loveqoo.queryguardian.ir.MaskProjection
 import com.loveqoo.queryguardian.ir.PredicateInjection
 import com.loveqoo.queryguardian.ir.QueryIR
@@ -40,8 +40,9 @@ class RewritePlanner(
         val renames = mutableListOf<TableRename>()
 
         for (scope in allScopes(ir.root)) {
+            // 마스킹은 **참조된 인스턴스** 축으로 순회한다 (귀속 불가·상관 참조 포함) — scope.tables 축은 샌다.
+            planMasks(scope, masks)?.let { return it }
             for (instance in scope.tables.filter { it.physical }) {
-                planMasks(scope, instance, masks)?.let { return it }
                 planInjections(scope, instance, purposeCode, injections)?.let { return it }
                 // 물리명 치환은 **물리 테이블 인스턴스에만** 계획한다 — CTE·파생 alias가 논리명과 겹쳐도
                 // 그것들은 physical=false라 여기 오지 않는다(전역 치환이면 그 참조까지 깨뜨린다).
@@ -61,9 +62,12 @@ class RewritePlanner(
         )
     }
 
-    /** 유효 상한 = `min(사용자 LIMIT ?: ∞, 설정 상한)` (§3.0-2). 사용자가 더 작게 걸었으면 그것을 존중한다. */
+    /**
+     * 유효 상한 = `min(사용자 LIMIT ?: ∞, 설정 상한)` (§3.0-2). 사용자가 더 작게 걸었으면 그것을 존중한다.
+     * **`LIMIT 0`도 존중한다** — 0을 "미지정"으로 취급하면 0행을 요청한 쿼리가 상한만큼 반환된다(적대 검토 HIGH).
+     */
     private fun effectiveCap(userLimit: Long?): Long =
-        if (userLimit != null && userLimit in 1..maxRows) userLimit else maxRows
+        if (userLimit != null && userLimit in 0..maxRows) userLimit else maxRows
 
     /**
      * MASK 매핑 컬럼 처리 (§3.0.1).
@@ -72,38 +76,35 @@ class RewritePlanner(
      * WHERE·GROUP BY 같은 위치에도 쓰인 것이므로 치환으로 표현할 수 없다 → 거부(spec 001 §6.3의 직계 적용:
      * 표현할 수 없는 것을 표현한 척하지 않는다). 이때 저장 시 `must_be_masked`는 BLOCK이 된다.
      */
-    private fun planMasks(
-        scope: SelectScope,
-        instance: TableRef,
-        into: MutableList<MaskProjection>,
-    ): PlanOutcome.Refused? {
-        for (masked in catalog.maskExpressions(instance.name)) {
-            // 판정(rules의 must_be_masked)과 **같은 함수**로 표현 가능성을 본다 — 기준이 갈라지면
-            // "저장은 통과, 실행은 마스킹 없이"가 생길 수 있다.
-            val usage = maskUsageOf(scope, instance.instanceKey, masked.column)
-            if (usage == MaskUsage.ABSENT) continue
-
-            if (masked.template == null) {
-                return PlanOutcome.Refused(
-                    RewriteRefusal.EXPRESSION_NOT_USABLE,
-                    "마스킹 강제식을 쓸 수 없습니다: ${instance.name}.${masked.column} (${masked.label}) — " +
-                        "강제식이 없거나 {col} 자리표시자·파라미터가 온전하지 않습니다",
-                )
-            }
-            if (usage == MaskUsage.NOT_EXPRESSIBLE) {
+    private fun planMasks(scope: SelectScope, into: MutableList<MaskProjection>): PlanOutcome.Refused? {
+        // 판정(rules의 must-be-masked)과 **같은 순회 축·같은 기준**을 쓴다 — 갈라지면
+        // "저장은 통과, 실행은 마스킹 없이"가 생긴다.
+        val findings = maskFindings(scope) { table ->
+            catalog.maskExpressions(table).map { it.column.lowercase() }.toSet()
+        }
+        for (finding in findings) {
+            if (finding.usage == MaskUsage.NOT_EXPRESSIBLE) {
                 return PlanOutcome.Refused(
                     RewriteRefusal.MASK_NOT_EXPRESSIBLE,
-                    "마스킹 대상 컬럼을 투영 이외의 위치에서 사용했습니다: ${instance.name}.${masked.column} — " +
-                        "함수 인자·CASE·WHERE·GROUP BY·`*` 투영은 치환으로 표현할 수 없습니다. " +
-                        "해당 컬럼을 select 목록에 그대로 두고 조건에서 빼 주세요",
+                    "마스킹 대상 컬럼을 치환할 수 없는 형태로 사용했습니다: " +
+                        "${finding.logicalTable}.${finding.column} — 투영 아닌 위치·`*`·DISTINCT·" +
+                        "그룹/정렬 기준·테이블 귀속 불명은 표현할 수 없습니다",
                 )
             }
+            val expression = catalog.maskExpressions(finding.logicalTable)
+                .firstOrNull { it.column.equals(finding.column, ignoreCase = true) }
+            val template = expression?.template
+                ?: return PlanOutcome.Refused(
+                    RewriteRefusal.EXPRESSION_NOT_USABLE,
+                    "마스킹 강제식을 쓸 수 없습니다: ${finding.logicalTable}.${finding.column} " +
+                        "(${expression?.label ?: "정의 없음"}) — 강제식이 없거나 {col}·파라미터가 온전하지 않습니다",
+                )
             into += MaskProjection(
                 scopeId = scope.scopeId,
-                instanceKey = instance.instanceKey,
-                column = masked.column,
-                expressionTemplate = masked.template,
-                outputName = masked.column,
+                instanceKey = finding.instanceKey,
+                column = finding.column,
+                expressionTemplate = template,
+                outputName = finding.column,
             )
         }
         return null
@@ -125,6 +126,12 @@ class RewritePlanner(
         val integrity = catalog.integrityExpressions(instance.name).map { it to "INTEGRITY" }
 
         for ((expression, kind) in filters + integrity) {
+            // **주입 생략 단축 경로를 두지 않는다.** 한때 "그 컬럼에 이미 최상위 조건이 있으면 생략"을 넣어
+            // OUTER JOIN 오차단을 완화했는데, 적대 검토가 그것이 fail-open임을 지적했다:
+            // `WHERE mc.consent_yn <> 'Y'`도 "이미 제약됨"으로 읽혀 필수 조건이 **아예 주입되지 않는다**.
+            // 안전성이 "판정 층이 형태를 검사해 막아줄 것"이라는 가정에 얹히는데, 판정은 다른 카탈로그 축을
+            // 읽으므로 두 축의 일치가 보장되지 않는다. 중복 주입(`AND (x='Y') AND (x='Y')`)은 무해하므로
+            // 항상 주입하는 쪽이 안전하다. OUTER JOIN 오차단은 알려진 한계로 남긴다(INNER JOIN으로 우회 가능).
             if (instance.instanceKey in scope.nullProducingInstances) {
                 return PlanOutcome.Refused(
                     RewriteRefusal.OUTER_JOIN_FILTER,

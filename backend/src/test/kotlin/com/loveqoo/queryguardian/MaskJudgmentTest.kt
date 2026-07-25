@@ -159,4 +159,46 @@ class MaskJudgmentTest {
         val condition = maskRule().tree.children.single() as RuleCondition
         assertTrue(condition.judged, "must_be_masked가 판정 대상이 되었으므로 judged여야 한다")
     }
+
+    /**
+     * 적대 검토 HIGH(실측 확인): 마스킹은 **many-to-one**이다 —
+     * `mask_email('jimin@naver.com') = mask_email('jaeho@naver.com') = 'j***@naver.com'`,
+     * `COUNT(DISTINCT)` 3 → 2 (MySQL 8.4에서 직접 확인). 그래서 치환 후 중복 제거·그룹화·정렬을 하면
+     * 원본과 결과 의미가 달라진다. 조용한 결과 변경보다 거부가 안전하다.
+     */
+    @Test
+    fun `DISTINCT는 마스킹 후 중복이 합쳐지므로 표현 불가다`() {
+        assertEquals(MaskUsage.NOT_EXPRESSIBLE, maskUsageOf(scope("SELECT DISTINCT email FROM users"), "users", "email"))
+        assertTrue(lint("SELECT DISTINCT email FROM users LIMIT 10").blocked)
+    }
+
+    @Test
+    fun `출력 별칭이나 서수로 투영을 가리키면 표현 불가다`() {
+        for (sql in listOf(
+            "SELECT email AS e FROM users GROUP BY e",
+            "SELECT email AS e FROM users ORDER BY e",
+            "SELECT email AS e, COUNT(*) c FROM users GROUP BY e HAVING e LIKE 'ab%'",
+            "SELECT email FROM users GROUP BY 1",
+            "SELECT email FROM users ORDER BY 1",
+        )) {
+            assertEquals(
+                MaskUsage.NOT_EXPRESSIBLE,
+                maskUsageOf(scope(sql), "users", "email"),
+                "그룹·정렬 기준이 마스킹된 값으로 바뀐다: $sql",
+            )
+        }
+    }
+
+    /** 오차단 금지: 마스킹 컬럼과 무관한 정렬·그룹은 그대로 통과해야 한다. */
+    @Test
+    fun `무관한 정렬 그룹은 마스킹을 막지 않는다`() {
+        assertEquals(
+            MaskUsage.PROJECTION_ONLY,
+            maskUsageOf(scope("SELECT email, id FROM users ORDER BY id"), "users", "email"),
+        )
+        assertEquals(
+            MaskUsage.PROJECTION_ONLY,
+            maskUsageOf(scope("SELECT email AS mail, id AS n FROM users ORDER BY n"), "users", "email"),
+        )
+    }
 }

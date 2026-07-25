@@ -73,16 +73,19 @@ class SqlRewriter(
         }
 
         for (injection in plan.injections) {
+            if (injection.alreadySatisfied) continue // 이미 최상위 조건으로 존재 — 감사 기록용 항목이다
             val block = queryBlock(handle, injection.scopeId)
                 ?: return refuse(RewriteRefusal.SCOPE_NOT_FOUND, "주입 대상 스코프가 쿼리 블록이 아닙니다: ${injection.scopeId}")
             applyInjection(block, injection, applied)?.let { return it }
         }
 
         plan.limitCap?.let { cap ->
+            // `maxRows + 1`을 넣는다 — 실행기가 마지막 행을 보면 truncated로 확정하고 그 행을 버린다.
+            // 단 상한이 0이면(사용자가 `LIMIT 0`을 명시) 0을 그대로 넣는다 — 1을 넣으면 0행 요청이 1행을 읽는다.
+            val injected = if (cap.maxRows == 0L) 0 else (cap.maxRows + 1).toInt()
             when (val node = handle.scopeNodes[cap.scopeId]) {
-                // `maxRows + 1`을 넣는다 — 실행기가 마지막 행을 보면 truncated로 확정하고 그 행을 버린다
-                is SQLSelectQueryBlock -> node.limit = SQLLimit((cap.maxRows + 1).toInt())
-                is SQLUnionQuery -> node.limit = SQLLimit((cap.maxRows + 1).toInt())
+                is SQLSelectQueryBlock -> node.limit = SQLLimit(injected)
+                is SQLUnionQuery -> node.limit = SQLLimit(injected)
                 else -> return refuse(RewriteRefusal.SCOPE_NOT_FOUND, "LIMIT 대상 스코프를 찾을 수 없습니다: ${cap.scopeId}")
             }
             applied += AppliedRewrite(RewriteKind.LIMIT, "-", null, "LIMIT ${cap.maxRows} 적용")

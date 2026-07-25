@@ -33,7 +33,7 @@ class RuleEngine(
                 listOf(
                     NoSelectStarRule(), RequireLimitRule(maxLimit),
                     RequirePartitionKeyRule(), RequirePredicateRule(),
-                    NoBlockedColumnRule(), UnknownTableRule(),
+                    NoBlockedColumnRule(), UnknownTableRule(), MustBeMaskedRule(),
                 ),
                 userRuleEvaluator,
             )

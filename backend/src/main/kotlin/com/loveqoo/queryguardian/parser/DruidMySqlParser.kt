@@ -748,7 +748,10 @@ class DruidMySqlParser(
         children: MutableList<SelectScope>,
         registry: ScopeRegistry,
     ): SelectItem = when {
-        expr is SQLAllColumnExpr -> SelectItem.Star(null)
+        // `o.*`도 SQLAllColumnExpr로 오며 owner를 갖는다 — 한정자를 버리면 "모든 테이블을 덮는 star"로
+        // 과다 해석되어 다른 테이블의 마스킹 판정을 오차단한다(spec 008 §3.1).
+        expr is SQLAllColumnExpr ->
+            SelectItem.Star((expr.owner as? SQLIdentifierExpr)?.let { norm(it.name) })
         expr is SQLPropertyExpr && expr.name == "*" -> SelectItem.Star(qualifierOf(expr))
         expr is SQLIdentifierExpr -> SelectItem.Column(ResolvedColumn(resolver.resolveUnqualified(), norm(expr.name)!!))
         expr is SQLPropertyExpr -> SelectItem.Column(toColumn(expr, resolver)!!)

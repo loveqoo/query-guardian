@@ -4,7 +4,9 @@ import com.loveqoo.queryguardian.ir.Op
 import com.loveqoo.queryguardian.ir.Predicate
 import com.loveqoo.queryguardian.ir.ResolvedColumn
 import com.loveqoo.queryguardian.ir.ScopeKind
+import com.loveqoo.queryguardian.ir.MaskUsage
 import com.loveqoo.queryguardian.ir.SelectScope
+import com.loveqoo.queryguardian.ir.maskUsageOf
 import com.loveqoo.queryguardian.ir.SelectItem
 
 /** select-item `*`/`t.*` 금지. COUNT(*)는 Star가 아니며, EXISTS 스코프는 관용구로 면제 (§6.7). */
@@ -59,6 +61,39 @@ class NoBlockedColumnRule : Rule {
                 }
                 candidate?.let {
                     Violation(id, severity, "컬럼 ${ref.column}은(는) ${it.name}의 차단 컬럼일 수 있어 조회할 수 없습니다(테이블 귀속 불명).")
+                }
+            }
+        }
+}
+
+/**
+ * MASK 매핑 컬럼의 사용 위치 판정 (spec 008 §3.1 — spec 004에서 미판정으로 남긴 must_be_masked).
+ *
+ * 투영으로만 쓰였으면 실행 시 자동 마스킹되므로 **WARN**(안내), 투영 아닌 위치에 쓰였으면 재작성으로
+ * 표현할 수 없으므로 **BLOCK**이다. 저장 시점에 BLOCK으로 막는 이유: 실행 단계에서 거부될 쿼리를
+ * 승인까지 통과시키면 사용자는 승인 후에야 거부를 알게 된다(§2.8-1과 같은 근거).
+ *
+ * 표현 가능성 판단은 `maskUsageOf` **한 함수**를 재작성 계획 수립기와 공유한다 — 기준이 갈라지면
+ * "저장은 통과했는데 실행은 마스킹 없이 통과"가 생길 수 있다.
+ */
+class MustBeMaskedRule : Rule {
+    override val id = "must-be-masked"
+    override val severity = Severity.BLOCK
+
+    override fun check(scope: SelectScope, catalog: TableCatalog, context: LintContext): List<Violation> =
+        scope.tables.filter { it.physical }.flatMap { instance ->
+            catalog.maskedColumns(instance.name).mapNotNull { column ->
+                when (maskUsageOf(scope, instance.instanceKey, column)) {
+                    MaskUsage.ABSENT -> null
+                    MaskUsage.PROJECTION_ONLY -> Violation(
+                        id, Severity.WARN,
+                        "컬럼 ${instance.name}.${column}은(는) 실행 시 자동으로 마스킹됩니다.",
+                    )
+                    MaskUsage.NOT_EXPRESSIBLE -> Violation(
+                        id, Severity.BLOCK,
+                        "컬럼 ${instance.name}.${column}은(는) 마스킹 대상인데 투영이 아닌 위치" +
+                            "(함수 인자·CASE·조건·GROUP BY·`*`)에서 사용됐습니다 — 마스킹을 적용할 수 없습니다.",
+                    )
                 }
             }
         }

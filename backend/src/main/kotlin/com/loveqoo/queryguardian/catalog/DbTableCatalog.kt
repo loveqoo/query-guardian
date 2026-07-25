@@ -26,6 +26,9 @@ class DbTableCatalog(
     override fun partitionKeys(tableName: String): List<String> =
         boundFor(tableName).filter { it.def.kind == DefKind.PARTITION }.map { it.column.name }
 
+    override fun maskedColumns(tableName: String): Set<String> =
+        boundFor(tableName).filter { it.def.kind == DefKind.MASK }.map { it.column.name.lowercase() }.toSet()
+
     override fun blockedColumns(tableName: String): Set<String> =
         boundFor(tableName).filter { it.def.kind == DefKind.BLOCK }.map { it.column.name.lowercase() }.toSet()
 

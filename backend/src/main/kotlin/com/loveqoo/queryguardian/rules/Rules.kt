@@ -34,6 +34,12 @@ interface TableCatalog {
     /** BLOCK 매핑 컬럼들(소문자) — no-blocked-column 룰이 사용. */
     fun blockedColumns(tableName: String): Set<String>
 
+    /**
+     * MASK 매핑 컬럼들(소문자) — must-be-masked 룰이 사용 (spec 008 §3.1).
+     * 강제식 원문은 판정에 필요 없다(재작성만 필요) — 여기서는 "마스킹 대상인가"만 알면 된다.
+     */
+    fun maskedColumns(tableName: String): Set<String> = emptySet()
+
     /** 카탈로그에 등록된 테이블인가 — unknown-table 경고 룰이 사용. */
     fun exists(tableName: String): Boolean
 
@@ -52,6 +58,7 @@ class InMemoryTableCatalog(
     /** (테이블명 소문자, purposeCode?) → 필수 술어 목록 */
     private val required: List<Entry> = emptyList(),
     private val blocked: Map<String, Set<String>> = emptyMap(),
+    private val masked: Map<String, Set<String>> = emptyMap(),
     tables: Set<String> = emptySet(),
     /** defId → requires 판정용 정규형 (테스트 시드). */
     private val conditionPredicates: Map<Long, RequiredForm> = emptyMap(),
@@ -69,6 +76,9 @@ class InMemoryTableCatalog(
             it.table.equals(tableName, ignoreCase = true) &&
                 (it.purposeCode == null || it.purposeCode == purposeCode)
         }.map { it.predicate }
+
+    override fun maskedColumns(tableName: String): Set<String> =
+        masked[tableName.lowercase()] ?: emptySet()
 
     override fun blockedColumns(tableName: String): Set<String> =
         blocked.entries.firstOrNull { it.key.equals(tableName, ignoreCase = true) }

@@ -2,12 +2,13 @@ package com.loveqoo.queryguardian.exec
 
 import com.loveqoo.queryguardian.catalog.Expressions
 import com.loveqoo.queryguardian.ir.LimitCap
+import com.loveqoo.queryguardian.ir.MaskUsage
+import com.loveqoo.queryguardian.ir.maskUsageOf
 import com.loveqoo.queryguardian.ir.MaskProjection
 import com.loveqoo.queryguardian.ir.PredicateInjection
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewritePlan
 import com.loveqoo.queryguardian.ir.RewriteRefusal
-import com.loveqoo.queryguardian.ir.SelectItem
 import com.loveqoo.queryguardian.ir.SelectScope
 import com.loveqoo.queryguardian.ir.TableRename
 import com.loveqoo.queryguardian.ir.TableRef
@@ -77,20 +78,10 @@ class RewritePlanner(
         into: MutableList<MaskProjection>,
     ): PlanOutcome.Refused? {
         for (masked in catalog.maskExpressions(instance.name)) {
-            val column = masked.column.lowercase()
-            val projections = scope.selectItems.count { item ->
-                item is SelectItem.Column &&
-                    item.column.table == instance.instanceKey &&
-                    item.column.column.lowercase() == column
-            }
-            val references = scope.columnRefs.count { ref ->
-                ref.table?.instanceKey == instance.instanceKey && ref.column.lowercase() == column
-            }
-            // star 투영은 어떤 컬럼이 나갈지 IR이 알 수 없다 — no-select-star 룰이 이미 BLOCK이지만
-            // 재작성 경로에서도 독립적으로 거부한다(룰이 꺼져도 평문이 나가지 않도록).
-            val hasStar = scope.selectItems.any { it is SelectItem.Star }
-
-            if (projections == 0 && references == 0 && !hasStar) continue
+            // 판정(rules의 must_be_masked)과 **같은 함수**로 표현 가능성을 본다 — 기준이 갈라지면
+            // "저장은 통과, 실행은 마스킹 없이"가 생길 수 있다.
+            val usage = maskUsageOf(scope, instance.instanceKey, masked.column)
+            if (usage == MaskUsage.ABSENT) continue
 
             if (masked.template == null) {
                 return PlanOutcome.Refused(
@@ -99,7 +90,7 @@ class RewritePlanner(
                         "강제식이 없거나 {col} 자리표시자·파라미터가 온전하지 않습니다",
                 )
             }
-            if (hasStar || references > projections) {
+            if (usage == MaskUsage.NOT_EXPRESSIBLE) {
                 return PlanOutcome.Refused(
                     RewriteRefusal.MASK_NOT_EXPRESSIBLE,
                     "마스킹 대상 컬럼을 투영 이외의 위치에서 사용했습니다: ${instance.name}.${masked.column} — " +
@@ -107,15 +98,13 @@ class RewritePlanner(
                         "해당 컬럼을 select 목록에 그대로 두고 조건에서 빼 주세요",
                 )
             }
-            if (projections > 0) {
-                into += MaskProjection(
-                    scopeId = scope.scopeId,
-                    instanceKey = instance.instanceKey,
-                    column = masked.column,
-                    expressionTemplate = masked.template,
-                    outputName = masked.column,
-                )
-            }
+            into += MaskProjection(
+                scopeId = scope.scopeId,
+                instanceKey = instance.instanceKey,
+                column = masked.column,
+                expressionTemplate = masked.template,
+                outputName = masked.column,
+            )
         }
         return null
     }

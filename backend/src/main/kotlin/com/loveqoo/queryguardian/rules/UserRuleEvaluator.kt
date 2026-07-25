@@ -2,7 +2,9 @@ package com.loveqoo.queryguardian.rules
 
 import com.loveqoo.queryguardian.ir.ColumnEquality
 import com.loveqoo.queryguardian.ir.QueryIR
+import com.loveqoo.queryguardian.ir.MaskUsage
 import com.loveqoo.queryguardian.ir.SelectScope
+import com.loveqoo.queryguardian.ir.maskUsageOf
 
 /** 평가 대상 사용자 규칙 (엔티티에서 분리 — 엔진은 이 형태만 본다). */
 data class UserRule(
@@ -86,11 +88,17 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
     }
 
     private fun evalCondition(cond: RuleCondition, scope: SelectScope, catalog: TableCatalog, rule: UserRule): Result {
-        if (!cond.judged) return Result.Neutral // must_be_* — 트리·severity에서 제외 (C3)
+        if (!cond.judged) return Result.Neutral // must_be_within — 트리·severity에서 제외 (C3)
         val satisfied = when (cond.op) {
             RuleOp.requires -> satisfiesRequires(cond, scope, catalog)
             RuleOp.blocks -> !isColumnReferenced(cond, scope) // blocks: 참조되면 미충족(위반)
             RuleOp.joins -> satisfiesJoins(cond, scope)
+            // 컬럼을 조회하지 않는 스코프는 이 조건과 무관하다 — 중립이어야 AND 그룹을 헛되게 깨지 않는다
+            RuleOp.must_be_masked -> when (maskUsage(cond, scope)) {
+                MaskUsage.ABSENT -> return Result.Neutral
+                MaskUsage.PROJECTION_ONLY -> true
+                MaskUsage.NOT_EXPRESSIBLE -> false
+            }
             else -> return Result.Neutral
         }
         return if (satisfied) Result.Satisfied
@@ -103,9 +111,9 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
     // ---- op별 판정 (fail-closed) ----
 
     private fun satisfiesRequires(cond: RuleCondition, scope: SelectScope, catalog: TableCatalog): Boolean {
-        val table = cond.table ?: return false
+        val table = cond.targetTable ?: return false
         val defId = cond.defId ?: return false
-        val required = catalog.resolveConditionPredicate(defId, cond.mappingId, cond.column ?: return false)
+        val required = catalog.resolveConditionPredicate(defId, cond.mappingId, cond.targetColumn ?: return false)
             ?: return false // dangling·판정 불가 → fail-closed 미충족 (C4)
         // 대상 테이블 인스턴스에 귀속된 최상위 AND conjunct가 술어를 충족해야 함
         return scope.tables.filter { it.physical && it.name.equals(table, ignoreCase = true) }.any { t ->
@@ -113,9 +121,28 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
         }
     }
 
+    /**
+     * must_be_masked 판정 (spec 008 §3.1). 표현 가능성 판단은 재작성 계획 수립기와 **같은 함수**를 쓴다 —
+     * 기준이 갈라지면 "저장은 통과, 실행은 마스킹 없이 통과"가 생긴다.
+     * 대상 테이블·컬럼이 불명이면 fail-closed로 표현 불가 취급(=위반).
+     */
+    private fun maskUsage(cond: RuleCondition, scope: SelectScope): MaskUsage {
+        val table = cond.targetTable ?: return MaskUsage.NOT_EXPRESSIBLE
+        val column = cond.targetColumn ?: return MaskUsage.NOT_EXPRESSIBLE
+        val instances = scope.tables.filter { it.physical && it.name.equals(table, ignoreCase = true) }
+        if (instances.isEmpty()) return MaskUsage.ABSENT
+        val usages = instances.map { maskUsageOf(scope, it.instanceKey, column) }
+        return when {
+            // 한 인스턴스라도 표현 불가면 위반 — 셀프 조인에서 한쪽만 안전한 것은 안전이 아니다
+            usages.any { it == MaskUsage.NOT_EXPRESSIBLE } -> MaskUsage.NOT_EXPRESSIBLE
+            usages.any { it == MaskUsage.PROJECTION_ONLY } -> MaskUsage.PROJECTION_ONLY
+            else -> MaskUsage.ABSENT
+        }
+    }
+
     private fun isColumnReferenced(cond: RuleCondition, scope: SelectScope): Boolean {
-        val table = cond.table ?: return true // 불명 → fail-closed(참조된 것으로 간주 → blocks 위반)
-        val column = cond.column ?: return true
+        val table = cond.targetTable ?: return true // 불명 → fail-closed(참조된 것으로 간주 → blocks 위반)
+        val column = cond.targetColumn ?: return true
         return scope.columnRefs.any { ref ->
             ref.column.equals(column, ignoreCase = true) &&
                 (ref.table?.name?.equals(table, ignoreCase = true) == true ||
@@ -126,10 +153,10 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
 
     /** joins: joinEqualities에 {table.column ↔ refTable.refColumn}이 양변 물리 귀속되어 존재해야 충족 (§4.2, 방향 무관). */
     private fun satisfiesJoins(cond: RuleCondition, scope: SelectScope): Boolean {
-        val table = cond.table ?: return false
-        val column = cond.column ?: return false
-        val refTable = cond.refTable ?: return false
-        val refColumn = cond.refColumn ?: return false
+        val table = cond.targetTable ?: return false
+        val column = cond.targetColumn ?: return false
+        val refTable = cond.refTable?.takeIf { it.isNotBlank() } ?: return false
+        val refColumn = cond.refColumn?.takeIf { it.isNotBlank() } ?: return false
         // 대상 테이블·참조 테이블이 모두 스코프에 물리 존재해야 조인 가능 (M3)
         val present = { name: String -> scope.tables.any { it.physical && it.name.equals(name, ignoreCase = true) } }
         if (!present(table) || !present(refTable)) return false

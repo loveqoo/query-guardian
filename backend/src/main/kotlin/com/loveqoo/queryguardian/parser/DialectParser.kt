@@ -1,6 +1,7 @@
 package com.loveqoo.queryguardian.parser
 
 import com.loveqoo.queryguardian.ir.Dialect
+import com.loveqoo.queryguardian.ir.SelectScope
 import com.loveqoo.queryguardian.ir.Predicate
 import com.loveqoo.queryguardian.ir.QueryIR
 
@@ -31,8 +32,30 @@ interface DialectParser {
     fun inspect(sql: String): InspectResult
 }
 
-/** [DialectParser.inspect] 결과 — 같은 파싱에서 나온 판정 입력과 형태 검사 결과. */
-data class InspectResult(val parse: ParseResult, val hygiene: List<HygieneViolation>)
+/**
+ * [DialectParser.inspect] 결과 — 같은 파싱에서 나온 판정 입력과 형태 검사 결과, 그리고 그 파싱의 핸들.
+ *
+ * [statement]는 파싱 성공 시에만 있다. 재작성(M1)은 이 핸들을 통해 **판정에 쓰인 그 AST**를 고친다 —
+ * 재파싱하면 판정 대상과 실행 대상이 갈라진다(spec 008 §2.5-1).
+ */
+data class InspectResult(
+    val parse: ParseResult,
+    val hygiene: List<HygieneViolation>,
+    val statement: ParsedStatement? = null,
+)
+
+/**
+ * 파싱 1회의 **불투명 핸들** (spec 008 결정 13). 방언 AST 타입을 밖으로 노출하지 않으면서
+ * 재작성이 그 AST를 지목할 수 있게 한다 — 구현은 방언별 파서 내부에 있다.
+ *
+ * [SelectScope.scopeId]는 이 핸들과 **짝으로만** 유효하다. 다른 파싱의 id를 넘기면 재작성은 대상을 찾지 못한다.
+ */
+interface ParsedStatement {
+    val dialect: Dialect
+
+    /** 이 파싱에서 발급된 스코프 수 — 계획이 참조하는 id가 이 핸들 것인지 확인하는 용도. */
+    val scopeIds: Set<String>
+}
 
 sealed interface ParseResult {
     data class Success(val ir: QueryIR) : ParseResult

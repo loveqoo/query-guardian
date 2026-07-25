@@ -33,6 +33,15 @@ data class SelectScope(
      * (OUTER는 필터 무력화, OR은 세탁 — C1·C2). 양변 모두 컬럼으로 귀속된 `=`만 담긴다.
      */
     val joinEqualities: List<ColumnEquality> = emptyList(),
+    /**
+     * 파서가 발급한 **불투명 스코프 식별자** (spec 008 §3.5 M1-1). 재작성 계획(`RewritePlan`)이
+     * "어느 스코프에 주입/치환하라"를 가리키는 유일한 수단이다.
+     *
+     * 생성 순서대로 `s0`,`s1`,… 이 붙고 **한 번의 파싱 안에서만** 의미가 있다. 값의 형태에 의존하지 말 것
+     * (계층 경로가 아니다). 판정에 쓰인 AST와 재작성 대상 AST가 같아야 하므로, 이 id는
+     * 그 파싱이 만든 `ParsedStatement` 핸들과 **짝으로만** 사용한다.
+     */
+    val scopeId: String = "",
 )
 
 /** 컬럼=컬럼 등식. 방향 무관(a=b ≡ b=a). 어느 한쪽이라도 귀속 불가(table=null)면 joins는 fail-closed 미충족. */

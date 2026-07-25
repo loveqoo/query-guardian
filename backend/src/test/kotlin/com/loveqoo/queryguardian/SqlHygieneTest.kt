@@ -247,4 +247,22 @@ class SqlHygieneTest {
             )
         }
     }
+
+    /**
+     * spec 008 결정 12 (사용자): OFFSET 금지. `LIMIT 1000,1000`을 반복하면 행 상한이 무의미해지고,
+     * 감사에서 "이 쿼리로 총 몇 행이 나갔나"를 셀 수 없다. 페이지네이션은 §2에서 이미 비범위.
+     */
+    @Test
+    fun `LIMIT OFFSET은 행 상한을 무한 우회하므로 거부한다`() {
+        assertHygiene("SELECT id FROM users LIMIT 1000, 1000", HygieneCode.LIMIT_OFFSET_NOT_ALLOWED)
+        assertHygiene("SELECT id FROM users LIMIT 1000 OFFSET 1000", HygieneCode.LIMIT_OFFSET_NOT_ALLOWED)
+        // 서브쿼리·UNION 안에 숨겨도 잡힌다
+        assertHygiene("SELECT d.id FROM (SELECT id FROM users LIMIT 10 OFFSET 5) d", HygieneCode.LIMIT_OFFSET_NOT_ALLOWED)
+        assertHygiene(
+            "SELECT id FROM users UNION ALL SELECT id FROM users LIMIT 5 OFFSET 5",
+            HygieneCode.LIMIT_OFFSET_NOT_ALLOWED,
+        )
+        // 오탐 금지: OFFSET 없는 LIMIT은 정상
+        assertEquals(emptySet(), codes("SELECT id FROM users LIMIT 100"))
+    }
 }

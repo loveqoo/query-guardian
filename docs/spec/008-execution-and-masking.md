@@ -176,6 +176,36 @@ select-item이 아니라 **`columnRefs`** 로 판정한다:
   (재작성이 권한에 따라 달라지면 "권한 없는 사용자가 마스킹을 덜 받는" 역전 — spec 007 C4와 같은 함정).
   기존 규칙에 빠진 `..catalog..`도 이번에 보강.
 
+### 3.5 M1 실행 계획 (2026-07-25 작성 — **승인 대기**)
+
+**구조 결정 3건 (Scaffolding)**
+1. `RewritePlan` 어휘는 **`ir` 패키지**에 둔다. `exec`에 두면 `parser`가 `exec`를 의존해야 해서 M0의
+   ArchUnit 규칙(`parserKnowsOnlyIr`)과 충돌한다. `ir`은 양쪽이 이미 의존하는 공용 어휘다.
+2. `SelectScope.path` 추가(`root`, `root/0`, `root/0/1` …) — plan 항목이 대상 스코프를 가리키는 유일한 수단.
+   기본값 `""`로 두어 기존 생성자 호출은 그대로 둔다.
+3. **AST를 폐기하지 않는다** — `inspect()`가 만든 AST를 **불투명 핸들**(`ParsedStatement`, parser 패키지의
+   인터페이스로 Druid 타입 미노출)로 함께 반환하고, 재작성은 *판정된 그 AST*를 고친다. 핸들은 path→AST 노드
+   맵을 함께 보관한다. §2.5-1이 경고한 판정-실행 분기를 **사후 검증(§3.0.3)으로 완화**하는 대신 **구조적으로
+   제거**한다. §3.0.3은 이중 방어로 유지한다(핸들이 없는 경로·미래 방언 대비).
+
+**마일스톤 분해**
+
+| # | 산출물 | 완료 기준 |
+|---|---|---|
+| M1-1 | `SelectScope.path` + `ParsedStatement` 핸들 + ArchUnit 보강(`ir`은 아무것도 의존하지 않음) | 기존 132 테스트 회귀; path가 전 스코프에 유일 |
+| M1-2 | `ir/RewritePlan.kt` — `MaskProjection(path, instanceKey, column, forcedExpr)` · `InjectPredicate(path, predicateSql)` · `CapLimit(path, n)` · `MapTable(logical→physical)` | 방언 중립(문자열·IR 타입만), Druid·카탈로그 미인지 |
+| M1-3 | `exec/RewritePlanner` — IR+카탈로그+purposeCode → plan. MASK는 `columnRefs` 기준(§3.0.1), 비-투영 위치는 `MASK_NOT_EXPRESSIBLE` 거부; FILTER/INTEGRITY 중복 시 생략; OUTER JOIN null-producing 쪽 대상은 거부(§3.0.2); 물리명 치환은 **마지막 단계** | 논리명으로만 카탈로그 조회(물리명 조회 시 0건 적용되는 함정 회귀 테스트 포함) |
+| M1-4 | `parser/SqlRewriter` — 주입 3원칙: 원본 WHERE `setParenthesized(true)` 후 AND 결합 / LIMIT 단일 장치 `min(user, cap)+1` / 강제식은 `toSQLExpr` 재파싱 노드로 삽입. UNION **전 팔**, CTE·파생 **내부 스코프**까지 | 최상위 OR에서 주입이 무력화되지 않음; 팔 누락 0 |
+| M1-5 | 재작성 자체 검증(§3.0.3) 5항목 + **위생 재검사**(왕복 성질, M0에서 실측 확인) → 실패 시 실행 거부·부분 적용 금지 | 검증 실패 케이스가 예외 없이 차단 |
+| M1-6 | 단위 스위트(§9의 재작성 항목 전부) + `must_be_masked` 판정(저장 시 WARN, 비-투영 위치는 BLOCK — 결정 9) | §9 체크박스 중 재작성 항목 전부 충족 |
+
+`preview-rewrite` API는 스펙대로 **M1에서 노출하지 않는다**(권한 게이트가 붙는 M2까지 — 무권한 카탈로그
+오라클 방지).
+
+**OFFSET 처리 (2026-07-25 사용자 결정: 금지)**: 위생 게이트에 `LIMIT_OFFSET_NOT_ALLOWED`를 추가해 거부한다.
+근거 — 상한의 의미를 "이 실행으로 나간 행 수"로 고정해야 감사에서 총 반출량을 셀 수 있다. offset을 허용하면
+페이지네이션이 되고(§2에서 이미 비범위) 여러 번 실행해 상한을 무한 우회할 수 있다. M1-1에 포함한다.
+
 ### 3.1 must_be_masked 판정 (spec 004 잔여)
 MASK 매핑된 컬럼이 select-item에 **원본으로** 등장하면 위반. 단 자동 재작성이 기본이므로
 실무 흐름에서는 재작성이 먼저 적용돼 위반이 발생하지 않는다 → **판정은 "재작성을 끈 저장 경로"에서만 의미**를 갖는다.
@@ -287,3 +317,7 @@ ExecutionResultDto {
    `judged=false→true` 전환이 기존 규칙 평가·enforced 배지를 소급 변경함을 spec 004 §4.1에 주석.
 10. (v2) 주입 3원칙(괄호·LIMIT 단일장치·강제식 AST 삽입) + **재작성 결과 자체 검증**.
 11. (v2) 실행은 **완전 재판정**, 남의 승인 쿼리 실행 금지, 감사는 REQUIRES_NEW·결과 행 미저장·오류 메시지 정제.
+12. (M1 계획·사용자) **OFFSET 금지** — `LIMIT 1000,1000`으로 행 상한을 무한 우회할 수 있고, 상한의 의미를
+    "이 실행으로 나간 행 수"로 고정해야 감사가 총 반출량을 셀 수 있다. 위생 게이트에서 거부(`LIMIT_OFFSET_NOT_ALLOWED`).
+13. (M1 계획·AI) **AST를 폐기하지 않는다** — `inspect()`의 AST를 불투명 핸들로 보관해 재작성이 *판정된 그 AST*를
+    고친다. §2.5-1의 판정-실행 분기를 사후 검증으로 완화하는 대신 구조적으로 제거하고, §3.0.3은 이중 방어로 남긴다.

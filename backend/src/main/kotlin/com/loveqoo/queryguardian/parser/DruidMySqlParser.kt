@@ -3,6 +3,8 @@ package com.loveqoo.queryguardian.parser
 import com.alibaba.druid.DbType
 import com.alibaba.druid.sql.SQLUtils
 import com.alibaba.druid.sql.ast.SQLExpr
+import com.alibaba.druid.sql.ast.SQLLimit
+import com.alibaba.druid.sql.ast.SQLObject
 import com.alibaba.druid.sql.ast.expr.SQLAggregateExpr
 import com.alibaba.druid.sql.ast.expr.SQLAllColumnExpr
 import com.alibaba.druid.sql.ast.expr.SQLBetweenExpr
@@ -57,6 +59,26 @@ class DruidMySqlParser(
 ) : DialectParser {
 
     override val dialect = Dialect.MYSQL
+
+    /**
+     * 한 번의 파싱 동안 유지되는 스코프 등록부 (spec 008 §3.5 M1-1).
+     * 발급 순서대로 `s0`,`s1`,… id를 주고 그 스코프를 만든 AST 노드를 같이 기억한다 —
+     * 재작성이 **판정된 그 AST**를 지목할 수 있게 하는 유일한 연결이다.
+     */
+    private class ScopeRegistry {
+        private var next = 0
+        val nodes = linkedMapOf<String, SQLObject>()
+        fun register(node: SQLObject): String = "s${next++}".also { nodes[it] = node }
+    }
+
+    /** Druid AST를 감싼 불투명 핸들 — Druid 타입은 이 클래스 밖으로 나가지 않는다. */
+    internal class DruidParsedStatement(
+        internal val statement: SQLSelectStatement,
+        internal val scopeNodes: Map<String, SQLObject>,
+    ) : ParsedStatement {
+        override val dialect = Dialect.MYSQL
+        override val scopeIds: Set<String> get() = scopeNodes.keys
+    }
 
     private val executor: ExecutorService = Executors.newCachedThreadPool { r ->
         Thread(r, "druid-parse").apply { isDaemon = true }
@@ -134,8 +156,13 @@ class DruidMySqlParser(
         val statement = statements[0] as? SQLSelectStatement
             ?: return InspectResult(ParseResult.Failure(FailureKind.NOT_SELECT, "SELECT 문만 저장할 수 있습니다"), lexical)
 
-        val root = buildFromSelect(statement.select, ScopeKind.ROOT, parentResolver = null)
-        return InspectResult(ParseResult.Success(QueryIR(root, sql)), lexical + astHygiene(statement, root))
+        val registry = ScopeRegistry()
+        val root = buildFromSelect(statement.select, ScopeKind.ROOT, parentResolver = null, registry = registry)
+        return InspectResult(
+            ParseResult.Success(QueryIR(root, sql)),
+            lexical + astHygiene(statement, root),
+            DruidParsedStatement(statement, registry.nodes.toMap()),
+        )
     }
 
     // ---- 위생 게이트 (spec 008 §2.6) ----
@@ -147,6 +174,7 @@ class DruidMySqlParser(
         val variables = mutableSetOf<String>()
         val schemaQualified = mutableSetOf<String>()
         val forms = mutableSetOf<String>()
+        var limitOffset: String? = null
 
         /** 문형 검사 — base·MySQL 블록 양쪽에서 호출된다. */
         fun checkForm(x: SQLSelectQueryBlock) {
@@ -177,6 +205,12 @@ class DruidMySqlParser(
                 // 백틱을 벗기지 않으면 `\`sleep\`(5)`가 목록을 통째로 우회한다 —
                 // §6.5 "모든 식별자는 norm()을 통과한다"가 여기서 빠져 있었다(적대 검토 결함 1).
                 norm(x.methodName)?.uppercase()?.let { if (it in BANNED_FUNCTIONS) bannedFunctions += it }
+                return true
+            }
+
+            // LIMIT은 쿼리 블록·UNION 어디에나 붙을 수 있어 SQLLimit 자체를 본다 (spec 008 결정 12)
+            override fun visit(x: SQLLimit): Boolean {
+                if (x.offset != null) limitOffset = x.toString()
                 return true
             }
 
@@ -214,6 +248,13 @@ class DruidMySqlParser(
                     "(판정과 실행 대상이 달라집니다)",
             )
         }
+        limitOffset?.let {
+            out += HygieneViolation(
+                HygieneCode.LIMIT_OFFSET_NOT_ALLOWED,
+                "LIMIT에 OFFSET을 쓸 수 없습니다: $it — OFFSET을 반복하면 행 상한을 무한 우회할 수 있고, " +
+                    "감사에서 총 반출 행 수를 셀 수 없게 됩니다",
+            )
+        }
         if (bannedFunctions.isNotEmpty()) {
             out += HygieneViolation(
                 HygieneCode.BANNED_FUNCTION,
@@ -239,7 +280,7 @@ class DruidMySqlParser(
 
     override fun parsePredicate(predicateSql: String): Predicate? = try {
         val expr = SQLUtils.toSQLExpr(predicateSql, DbType.mysql)
-        toPredicate(expr, AliasResolver(emptyList(), null), mutableListOf())
+        toPredicate(expr, AliasResolver(emptyList(), null), mutableListOf(), ScopeRegistry())
     } catch (e: Exception) {
         null
     }
@@ -292,7 +333,7 @@ class DruidMySqlParser(
             cteNames.contains(name.lowercase()) || (parent?.isCte(name) ?: false)
     }
 
-    private fun buildFromSelect(select: SQLSelect, kind: ScopeKind, parentResolver: AliasResolver?): SelectScope {
+    private fun buildFromSelect(select: SQLSelect, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry): SelectScope {
         val with = select.withSubQuery
         val cteNames = with?.entries
             ?.mapNotNull { entry -> norm(entry.alias)?.lowercase() }
@@ -309,22 +350,22 @@ class DruidMySqlParser(
             val bodyNames = if (recursive && own != null) visible + own else visible.toSet()
             val bodyResolver = if (bodyNames.isEmpty()) parentResolver
             else AliasResolver(emptyList(), parentResolver, bodyNames)
-            cteChildren += buildFromSelect(entry.subQuery, ScopeKind.CTE, bodyResolver)
+            cteChildren += buildFromSelect(entry.subQuery, ScopeKind.CTE, bodyResolver, registry)
             own?.let { visible += it }
         }
 
         // 본문 스코프(메인 쿼리)는 모든 CTE 이름을 본다 — FROM에서 CTE를 참조하면 물리 테이블로 취급하지 않는다
         val resolver = if (cteNames.isEmpty()) parentResolver
         else AliasResolver(emptyList(), parentResolver, cteNames)
-        val scope = buildFromQuery(select.query, kind, resolver)
+        val scope = buildFromQuery(select.query, kind, resolver, registry)
         return if (cteChildren.isEmpty()) scope else scope.copy(children = cteChildren + scope.children)
     }
 
-    private fun buildFromQuery(query: SQLSelectQuery, kind: ScopeKind, parentResolver: AliasResolver?): SelectScope {
+    private fun buildFromQuery(query: SQLSelectQuery, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry): SelectScope {
         return when (query) {
-            is SQLSelectQueryBlock -> buildFromQueryBlock(query, kind, parentResolver)
+            is SQLSelectQueryBlock -> buildFromQueryBlock(query, kind, parentResolver, registry)
             is SQLUnionQuery -> {
-                val arms = unionArms(query).map { buildFromQuery(it, ScopeKind.UNION_ARM, parentResolver) }
+                val arms = unionArms(query).map { buildFromQuery(it, ScopeKind.UNION_ARM, parentResolver, registry) }
                 SelectScope(
                     kind = kind,
                     tables = emptyList(),
@@ -332,12 +373,14 @@ class DruidMySqlParser(
                     whereConjuncts = emptyList(),
                     limit = query.limit?.rowCount?.let { (it as? SQLIntegerExpr)?.number?.toLong() },
                     children = arms,
+                    scopeId = registry.register(query),
                 )
             }
             // 표현 불가한 SELECT 변형(VALUES 등)은 fail-open이 아니라 검증 불가 차단으로 떨어뜨린다 (§3)
             else -> SelectScope(
                 kind, emptyList(), emptyList(), emptyList(), null, emptyList(),
                 unverifiable = "지원하지 않는 쿼리 형태: ${query.javaClass.simpleName}",
+                scopeId = registry.register(query),
             )
         }
     }
@@ -348,7 +391,7 @@ class DruidMySqlParser(
         return arms.flatMap { if (it is SQLUnionQuery) unionArms(it) else listOf(it) }
     }
 
-    private fun buildFromQueryBlock(block: SQLSelectQueryBlock, kind: ScopeKind, parentResolver: AliasResolver?): SelectScope {
+    private fun buildFromQueryBlock(block: SQLSelectQueryBlock, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry): SelectScope {
         val tables = mutableListOf<TableRef>()
         val children = mutableListOf<SelectScope>()
         val innerOnExprs = mutableListOf<SQLExpr>()
@@ -363,20 +406,20 @@ class DruidMySqlParser(
             collectTables(it, tables, derivedSources, unionSources, unsupportedSources, innerOnExprs, allOnExprs, isCte)
         }
         val resolver = AliasResolver(tables, parentResolver)
-        derivedSources.forEach { children += buildFromSelect(it.select, ScopeKind.DERIVED, resolver) }
+        derivedSources.forEach { children += buildFromSelect(it.select, ScopeKind.DERIVED, resolver, registry) }
         // 파생 테이블 본문이 UNION인 경우(`FROM (SELECT … UNION ALL SELECT …) d`)도 스코프로 등록한다.
         // 버리면 그 안의 BLOCK 컬럼·거버넌스 테이블이 IR에서 사라져 룰이 발화하지 않는다 (§6.2).
-        unionSources.forEach { children += buildFromQuery(it.union, ScopeKind.DERIVED, resolver) }
+        unionSources.forEach { children += buildFromQuery(it.union, ScopeKind.DERIVED, resolver, registry) }
 
         // WHERE·INNER ON의 최상위 AND conjunct만 평탄화 (§6.1). 같은 경로에서 컬럼=컬럼 등식(joins 근거)도 수집 (§5).
         val conjuncts = mutableListOf<Predicate>()
         val joinEqualities = mutableListOf<ColumnEquality>()
-        block.where?.let { flattenAnd(it, conjuncts, resolver, children, joinEqualities) }
-        innerOnExprs.forEach { flattenAnd(it, conjuncts, resolver, children, joinEqualities) }
+        block.where?.let { flattenAnd(it, conjuncts, resolver, children, registry, joinEqualities) }
+        innerOnExprs.forEach { flattenAnd(it, conjuncts, resolver, children, registry, joinEqualities) }
 
         val selectItems = mutableListOf<SelectItem>()
         for (item in block.selectList) {
-            selectItems += toSelectItem(item.expr, resolver, children)
+            selectItems += toSelectItem(item.expr, resolver, children, registry)
         }
 
         // 컬럼 참조 수집 (spec 002 §5.1) — BLOCK 판정의 근거. 술어 모델과 독립적으로 전 절을 훑는다.
@@ -397,7 +440,7 @@ class DruidMySqlParser(
             // 모르는 FROM 형태는 **차단**한다. 조용히 버리면 그 스코프의 위반이 함께 사라진다(스코프 은닉).
             unverifiable = unsupportedSources.takeIf { it.isNotEmpty() }
                 ?.let { "지원하지 않는 FROM 형태: ${it.distinct().joinToString(", ")}" },
-            columnRefs = columnRefs, joinEqualities = joinEqualities)
+            columnRefs = columnRefs, joinEqualities = joinEqualities, scopeId = registry.register(block))
     }
 
     /**
@@ -491,14 +534,15 @@ class DruidMySqlParser(
         into: MutableList<Predicate>,
         resolver: AliasResolver,
         children: MutableList<SelectScope>,
+        registry: ScopeRegistry,
         joinEqs: MutableList<ColumnEquality>? = null,
     ) {
         if (expr is SQLBinaryOpExpr && expr.operator == SQLBinaryOperator.BooleanAnd) {
-            flattenAnd(expr.left, into, resolver, children, joinEqs)
-            flattenAnd(expr.right, into, resolver, children, joinEqs)
+            flattenAnd(expr.left, into, resolver, children, registry, joinEqs)
+            flattenAnd(expr.right, into, resolver, children, registry, joinEqs)
         } else {
             if (joinEqs != null) columnEqualityOf(expr, resolver)?.let { joinEqs += it }
-            into += toPredicate(expr, resolver, children)
+            into += toPredicate(expr, resolver, children, registry)
         }
     }
 
@@ -523,28 +567,29 @@ class DruidMySqlParser(
         expr: SQLExpr,
         resolver: AliasResolver,
         children: MutableList<SelectScope>,
+        registry: ScopeRegistry,
     ): Predicate = when {
         expr is SQLBinaryOpExpr && expr.operator == SQLBinaryOperator.BooleanOr -> {
             val branches = mutableListOf<Predicate>()
             fun flattenOr(e: SQLExpr) {
                 if (e is SQLBinaryOpExpr && e.operator == SQLBinaryOperator.BooleanOr) {
                     flattenOr(e.left); flattenOr(e.right)
-                } else branches += toPredicate(e, resolver, children)
+                } else branches += toPredicate(e, resolver, children, registry)
             }
             flattenOr(expr)
             Predicate.Or(branches)
         }
         expr is SQLBinaryOpExpr && expr.operator == SQLBinaryOperator.BooleanAnd -> {
             val conjuncts = mutableListOf<Predicate>()
-            flattenAnd(expr, conjuncts, resolver, children)
+            flattenAnd(expr, conjuncts, resolver, children, registry)
             Predicate.And(conjuncts)
         }
-        expr is SQLBinaryOpExpr -> toComparison(expr, resolver, children)
-        expr is SQLNotExpr -> Predicate.Not(toPredicate(expr.expr, resolver, children))
+        expr is SQLBinaryOpExpr -> toComparison(expr, resolver, children, registry)
+        expr is SQLNotExpr -> Predicate.Not(toPredicate(expr.expr, resolver, children, registry))
         expr is SQLInListExpr -> {
             // 피연산자에 숨은 서브쿼리도 스코프로 등록 — §6.2 (검증 F3)
-            collectSubqueries(expr.expr, resolver, children)
-            expr.targetList.forEach { collectSubqueries(it, resolver, children) }
+            collectSubqueries(expr.expr, resolver, children, registry)
+            expr.targetList.forEach { collectSubqueries(it, resolver, children, registry) }
             val column = toColumn(expr.expr, resolver)
             if (column == null || expr.isNot) {
                 Predicate.Raw(expr.toString())
@@ -554,23 +599,23 @@ class DruidMySqlParser(
             }
         }
         expr is SQLBetweenExpr -> {
-            collectSubqueries(expr.testExpr, resolver, children)
-            collectSubqueries(expr.beginExpr, resolver, children)
-            collectSubqueries(expr.endExpr, resolver, children)
+            collectSubqueries(expr.testExpr, resolver, children, registry)
+            collectSubqueries(expr.beginExpr, resolver, children, registry)
+            collectSubqueries(expr.endExpr, resolver, children, registry)
             val column = toColumn(expr.testExpr, resolver)
             if (column == null || expr.isNot) Predicate.Raw(expr.toString())
             else Predicate.Between(column, literalText(expr.beginExpr), literalText(expr.endExpr))
         }
         expr is SQLInSubQueryExpr -> {
-            children += buildFromSelect(expr.subQuery, ScopeKind.SUBQUERY, resolver)
+            children += buildFromSelect(expr.subQuery, ScopeKind.SUBQUERY, resolver, registry)
             Predicate.Raw(expr.toString())
         }
         expr is SQLExistsExpr -> {
-            children += buildFromSelect(expr.subQuery, ScopeKind.EXISTS, resolver)
+            children += buildFromSelect(expr.subQuery, ScopeKind.EXISTS, resolver, registry)
             Predicate.Raw(expr.toString())
         }
         else -> {
-            collectSubqueries(expr, resolver, children)
+            collectSubqueries(expr, resolver, children, registry)
             Predicate.Raw(expr.toString())
         }
     }
@@ -579,6 +624,7 @@ class DruidMySqlParser(
         expr: SQLBinaryOpExpr,
         resolver: AliasResolver,
         children: MutableList<SelectScope>,
+        registry: ScopeRegistry,
     ): Predicate {
         val op = when (expr.operator) {
             SQLBinaryOperator.Equality -> Op.EQ
@@ -590,8 +636,8 @@ class DruidMySqlParser(
             SQLBinaryOperator.Like -> Op.LIKE
             else -> null
         }
-        collectSubqueries(expr.left, resolver, children)
-        collectSubqueries(expr.right, resolver, children)
+        collectSubqueries(expr.left, resolver, children, registry)
+        collectSubqueries(expr.right, resolver, children, registry)
         if (op == null) return Predicate.Raw(expr.toString())
 
         val leftColumn = toColumn(expr.left, resolver)
@@ -631,16 +677,16 @@ class DruidMySqlParser(
     }
 
     /** 함수 인자 등 임의 표현식 안에 숨은 서브쿼리도 스코프로 등록한다 (§6.2 스코프 은닉 금지). */
-    private fun collectSubqueries(expr: SQLExpr, resolver: AliasResolver, children: MutableList<SelectScope>) {
+    private fun collectSubqueries(expr: SQLExpr, resolver: AliasResolver, children: MutableList<SelectScope>, registry: ScopeRegistry) {
         expr.accept(object : SQLASTVisitorAdapter() {
             override fun visit(x: SQLQueryExpr): Boolean {
-                children += buildFromSelect(x.subQuery, ScopeKind.SUBQUERY, resolver); return false
+                children += buildFromSelect(x.subQuery, ScopeKind.SUBQUERY, resolver, registry); return false
             }
             override fun visit(x: SQLInSubQueryExpr): Boolean {
-                children += buildFromSelect(x.subQuery, ScopeKind.SUBQUERY, resolver); return false
+                children += buildFromSelect(x.subQuery, ScopeKind.SUBQUERY, resolver, registry); return false
             }
             override fun visit(x: SQLExistsExpr): Boolean {
-                children += buildFromSelect(x.subQuery, ScopeKind.EXISTS, resolver); return false
+                children += buildFromSelect(x.subQuery, ScopeKind.EXISTS, resolver, registry); return false
             }
         })
     }
@@ -649,17 +695,18 @@ class DruidMySqlParser(
         expr: SQLExpr,
         resolver: AliasResolver,
         children: MutableList<SelectScope>,
+        registry: ScopeRegistry,
     ): SelectItem = when {
         expr is SQLAllColumnExpr -> SelectItem.Star(null)
         expr is SQLPropertyExpr && expr.name == "*" -> SelectItem.Star(qualifierOf(expr))
         expr is SQLIdentifierExpr -> SelectItem.Column(ResolvedColumn(resolver.resolveUnqualified(), norm(expr.name)!!))
         expr is SQLPropertyExpr -> SelectItem.Column(toColumn(expr, resolver)!!)
         expr is SQLAggregateExpr -> {
-            expr.arguments.forEach { arg -> if (arg !is SQLAllColumnExpr) collectSubqueries(arg, resolver, children) }
+            expr.arguments.forEach { arg -> if (arg !is SQLAllColumnExpr) collectSubqueries(arg, resolver, children, registry) }
             SelectItem.Expr(expr.toString()) // COUNT(*) 포함 — select-item Star가 아니다 (§6.7)
         }
         else -> {
-            collectSubqueries(expr, resolver, children)
+            collectSubqueries(expr, resolver, children, registry)
             SelectItem.Expr(expr.toString())
         }
     }

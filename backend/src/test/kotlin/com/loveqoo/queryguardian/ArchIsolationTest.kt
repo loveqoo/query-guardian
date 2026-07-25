@@ -25,6 +25,21 @@ class ArchIsolationTest {
         .should().dependOnClassesThat().resideInAnyPackage("..queryguardian.auth..")
 
     /**
+     * spec 008 §3.5 M1-1: `ir`은 **공용 어휘**다 — 아무 계층도 의존하지 않는다.
+     * `RewritePlan`이 여기 사는 이유가 그것이고(`exec`에 두면 `parser`가 `exec`를 의존해야 한다),
+     * 어휘가 어느 계층을 알기 시작하면 그 방향 의존이 순환으로 되돌아온다.
+     */
+    @ArchTest
+    val irIsTheSharedVocabulary: ArchRule = noClasses()
+        .that().resideInAnyPackage("..queryguardian.ir..")
+        .should().dependOnClassesThat().resideInAnyPackage(
+            "..queryguardian.parser..", "..queryguardian.catalog..", "..queryguardian.rules..",
+            "..queryguardian.auth..", "..queryguardian.exec..", "..queryguardian.approval..",
+            "..queryguardian.api..", "..queryguardian.lint..", "..queryguardian.query..",
+            "..queryguardian.config..",
+        )
+
+    /**
      * spec 008 §3: 재작성이 권한에 따라 달라지면 "권한 없는 사용자가 마스킹을 덜 받는" 역전이 생긴다
      * (spec 007 C4와 같은 함정). 실행·재작성 계층은 권한을 알지 못한다 — 권한 판단은 호출자(게이트)의 몫이다.
      */

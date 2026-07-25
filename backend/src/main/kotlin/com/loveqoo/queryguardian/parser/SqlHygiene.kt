@@ -28,6 +28,12 @@ enum class HygieneCode {
     BANNED_FUNCTION,
 
     /**
+     * `LIMIT`의 OFFSET 금지 (spec 008 결정 12) — `LIMIT 1000,1000`으로 행 상한을 무한 우회할 수 있고,
+     * 상한의 의미를 "이 실행으로 나간 행 수"로 고정해야 감사가 총 반출량을 셀 수 있다.
+     */
+    LIMIT_OFFSET_NOT_ALLOWED,
+
+    /**
      * 검사 자체가 불가능했다 — 파싱 실패·비-SELECT·AST 순회 예외.
      *
      * 위생 검사가 "볼 수 없었다"를 빈 목록(=위반 없음)으로 보고하면 위생 게이트를 **단독으로** 호출하는 경로

@@ -182,7 +182,8 @@ INSERT IGNORE INTO demo_table_map (logical_name, physical_name) VALUES
 -- (MySQL 오류 메시지는 데이터 값을 에코한다: `Truncated incorrect ... value: '...'`).
 CREATE TABLE IF NOT EXISTS execution_event (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
-    query_id      BIGINT NOT NULL,
+    -- 미리보기(preview-rewrite)는 저장된 쿼리가 없으므로 NULL이다
+    query_id      BIGINT NULL,
     actor         VARCHAR(64) NOT NULL,
     outcome       VARCHAR(16) NOT NULL,
     original_sql  TEXT NOT NULL,

@@ -199,4 +199,54 @@ class ExecutionFlowIntegrationTest {
             "STEWARD에게 원문이 보이지 않는다: $steward",
         )
     }
+
+    /**
+     * spec 008 §7 미리보기 — 실행 없이 재작성만 보여준다. **게이트는 실행과 같아야 한다**:
+     * 응답에 적용될 강제식 원문이 담기므로, 게이트가 느슨하면 미리보기가 "어떤 컬럼이 MASK이고 마스크 식이
+     * 무엇인지"를 캐는 창구가 된다.
+     */
+    @Test
+    @Order(7)
+    fun `미리보기 - 실행 없이 재작성 SQL을 보여준다`() {
+        val response = postAs("/api/preview-rewrite", "u1", mapOf(
+            "sql" to "SELECT email FROM users", "requestId" to requestId, "dialect" to "MYSQL"))
+        assertEquals(HttpStatus.OK, response.statusCode, "미리보기 실패: ${response.body}")
+        val body = response.body!!
+
+        assertTrue(body["rewrittenSql"].toString().contains("mask_email"), "${body["rewrittenSql"]}")
+        assertTrue(body["rewrittenSql"].toString().contains("demo_users"), "${body["rewrittenSql"]}")
+        assertTrue(body["applied"].toString().contains("MASK"), "${body["applied"]}")
+        // 실행이 아니므로 결과 행이 없다
+        assertTrue(!body.containsKey("rows"), "미리보기에 결과 행이 있다: $body")
+        // 통과했어도 안내(WARN)는 그 자리에서 보여야 한다
+        assertTrue(body["lintReport"].toString().contains("자동으로 마스킹"), "${body["lintReport"]}")
+    }
+
+    @Test
+    @Order(8)
+    fun `미리보기 게이트 - 요청 없음·남의 요청·룰 위반은 막힌다`() {
+        // requestId 없으면 purposeCode를 주입할 수 없다 → purpose별 FILTER 자가 면제를 막는다 (spec 005 C1)
+        assertEquals(
+            HttpStatus.FORBIDDEN,
+            postAs("/api/preview-rewrite", "u1", mapOf("sql" to "SELECT email FROM users")).statusCode,
+        )
+        // 남의 승인 요청으로는 미리 볼 수 없다
+        assertEquals(
+            HttpStatus.FORBIDDEN,
+            postAs("/api/preview-rewrite", "u2", mapOf(
+                "sql" to "SELECT email FROM users", "requestId" to requestId)).statusCode,
+        )
+        // 룰 위반(BLOCK 컬럼)은 422 — 미리보기라고 통과시키지 않는다
+        val blocked = postAs("/api/preview-rewrite", "u1", mapOf(
+            "sql" to "SELECT ssn FROM users", "requestId" to requestId))
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, blocked.statusCode, "${blocked.body}")
+        assertTrue(blocked.body!!["violations"].toString().contains("no-blocked-column"), "${blocked.body}")
+
+        // 승인 범위 밖 테이블도 막힌다(요청은 users만 커버한다)
+        assertEquals(
+            HttpStatus.FORBIDDEN,
+            postAs("/api/preview-rewrite", "u1", mapOf(
+                "sql" to "SELECT id FROM marketing_consents", "requestId" to requestId)).statusCode,
+        )
+    }
 }

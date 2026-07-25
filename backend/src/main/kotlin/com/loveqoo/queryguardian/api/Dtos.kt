@@ -154,3 +154,16 @@ data class ExecutionEventDto(
     val rewrittenSql: String?,
     val at: java.time.Instant,
 )
+
+/** 재작성 미리보기 요청 (spec 008 §7). [requestId]는 **필수** — purposeCode를 서버가 그 요청에서 주입한다. */
+data class PreviewRewriteRequest(val sql: String, val requestId: Long?, val dialect: String? = null)
+
+/**
+ * 미리보기 응답 — 실행 결과가 없다. "무엇이 자동 적용되는지"만 보여준다.
+ * [lintReport]를 함께 주는 이유: 통과했더라도 WARN(예: "실행 시 자동 마스킹됩니다")을 그 자리에서 봐야 한다.
+ */
+data class PreviewRewriteDto(
+    val rewrittenSql: String,
+    val applied: List<AppliedRewriteDto>,
+    val lintReport: LintReportDto,
+)

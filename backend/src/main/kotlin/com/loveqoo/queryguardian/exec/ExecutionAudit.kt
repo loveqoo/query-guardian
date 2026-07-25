@@ -10,13 +10,18 @@ import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
 
-/** 실행 시도의 결말. **차단·오류도 기록한다** — 시도 자체가 감사 대상이다(spec 008 §6). */
-enum class ExecutionOutcome { SUCCESS, BLOCKED, ERROR }
+/**
+ * 실행 시도의 결말. **차단·오류도 기록한다** — 시도 자체가 감사 대상이다(spec 008 §6).
+ * [PREVIEW]는 실행 없이 재작성만 보여준 경우다 — 데이터는 나가지 않지만 **어떤 강제식이 적용되는지**가
+ * 노출되므로(카탈로그 오라클) 누가 무엇을 미리 봤는지는 남긴다.
+ */
+enum class ExecutionOutcome { SUCCESS, BLOCKED, ERROR, PREVIEW }
 
 @Table("execution_event")
 data class ExecutionEvent(
     @Id val id: Long? = null,
-    val queryId: Long,
+    /** 미리보기는 저장된 쿼리가 없어 null이다. */
+    val queryId: Long? = null,
     val actor: String,
     val outcome: String,
     val originalSql: String,
@@ -50,7 +55,7 @@ class ExecutionAudit(
 ) {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun record(
-        queryId: Long,
+        queryId: Long?,
         actor: String,
         outcome: ExecutionOutcome,
         originalSql: String,

@@ -39,7 +39,11 @@ import com.loveqoo.queryguardian.ir.TableRename
  * 2. LIMIT은 **단일 장치** — `maxRows + 1`을 AST에 넣는다. `setMaxRows` 병용 금지.
  * 3. 강제식은 문자열로 이어붙이지 않고 **재파싱해 단일 표현식 노드로** 삽입한다. 파싱 실패·서브쿼리 포함이면 거부.
  */
-class SqlRewriter {
+class SqlRewriter(
+    private val parser: DialectParser,
+    /** 검증은 **선택이 아니다** — 생성자에서 받되 기본값을 두어 호출자가 빠뜨릴 수 없게 한다(§3.0.3). */
+    private val verifier: RewriteVerifier = RewriteVerifier(parser),
+) {
 
     fun rewrite(statement: ParsedStatement, plan: RewritePlan): RewriteOutcome {
         val handle = statement as? DruidMySqlParser.DruidParsedStatement
@@ -91,7 +95,14 @@ class SqlRewriter {
             applyRename(block, rename, applied)?.let { return it }
         }
 
-        return RewriteOutcome.Rewritten(SQLUtils.toSQLString(handle.statement, DbType.mysql), applied)
+        val rewritten = SQLUtils.toSQLString(handle.statement, DbType.mysql)
+
+        // §3.0.3 이중 방어: 실제로 실행될 **텍스트**를 다시 읽어 계획대로 됐는지 단정한다.
+        val problems = verifier.verify(rewritten, plan)
+        if (problems.isNotEmpty()) {
+            return refuse(RewriteRefusal.VERIFY_FAILED, "재작성 결과 검증 실패 — ${problems.joinToString("; ")}")
+        }
+        return RewriteOutcome.Rewritten(rewritten, applied)
     }
 
     private fun refuse(refusal: RewriteRefusal, message: String) = RewriteOutcome.Refused(refusal, message)

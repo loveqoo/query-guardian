@@ -24,7 +24,7 @@ import kotlin.test.assertTrue
 class SqlRewriterTest {
 
     private val parser = DruidMySqlParser()
-    private val rewriter = SqlRewriter()
+    private val rewriter = SqlRewriter(parser)
 
     private fun inspect(sql: String): Pair<QueryIR, ParsedStatement> {
         val result = parser.inspect(sql)

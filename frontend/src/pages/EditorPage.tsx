@@ -455,7 +455,7 @@ export default function EditorPage() {
 
   // ==========================================================================
   return (
-    <div style={{ display: "flex", gap: 16, height: "100%", minHeight: 600 }}>
+    <div className="qg-stack-mobile" style={{ display: "flex", gap: 16, height: "100%", minHeight: 600 }}>
       {/* ============ editor column ============ */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
         {/* toolbar */}
@@ -469,7 +469,7 @@ export default function EditorPage() {
             flexWrap: "wrap",
           }}
         >
-          <div style={{ flex: 1, minWidth: 180 }}>
+          <div className="qg-shrink-mobile" style={{ flex: 1, minWidth: 180 }}>
             <Input
               value={queryName}
               onChange={(e) => setQueryName(e.target.value)}
@@ -1055,7 +1055,9 @@ function ResultPanel() {
     borderBottom: `1px solid ${C.borderSecondary}`,
   };
   return (
-    <div style={{ overflowX: "auto" }}>
+    // data-scroll-x: 결과 표는 좁은 화면에서 **한 열로 접지 않고** 이 컨테이너 안에서 가로 스크롤한다
+    // (4열 데이터 표를 세로로 접으면 어느 값이 어느 컬럼인지 알 수 없게 된다).
+    <div data-scroll-x style={{ overflowX: "auto" }}>
       <div style={{ marginBottom: 10 }}>
         <Tag color="default">예시 데이터</Tag>
       </div>

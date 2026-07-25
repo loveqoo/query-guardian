@@ -277,7 +277,7 @@ export default function DatabasesPage() {
         {user?.displayName ?? "—"} 님 권한 기준 · 잠금 항목은 접근 불가 (컬럼은 노출되지 않습니다)
       </div>
 
-      <div
+      <div className="qg-stack-mobile"
         style={{
           display: "grid",
           gridTemplateColumns: "300px 300px 1fr",
@@ -541,12 +541,15 @@ export default function DatabasesPage() {
           </div>
 
           {/* scroll body */}
-          <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          {/* data-scroll-x: 컬럼 표는 좁은 화면에서 접지 않고 가로 스크롤한다 —
+              4열 표를 한 열로 접으면 값과 컬럼의 대응이 사라진다(spec 009 §3의 표 정책). */}
+          <div data-scroll-x style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {/* column grid header — 카탈로그 API가 주는 필드(타입·클래스·PII)로 구성 */}
             <div
               style={{
                 display: "grid",
                 gridTemplateColumns: "1.2fr 1fr 0.9fr 0.6fr",
+                minWidth: 460, // 표는 이 아래로 좁아지면 읽을 수 없다 — 부모가 가로 스크롤한다
                 gap: 0,
                 padding: "10px 16px",
                 borderBottom: `1px solid ${T.border}`,
@@ -583,6 +586,7 @@ export default function DatabasesPage() {
                 const rowStyle: CSSProperties = {
                   display: "grid",
                   gridTemplateColumns: "1.2fr 1fr 0.9fr 0.6fr",
+                  minWidth: 460, // 헤더와 같은 최소 폭 — 어긋나면 열이 밀린다
                   gap: 0,
                   padding: "11px 16px",
                   borderBottom: `1px solid ${T.split}`,

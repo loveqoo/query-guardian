@@ -1075,7 +1075,7 @@ function PurposesTab({
             style={{ fontFamily: MONO_FONT }}
           />
         </div>
-        <div style={{ flex: 1, minWidth: 200 }}>
+        <div className="qg-shrink-mobile" style={{ flex: 1, minWidth: 200 }}>
           <Input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="설명" />
         </div>
         <Button type="primary" icon={<PlusOutlined />} loading={adding} onClick={add}>

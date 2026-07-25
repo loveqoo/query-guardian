@@ -1569,7 +1569,7 @@ export default function RulesPage() {
             )}
           </div>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
-            <div style={{ minWidth: 220 }}>
+            <div className="qg-shrink-mobile" style={{ minWidth: 220 }}>
               <label style={fieldLabel}>적용 범위</label>
               <Select
                 style={{ width: "100%" }}
@@ -1583,7 +1583,7 @@ export default function RulesPage() {
                 }
               />
             </div>
-            <div style={{ flex: 1, minWidth: 240 }}>
+            <div className="qg-shrink-mobile" style={{ flex: 1, minWidth: 240 }}>
               <label style={fieldLabel}>대상 서버 (클러스터)</label>
               {draft?.scope === "GLOBAL" ? (
                 <div

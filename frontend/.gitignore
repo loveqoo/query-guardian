@@ -2,3 +2,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 *.local
+
+# Playwright (spec 009 시각 회귀) — 실행 산출물은 커밋하지 않는다. 기준 스냅샷은 커밋한다.
+test-results/
+playwright-report/
+blob-report/

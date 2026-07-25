@@ -214,7 +214,7 @@ export default function AdminPage() {
         />
       )}
 
-      <div
+      <div className="qg-stack-mobile"
         style={{
           display: "grid",
           gridTemplateColumns: "280px 1fr",

@@ -27,3 +27,45 @@ body,
   outline: none;
   border-color: #1677ff;
 }
+
+/* ---------------------------------------------------------------------------
+   모바일 레이아웃 (spec 009) — 992px 미만에서만 적용된다(셸의 브레이크포인트와 같아야 한다).
+   데스크톱 픽셀 불변이 이 스펙의 경계이므로, 모든 규칙을 이 미디어 쿼리 안에만 둔다.
+   `!important`를 쓰는 이유: 대상들이 인라인 style로 폭을 지정하고 있어 그 밖에서는 이길 수 없다.
+   --------------------------------------------------------------------------- */
+@media (max-width: 991px) {
+  /* 고정 px 그리드는 한 열로 — `300px 300px 1fr` 같은 값은 390px 화면을 두 배 넘긴다 */
+  .qg-stack-mobile {
+    grid-template-columns: 1fr !important;
+    flex-direction: column !important;
+  }
+  /* 큰 min-width는 줄어들 수 있게 — 220~480px 고정은 좁은 화면에서 잘림의 직접 원인이다 */
+  .qg-shrink-mobile {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+  /* 넓어야 하는 것(코드·표)은 자기 컨테이너 안에서만 가로 스크롤한다 */
+  .qg-scroll-x-mobile {
+    overflow-x: auto;
+  }
+
+  /* 인라인으로 열을 지정한 그리드는 한 열로 접는다.
+     이유(실측): `1fr`의 최소 크기는 `min-content`라서, 넓은 형제가 다른 열을 0px까지 밀어내고
+     자기는 컨테이너를 넘어간다 — 390px에서 `1fr 1fr`이 "한쪽 2px + 반대쪽 넘침"으로 깨졌다.
+     화면마다 클래스를 붙이지 않고 전역으로 두는 이유: 앞으로 추가될 화면(실행 결과 등)도 자동으로 덮인다.
+     예외는 두 가지 — 의도된 가로 스크롤 영역 안(데이터 표), 그리고 명시적으로 유지를 선언한 곳. */
+  main [style*="grid-template-columns"]:not(.qg-keep-grid):not([data-scroll-x] *) {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* 그리드·플렉스 자식이 자기 min-content 때문에 부모를 넘기지 못하게 (넘침의 표준 원인) */
+  main [style*="grid-template-columns"] > *,
+  main [style*="display: flex"] > * {
+    min-width: 0;
+  }
+}
+
+/* 의도된 가로 스크롤 영역 — 넓은 표·코드는 접지 않고 여기서만 스크롤한다(전 뷰포트 공통). */
+[data-scroll-x] {
+  overflow-x: auto;
+}

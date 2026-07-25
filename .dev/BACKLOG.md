@@ -29,6 +29,33 @@
 - **D-A 보강.** "프로브 값에서 출력 ≠ 입력"은 마스킹 증명이 아니다 — 프로브만 다르게 반환하는 `CASE`,
   가역 인코딩, 일부 값 항등 함수가 통과한다. → 허용 함수/템플릿 allowlist 또는 비가역성 계약.
 
+## spec 010 P1 작업 목록 — craft-reviewer 기준선 검토 (2026-07-26)
+
+`QueryExecutionService`를 표본으로 한 **설계 품질 전담** 검토(장인 축의 첫 실행, retrospect 014 교정).
+spec 010을 안 보고 독립적으로 도출했고, §1 진단(줄기가 주석에만·사본·문법 다양성·`statement!!`)에
+수렴했다. **아래 4건은 spec 010이 놓친 것**이다.
+
+**권장 순서 1 → 2 → 3.** 1이 사본을 없애야 2·3의 수정이 한 곳에서 끝난다. 3을 먼저 하면 같은
+sealed 분해를 두 벌 고치게 된다.
+
+| # | 없앨 것 | 뽑아낼 이름 |
+|---|---|---|
+| 1 | `execute`/`previewRewrite`의 파싱 이후 사본 — **의미 차이는 자유변수 3개뿐**(`queryId`·`requestId`·`purposeCode`, 정규화 후 diff 실측) | `runGate(ctx: GateContext): Cleared` |
+| 2 | 차단-기록 문법 4종(try/catch·지역 `blocked()`·5인자 `blockedByReport`·`runCatching`) | `GateStop` + `stop(...)` **하나** |
+| 3 | 호출부의 sealed 분해 `when` 8개 | `DemoMapping.Failed(auditCode, message)`·`PlanOutcome.Refused.auditCode` — **`ExecutionFailure.Kind` 선례 답습**(`exec → audit`은 ArchUnit이 허용) |
+| 4 | `inspected.statement!!` 2곳 | `InspectResult`를 sealed로: `Parsed(ir, statement, intake)` / `Unparsed(failure, intake)` |
+| 5 | `maskedColumnsOf()`가 게이트에 사는 것 — **같은 `lowercase()` 식이 `RewritePlanner:83`에도 있다**(복사는 독립이 아니다, §3.0.3의 취지를 배반) | `RewriteCatalog.maskedColumns(tableName)` |
+| 6 | 승인 존재·요청자 검사 2벌(게이트 111–115 + `ApprovalGate` 안) | `ApprovalGate.requireOwned()` + `checkCoverage()` |
+| 7 | KDoc 68–69의 순서 목록 — **본문과 이미 어긋났다**(`approvalGate.check`·`REWRITE_NO_LIMIT`이 목록에 없다) | 1이 끝나면 목록을 본문으로 승격 |
+| 8 | `QueryService.gate()` — **세 번째 사본이고 이미 갈라졌다**(`parse` vs `inspect`, `lint` vs `judge`) | **결정: 단계 단위만 공유**. 저장 게이트는 그 단위를 자기 순서로 조립만 하고 순서·동작은 불변 |
+
+**검토가 남긴 메타 지적**(가장 아프다): learning 015에 *"검증 축은 코드 × 진입점"* 이라고 적은 순간이,
+설계 축에서는 **"진입점이 둘인 게 아니라 사본이 둘인 것"** 이라고 읽혔어야 할 자리다.
+P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝내면 그 축이 절반으로 줄어든다.**
+
+> 독립성 단서: 리뷰어가 `docs/spec/INDEX.md`를 훑다 010 줄을 지나쳐 읽었다고 고지했다(겹치는 항목은
+> 표시됨). 다음부터는 "INDEX를 읽지 말고 브리프가 준 목록만" 으로 지시한다 — 에이전트 정의에 반영했다.
+
 ## spec 010 P0가 남긴 것 (P1 착수 시 함께 본다)
 
 - **A2의 판정 기준은 이미 파일에 있다** — `AuditCodeCoverageTest`에서 `bodyCode = null`인 시나리오 **9개**가

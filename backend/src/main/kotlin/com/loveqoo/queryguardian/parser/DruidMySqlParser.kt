@@ -298,8 +298,8 @@ class DruidMySqlParser(
 
             override fun visit(x: SQLMethodInvokeExpr): Boolean {
                 // 백틱을 벗기지 않으면 `\`sleep\`(5)`가 목록을 통째로 우회한다 —
-                // §6.5 "모든 식별자는 norm()을 통과한다"가 여기서 빠져 있었다(적대 검토 결함 1).
-                norm(x.methodName)?.uppercase()?.let { if (it in BANNED_FUNCTIONS) bannedFunctions += it }
+                // §6.5 "모든 식별자는 normOrNull()을 통과한다"가 여기서 빠져 있었다(적대 검토 결함 1).
+                normOrNull(x.methodName)?.uppercase()?.let { if (it in BANNED_FUNCTIONS) bannedFunctions += it }
                 return true
             }
 
@@ -395,7 +395,6 @@ class DruidMySqlParser(
 
     // ---- 스코프 구성 ----
 
-    /** MySQL 식별자 정규화: 백틱 제거 등. 모든 식별자는 IR에 들어가기 전에 반드시 통과한다 (§6.5). */
     /**
      * 리터럴을 제거한 텍스트의 이진 연산자 수. 총합을 세는 **보수적** 계산이다 —
      * 서로 다른 식에 흩어져 있어도 함께 세므로 과소평가하지 않는다.
@@ -405,7 +404,21 @@ class DruidMySqlParser(
         withoutLiterals.count { it == '+' || it == '-' } +
             BINARY_KEYWORDS.findAll(withoutLiterals).count()
 
-    private fun norm(identifier: String?): String? = identifier?.let { SQLUtils.normalize(it) }
+    /**
+     * MySQL 식별자 정규화: 백틱 제거 등. 모든 식별자는 IR에 들어가기 전에 반드시 통과한다 (§6.5).
+     *
+     * **정의역이 둘이다** — 식별자가 확실히 있는 자리와, 별칭처럼 없을 수 있는 자리. 예전에는 함수 하나가
+     * 둘을 겸해 `String?`을 받고 `String?`을 냈고, 그래서 이름이 있는 것이 확실한 12곳이 단정 연산자로
+     * 그 사실을 **매번 다시 주장**했다. 주장은 지역적이라 열두 번 읽어야 하고 시그니처는 한 번 읽는다.
+     *
+     * 개수를 목표로 삼은 것이 아니다(§3 A4의 경고) — 기준은 "정의역이 갈렸는가"이고 12는 부산물이다.
+     * `SqlRewriter.normalize`도 같은 모양이지만 **가르지 않았다**: 결과를 전부 `==`로 비교해
+     * 갚을 단정이 0곳이다(실측). 갚을 것이 없는 분할은 함수만 하나 늘린다.
+     */
+    private fun norm(identifier: String): String = SQLUtils.normalize(identifier)
+
+    /** 별칭처럼 **없을 수 있는** 식별자 — 없으면 없는 채로 흐른다. */
+    private fun normOrNull(identifier: String?): String? = identifier?.let { norm(it) }
 
     /**
      * 한정자(소문자) → 테이블 instanceKey. 자식 스코프는 부모 체인으로 한정 참조를 해석한다(상관 서브쿼리).
@@ -441,7 +454,7 @@ class DruidMySqlParser(
     private fun buildFromSelect(select: SQLSelect, kind: ScopeKind, parentResolver: AliasResolver?, registry: ScopeRegistry, injectable: Boolean): SelectScope {
         val with = select.withSubQuery
         val cteNames = with?.entries
-            ?.mapNotNull { entry -> norm(entry.alias)?.lowercase() }
+            ?.mapNotNull { entry -> normOrNull(entry.alias)?.lowercase() }
             ?.toSet() ?: emptySet()
 
         // CTE 본문의 가시 범위는 **앞서 정의된 CTE만**이다. 비재귀 CTE 본문에서 자기 이름은 MySQL이
@@ -451,7 +464,7 @@ class DruidMySqlParser(
         val cteChildren = mutableListOf<SelectScope>()
         val visible = mutableSetOf<String>()
         with?.entries?.forEach { entry ->
-            val own = norm(entry.alias)?.lowercase()
+            val own = normOrNull(entry.alias)?.lowercase()
             val bodyNames = if (recursive && own != null) visible + own else visible.toSet()
             val bodyResolver = if (bodyNames.isEmpty()) parentResolver
             else AliasResolver(emptyList(), parentResolver, bodyNames)
@@ -530,13 +543,13 @@ class DruidMySqlParser(
         val resolver = AliasResolver(tables, parentResolver)
         // 래퍼의 alias가 null 생성 쪽이면 그 **안쪽 스코프도** 주입 불가다 — 감싸서 우회하는 경로를 막는다
         derivedSources.forEach { source ->
-            val throughNull = norm(source.alias)?.let { it in nullProducing } ?: false
+            val throughNull = normOrNull(source.alias)?.let { it in nullProducing } ?: false
             children += buildFromSelect(source.select, ScopeKind.DERIVED, resolver, registry, injectable && !throughNull)
         }
         // 파생 테이블 본문이 UNION인 경우(`FROM (SELECT … UNION ALL SELECT …) d`)도 스코프로 등록한다.
         // 버리면 그 안의 BLOCK 컬럼·거버넌스 테이블이 IR에서 사라져 룰이 발화하지 않는다 (§6.2).
         unionSources.forEach { source ->
-            val throughNull = norm(source.alias)?.let { it in nullProducing } ?: false
+            val throughNull = normOrNull(source.alias)?.let { it in nullProducing } ?: false
             children += buildFromQuery(source.union, ScopeKind.DERIVED, resolver, registry, injectable && !throughNull)
         }
 
@@ -554,14 +567,14 @@ class DruidMySqlParser(
         for (item in block.selectList) {
             val converted = toSelectItem(item.expr, resolver, children, registry)
             // 별칭은 출력 이름이다 — GROUP BY/ORDER BY가 이 이름으로 투영을 가리킬 수 있으므로 IR에 남긴다
-            selectItems += if (converted is SelectItem.Column) converted.copy(alias = norm(item.alias)) else converted
+            selectItems += if (converted is SelectItem.Column) converted.copy(alias = normOrNull(item.alias)) else converted
         }
 
         // GROUP BY·ORDER BY·HAVING이 참조하는 출력 이름·서수 — 마스킹 치환이 그룹·정렬 기준을 바꾸는지 판단
         val outputRefs = mutableSetOf<String>()
         val collectOutputRef: (SQLExpr) -> Unit = { expr ->
             when (expr) {
-                is SQLIdentifierExpr -> norm(expr.name)?.let { outputRefs += it.lowercase() }
+                is SQLIdentifierExpr -> normOrNull(expr.name)?.let { outputRefs += it.lowercase() }
                 is SQLIntegerExpr -> outputRefs += expr.number.toString()
                 else -> Unit
             }
@@ -571,7 +584,7 @@ class DruidMySqlParser(
             // HAVING은 별칭을 참조할 수 있다(`HAVING e LIKE …`) — 식 안의 식별자를 훑는다
             groupBy.having?.accept(object : SQLASTVisitorAdapter() {
                 override fun visit(x: SQLIdentifierExpr): Boolean {
-                    norm(x.name)?.let { outputRefs += it.lowercase() }
+                    normOrNull(x.name)?.let { outputRefs += it.lowercase() }
                     return false
                 }
             })
@@ -621,14 +634,14 @@ class DruidMySqlParser(
     private fun collectColumnRefs(expr: SQLExpr, resolver: AliasResolver, into: MutableList<ColumnRef>) {
         expr.accept(object : SQLASTVisitorAdapter() {
             override fun visit(x: SQLIdentifierExpr): Boolean {
-                into += ColumnRef(resolver.resolveUnqualifiedRef(), norm(x.name)!!)
+                into += ColumnRef(resolver.resolveUnqualifiedRef(), norm(x.name))
                 return false
             }
 
             override fun visit(x: SQLPropertyExpr): Boolean {
                 if (x.name != "*") {
                     val table = qualifierOf(x)?.let { resolver.resolveQualifiedRef(it) }
-                    into += ColumnRef(table, norm(x.name)!!)
+                    into += ColumnRef(table, norm(x.name))
                 }
                 return false
             }
@@ -670,9 +683,9 @@ class DruidMySqlParser(
                 if (name == null) {
                     unsupported += source.expr.javaClass.simpleName
                 } else {
-                    val normalized = norm(name)!!
+                    val normalized = norm(name)
                     // CTE 참조는 물리 테이블이 아니다 — 카탈로그 조회·미등록 경고 대상에서 제외
-                    tables += TableRef(normalized, norm(source.alias), physical = !isCte(normalized))
+                    tables += TableRef(normalized, normOrNull(source.alias), physical = !isCte(normalized))
                 }
             }
             is SQLJoinTableSource -> {
@@ -707,12 +720,12 @@ class DruidMySqlParser(
                 derived += source
                 // 파생 테이블 alias는 물리 테이블이 아니다 — physical=false로 카탈로그 조회에서 제외해
                 // alias가 우연히 거버넌스 테이블명과 겹쳐도 오차단하지 않는다. (본문은 자식 스코프로 검사됨)
-                source.alias?.let { a -> norm(a)!!.let { tables += TableRef(it, it, physical = false) } }
+                source.alias?.let { a -> norm(a).let { tables += TableRef(it, it, physical = false) } }
             }
             is SQLUnionQueryTableSource -> {
                 unions += source
                 // alias는 파생 테이블과 같은 취급 — 물리 테이블이 아니다(본문은 자식 스코프로 검사된다)
-                source.alias?.let { a -> norm(a)!!.let { tables += TableRef(it, it, physical = false) } }
+                source.alias?.let { a -> norm(a).let { tables += TableRef(it, it, physical = false) } }
             }
             // 미지원 FROM 형태는 조용히 버리지 않는다 — 버리면 그 스코프의 위반이 사라진다(스코프 은닉).
             else -> unsupported += source.javaClass.simpleName
@@ -729,13 +742,13 @@ class DruidMySqlParser(
                     is SQLPropertyExpr -> e.name
                     else -> source.expr.toString()
                 }
-                keys += norm(source.alias) ?: norm(name)!!
+                keys += normOrNull(source.alias) ?: norm(name)
             }
             is SQLJoinTableSource -> {
                 keys += instanceKeysOf(source.left, isCte)
                 keys += instanceKeysOf(source.right, isCte)
             }
-            else -> source.alias?.let { keys += norm(it)!! }
+            else -> source.alias?.let { keys += norm(it) }
         }
         return keys
     }
@@ -802,10 +815,10 @@ class DruidMySqlParser(
 
     /** 단일 컬럼 표현식 → TableRef 귀속 컬럼 참조. 컬럼이 아니면 null. 귀속 불가 시 table=null. */
     private fun toColumnRef(expr: SQLExpr, resolver: AliasResolver): ColumnRef? = when (expr) {
-        is SQLIdentifierExpr -> ColumnRef(resolver.resolveUnqualifiedRef(), norm(expr.name)!!)
+        is SQLIdentifierExpr -> ColumnRef(resolver.resolveUnqualifiedRef(), norm(expr.name))
         is SQLPropertyExpr ->
             if (expr.name == "*") null
-            else ColumnRef(qualifierOf(expr)?.let { resolver.resolveQualifiedRef(it) }, norm(expr.name)!!)
+            else ColumnRef(qualifierOf(expr)?.let { resolver.resolveQualifiedRef(it) }, norm(expr.name))
         else -> null
     }
 
@@ -909,14 +922,14 @@ class DruidMySqlParser(
     }
 
     private fun toColumn(expr: SQLExpr, resolver: AliasResolver): ResolvedColumn? = when (expr) {
-        is SQLIdentifierExpr -> ResolvedColumn(resolver.resolveUnqualified(), norm(expr.name)!!)
-        is SQLPropertyExpr -> ResolvedColumn(qualifierOf(expr)?.let { resolver.resolveQualified(it) }, norm(expr.name)!!)
+        is SQLIdentifierExpr -> ResolvedColumn(resolver.resolveUnqualified(), norm(expr.name))
+        is SQLPropertyExpr -> ResolvedColumn(qualifierOf(expr)?.let { resolver.resolveQualified(it) }, norm(expr.name))
         else -> null
     }
 
     private fun qualifierOf(expr: SQLPropertyExpr): String? = when (val owner = expr.owner) {
-        is SQLIdentifierExpr -> norm(owner.name)
-        is SQLPropertyExpr -> norm(owner.name) // db.table.column → table (검증 F6)
+        is SQLIdentifierExpr -> normOrNull(owner.name)
+        is SQLPropertyExpr -> normOrNull(owner.name) // db.table.column → table (검증 F6)
         else -> null
     }
 
@@ -952,9 +965,9 @@ class DruidMySqlParser(
         // `o.*`도 SQLAllColumnExpr로 오며 owner를 갖는다 — 한정자를 버리면 "모든 테이블을 덮는 star"로
         // 과다 해석되어 다른 테이블의 마스킹 판정을 오차단한다(spec 008 §3.1).
         expr is SQLAllColumnExpr ->
-            SelectItem.Star((expr.owner as? SQLIdentifierExpr)?.let { norm(it.name) })
+            SelectItem.Star((expr.owner as? SQLIdentifierExpr)?.let { normOrNull(it.name) })
         expr is SQLPropertyExpr && expr.name == "*" -> SelectItem.Star(qualifierOf(expr))
-        expr is SQLIdentifierExpr -> SelectItem.Column(ResolvedColumn(resolver.resolveUnqualified(), norm(expr.name)!!))
+        expr is SQLIdentifierExpr -> SelectItem.Column(ResolvedColumn(resolver.resolveUnqualified(), norm(expr.name)))
         expr is SQLPropertyExpr -> SelectItem.Column(toColumn(expr, resolver)!!)
         expr is SQLAggregateExpr -> {
             expr.arguments.forEach { arg -> if (arg !is SQLAllColumnExpr) collectSubqueries(arg, resolver, children, registry) }

@@ -37,7 +37,8 @@ class AuthService(private val users: AppUserRepository) {
         // 세션 고정 공격 방지 (H8): 기존 세션이 있을 때만 id를 회전한다.
         // changeSessionId()는 세션이 없으면 IllegalStateException을 던지므로 첫 로그인에서 500이 된다.
         if (request.getSession(false) != null) request.changeSessionId()
-        request.session.setAttribute(SESSION_KEY, user!!.id)
+        // `user`는 `ok`를 통해 이미 non-null로 좁혀졌다 — 단정 연산자는 컴파일러가 불필요하다고 알려준 것이다.
+        request.session.setAttribute(SESSION_KEY, user.id)
         return user
     }
 

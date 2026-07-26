@@ -1,6 +1,7 @@
 package com.loveqoo.queryguardian.exec
 
 import com.loveqoo.queryguardian.catalog.Expressions
+import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.ir.LimitCap
 import com.loveqoo.queryguardian.ir.MaskUsage
 import com.loveqoo.queryguardian.ir.maskFindings
@@ -16,7 +17,28 @@ import com.loveqoo.queryguardian.ir.TableRef
 /** 계획 수립 결과. 거부는 예외가 아니라 값이다 — 게이트가 사유를 그대로 사용자에게 전달한다. */
 sealed interface PlanOutcome {
     data class Planned(val plan: RewritePlan) : PlanOutcome
-    data class Refused(val refusal: RewriteRefusal, val message: String) : PlanOutcome
+    data class Refused(val refusal: RewriteRefusal, val message: String) : PlanOutcome {
+        val auditCode: AuditCode get() = refusal.auditCode
+    }
+}
+
+/**
+ * 재작성 거부 사유 → 감사 코드. **정의는 여기 한 벌이다.**
+ *
+ * 예전에는 게이트가 `"REWRITE_" + refusal.name`으로 조립했다. 문자열 조립은 [RewriteRefusal]에 값을
+ * 추가한 사람이 **감사 어휘를 확장했다는 사실을 모른 채** 지나가게 한다. `when`을 망라적으로 두면
+ * 컴파일러가 그 자리를 막는다.
+ *
+ * `RewriteRefusal` 자신이 필드로 들지 못하는 이유: 그 enum은 `ir` 패키지에 있고 ArchUnit
+ * `irIsTheSharedVocabulary`가 `ir → audit` 의존을 금지한다. `exec`는 그 제약을 받지 않으므로
+ * (`ExecutionFailure.Kind`가 이미 `audit`을 쓴다) 짝을 여기 둔다.
+ */
+val RewriteRefusal.auditCode: AuditCode get() = when (this) {
+    RewriteRefusal.MASK_NOT_EXPRESSIBLE -> AuditCode.REWRITE_MASK_NOT_EXPRESSIBLE
+    RewriteRefusal.OUTER_JOIN_FILTER -> AuditCode.REWRITE_OUTER_JOIN_FILTER
+    RewriteRefusal.EXPRESSION_NOT_USABLE -> AuditCode.REWRITE_EXPRESSION_NOT_USABLE
+    RewriteRefusal.SCOPE_NOT_FOUND -> AuditCode.REWRITE_SCOPE_NOT_FOUND
+    RewriteRefusal.VERIFY_FAILED -> AuditCode.REWRITE_VERIFY_FAILED
 }
 
 /**

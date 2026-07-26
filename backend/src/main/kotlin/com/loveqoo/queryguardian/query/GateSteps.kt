@@ -1,6 +1,7 @@
 package com.loveqoo.queryguardian.query
 
 import com.loveqoo.queryguardian.api.LintReportDto
+import com.loveqoo.queryguardian.exec.auditCode
 import com.loveqoo.queryguardian.approval.ApprovalBlockedException
 import com.loveqoo.queryguardian.approval.ApprovalGate
 import com.loveqoo.queryguardian.audit.AuditCode
@@ -12,31 +13,11 @@ import com.loveqoo.queryguardian.exec.PlanOutcome
 import com.loveqoo.queryguardian.exec.RewriteCatalog
 import com.loveqoo.queryguardian.exec.RewritePlanner
 import com.loveqoo.queryguardian.ir.RewriteOutcome
-import com.loveqoo.queryguardian.ir.RewriteRefusal
 import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.parser.DialectParser
 import com.loveqoo.queryguardian.parser.ParseResult
 import com.loveqoo.queryguardian.parser.SqlRewriter
 import org.springframework.stereotype.Component
-
-/**
- * 재작성 거부 사유 → 감사 코드.
- *
- * 예전에는 `"REWRITE_" + refusal.name`이었다. 문자열 조립은 **[RewriteRefusal]에 값을 추가한 사람이
- * 감사 어휘를 확장했다는 사실을 모른 채** 지나가게 한다 — 새 코드가 조용히 생기고 아무 테스트도 그것을
- * 모른다. `when`을 망라적으로 두면 컴파일러가 그 자리를 막는다.
- *
- * (`ExecutionFailure.Kind`처럼 필드로 짝지을 수 없는 이유: [RewriteRefusal]은 `ir` 패키지에 있고
- * ArchUnit `irIsTheSharedVocabulary`가 `ir → audit` 의존을 금지한다. 번역이 게이트 쪽에 오는 것은
- * 그 경계 결정이 치르는 값이다.)
- */
-private fun auditCodeOf(refusal: RewriteRefusal): AuditCode = when (refusal) {
-    RewriteRefusal.MASK_NOT_EXPRESSIBLE -> AuditCode.REWRITE_MASK_NOT_EXPRESSIBLE
-    RewriteRefusal.OUTER_JOIN_FILTER -> AuditCode.REWRITE_OUTER_JOIN_FILTER
-    RewriteRefusal.EXPRESSION_NOT_USABLE -> AuditCode.REWRITE_EXPRESSION_NOT_USABLE
-    RewriteRefusal.SCOPE_NOT_FOUND -> AuditCode.REWRITE_SCOPE_NOT_FOUND
-    RewriteRefusal.VERIFY_FAILED -> AuditCode.REWRITE_VERIFY_FAILED
-}
 
 /**
  * 게이트의 **단계 단위** — 저장 게이트와 실행 게이트가 함께 쓴다.
@@ -114,38 +95,19 @@ class GateSteps(
     fun resolveMapping(judged: Judged): GateOutcome<Mapped> =
         when (val resolved = demoTables.resolve(judged.logicalTables)) {
             is DemoMapping.Resolved -> cleared(Mapped(judged, resolved.byLogical))
-            is DemoMapping.Incomplete -> stopped(GateStop.Unprocessable(
-                AuditCode.NO_DEMO_MAPPING,
-                "실행 대상 매핑이 없는 테이블이 있습니다: ${resolved.unmapped.joinToString(", ")}",
-            ))
-            is DemoMapping.Invalid -> stopped(GateStop.Unprocessable(
-                AuditCode.INVALID_PHYSICAL_NAME,
-                "실행 대상 테이블명이 식별자 규칙을 위반했습니다: ${resolved.badNames.joinToString(", ")}",
-            ))
-            DemoMapping.Empty -> stopped(GateStop.Unprocessable(AuditCode.NO_DEMO_MAPPING, "실행할 대상 테이블이 없습니다"))
+            is DemoMapping.Failed -> stopped(GateStop.Unprocessable(resolved.auditCode, resolved.message))
         }
 
     fun planRewrite(mapped: Mapped): GateOutcome<Planned> =
         when (val planned = planner.plan(mapped.ir, mapped.request.purposeCode, mapped.mapping)) {
             is PlanOutcome.Planned -> cleared(Planned(mapped, planned.plan))
-            is PlanOutcome.Refused -> stopped(GateStop.Unprocessable(auditCodeOf(planned.refusal), planned.message))
+            is PlanOutcome.Refused -> stopped(GateStop.Unprocessable(planned.auditCode, planned.message))
         }
 
     /** 재작성 + 자체 검증(§3.0.3). 검증 기대치는 계획이 아니라 **카탈로그**에서 재도출한다. */
     fun rewriteAndVerify(planned: Planned): GateOutcome<Ready> =
         when (val outcome = rewriter.rewrite(planned.statement, planned.plan, planned.ir, rewriteCatalog::maskedColumns)) {
             is RewriteOutcome.Rewritten -> cleared(Ready(planned, outcome))
-            is RewriteOutcome.Refused -> stopped(GateStop.Unprocessable(auditCodeOf(outcome.refusal), outcome.message))
+            is RewriteOutcome.Refused -> stopped(GateStop.Unprocessable(outcome.refusal.auditCode, outcome.message))
         }
-
-    /**
-     * 차단됐든 통과했든 **판정 보고서**를 꺼낸다.
-     *
-     * 저장 게이트가 룰 hit 통계를 기록할 때 쓴다 — 차단된 쿼리도 통계에 들어가야 한다.
-     * "무엇이 자주 걸리는가"가 통계의 목적이므로 걸린 것을 빼면 목적이 뒤집힌다.
-     */
-    fun reportOf(outcome: GateOutcome<Judged>): LintReportDto? = when (outcome) {
-        is GateOutcome.Cleared -> outcome.value.report
-        is GateOutcome.Stopped -> (outcome.stop as? GateStop.Violated)?.report
-    }
 }

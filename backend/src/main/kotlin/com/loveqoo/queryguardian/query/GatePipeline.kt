@@ -2,6 +2,7 @@ package com.loveqoo.queryguardian.query
 
 import com.loveqoo.queryguardian.api.LintReportDto
 import com.loveqoo.queryguardian.exec.AuditTarget
+import com.loveqoo.queryguardian.ir.LimitCap
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewriteOutcome
 import com.loveqoo.queryguardian.ir.RewritePlan
@@ -35,6 +36,15 @@ fun <T> cleared(value: T): GateOutcome<T> = GateOutcome.Cleared(value)
 
 /** 단계가 멈출 때. */
 fun stopped(stop: GateStop): GateOutcome<Nothing> = GateOutcome.Stopped(stop)
+
+/**
+ * 통과했든 멈췄든 **판정 보고서**를 꺼낸다 — 룰 hit 통계는 차단된 쿼리도 세야 한다.
+ * 정지가 보고서를 가졌는지는 [GateStop.report]가 답한다(호출부가 변종을 캐스팅하지 않는다).
+ */
+fun GateOutcome<Judged>.judgedReport(): LintReportDto? = when (this) {
+    is GateOutcome.Cleared -> value.report
+    is GateOutcome.Stopped -> stop.report
+}
 
 // ---- 게이트 상태 -----------------------------------------------------------
 
@@ -90,8 +100,19 @@ data class Planned(val mapped: Mapped, val plan: RewritePlan) {
     val statement: ParsedStatement get() = mapped.judged.parsed.statement
 }
 
-/** 재작성과 자체 검증까지 끝났다 — 실행하거나 미리 보여줄 수 있다. */
+/** 재작성과 자체 검증까지 끝났다 — **미리 보여줄 수** 있다. 실행에는 한 가지가 더 필요하다([Executable]). */
 data class Ready(val planned: Planned, val rewritten: RewriteOutcome.Rewritten) {
     val plan: RewritePlan get() = planned.plan
     val report: LintReportDto get() = planned.mapped.judged.report
+}
+
+/**
+ * 실행해도 되는 증거 — [Ready]에 **확인된 행 상한**이 더해졌다.
+ *
+ * 예전에는 상한 검사가 `runQuery` 안에 있었다. 그러면 "이 게이트가 무엇을 검사하는가"의 답이 다시
+ * 줄기 **더하기** 실행 함수 앞머리가 되고, 그것이 정확히 옛 KDoc 목록이 이 항목을 빠뜨렸던 이유다.
+ * 상한 없는 실행을 허용하지 않는 것은 **정책**이므로(fail-closed) 인프라 경계가 아니라 줄기에 선다.
+ */
+data class Executable(val ready: Ready, val cap: LimitCap) {
+    val rewritten: RewriteOutcome.Rewritten get() = ready.rewritten
 }

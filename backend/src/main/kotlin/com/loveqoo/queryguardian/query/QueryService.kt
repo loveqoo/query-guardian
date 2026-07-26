@@ -188,7 +188,7 @@ class QueryService(
 
         // 룰 hit 통계는 **차단된 쿼리도 포함**한다 — "무엇이 자주 걸리는가"가 통계의 목적이므로
         // 걸린 것을 빼면 목적이 뒤집힌다. 그래서 통과·차단 양쪽에서 보고서를 꺼내 기록한다.
-        steps.reportOf(outcome)?.let { recordRuleHits(it) }
+        outcome.judgedReport()?.let(::recordRuleHits)
 
         val judged = outcome.orThrowWithoutAudit()
         // 승인 검사 — 요청 존재·승인·요청자·테이블 커버

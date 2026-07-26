@@ -1,5 +1,6 @@
 package com.loveqoo.queryguardian.exec
 
+import com.loveqoo.queryguardian.audit.AuditCode
 import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
 import org.springframework.data.repository.CrudRepository
@@ -20,21 +21,41 @@ data class DemoTableMapping(
 
 interface DemoTableMapRepository : CrudRepository<DemoTableMapping, Long>
 
-/** 매핑 해석 결과 — 실행 가능(Resolved)이 아닌 모든 경우는 실행 거부다. */
+/** 매핑 해석 결과 — 실행 가능([Resolved])이 아닌 모든 경우는 실행 거부다. */
 sealed interface DemoMapping {
     data class Resolved(val byLogical: Map<String, String>) : DemoMapping
+
+    /**
+     * 거부 — **자기 감사 코드와 사유를 안다.**
+     *
+     * 예전에는 호출부가 세 변종을 손으로 분해해 코드와 문구를 조립했고, 그 짝은 각 변종의 **주석에만**
+     * 적혀 있었다("미매핑 → `NO_DEMO_MAPPING`"). 주석은 컴파일되지 않는다. 선례는 같은 패키지에 있다 —
+     * [ExecutionFailure.Kind]가 `auditCode`를 필드로 든다("이름 규약이 아니라 필드로").
+     */
+    sealed interface Failed : DemoMapping {
+        val auditCode: AuditCode
+        val message: String
+    }
 
     /**
      * 요청 테이블 집합이 비었음 → 거부. [Incomplete]와 분리한 이유: `unmapped.isNotEmpty()`로 분기하는
      * 호출자가 생기면 "미매핑 목록이 빈 Incomplete"가 통과해 fail-open한다.
      */
-    data object Empty : DemoMapping
+    data object Empty : Failed {
+        override val auditCode = AuditCode.NO_DEMO_MAPPING
+        override val message = "실행할 대상 테이블이 없습니다"
+    }
 
-    /** 미매핑 논리 테이블이 하나라도 있음 → `NO_DEMO_MAPPING`. */
-    data class Incomplete(val unmapped: List<String>) : DemoMapping
+    data class Incomplete(val unmapped: List<String>) : Failed {
+        override val auditCode get() = AuditCode.NO_DEMO_MAPPING
+        override val message get() = "실행 대상 매핑이 없는 테이블이 있습니다: ${unmapped.joinToString(", ")}"
+    }
 
-    /** 식별자 접수 위반 → `INVALID_PHYSICAL_NAME`. 컬럼·테이블명을 통한 injection의 근본 차단. */
-    data class Invalid(val badNames: List<String>) : DemoMapping
+    /** 식별자 접수 위반. 컬럼·테이블명을 통한 injection의 근본 차단. */
+    data class Invalid(val badNames: List<String>) : Failed {
+        override val auditCode get() = AuditCode.INVALID_PHYSICAL_NAME
+        override val message get() = "실행 대상 테이블명이 식별자 규칙을 위반했습니다: ${badNames.joinToString(", ")}"
+    }
 }
 
 /**

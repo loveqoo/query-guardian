@@ -62,6 +62,12 @@ sealed interface GateStop {
     /** 실행 오류처럼 **재작성까지는 끝난** 종결만 값을 갖는다 — 감사에 재작성문·적용 목록을 남긴다. */
     val rewritten: RewriteOutcome.Rewritten? get() = null
 
+    /**
+     * 판정까지 갔던 종결만 값을 갖는다. 저장 게이트가 **차단된 쿼리의 룰 hit도** 통계에 넣을 때 쓴다 —
+     * "무엇이 자주 걸리는가"가 통계의 목적이므로 걸린 것을 빼면 목적이 뒤집힌다.
+     */
+    val report: LintReportDto? get() = null
+
     /** 경계에서만 호출한다. 게이트 본문은 예외를 만들지 않는다. */
     fun raise(): Nothing = throw GateStopException(this)
 
@@ -83,7 +89,7 @@ sealed interface GateStop {
     }
 
     /** 접수·룰 판정 위반 — 사용자에게 위반 목록을 그대로 돌려주되 분류 코드를 함께 싣는다. */
-    data class Violated(override val code: AuditCode, val report: LintReportDto) : GateStop {
+    data class Violated(override val code: AuditCode, override val report: LintReportDto) : GateStop {
         override val detail: String get() =
             report.violations.filter { it.severity == Severity.BLOCK }.joinToString("; ") { it.message }
         override val status: HttpStatus get() = HttpStatus.UNPROCESSABLE_ENTITY

@@ -62,7 +62,8 @@ class QueryExecutionService(
 
         val executed = requireOwnExecution(query, request)
             .then { runGate(it) }
-            .then { runQuery(it) }
+            .then(::requireRowCap)
+            .then(::runQuery)
             .orRaise(request)
 
         return exportOnlyIfRecorded(executed) {
@@ -147,19 +148,27 @@ class QueryExecutionService(
     }
 
     /**
-     * 실행 — **인프라 경계**다. 이 게이트에서 예외를 잡는 유일한 자리이고, 잡은 즉시 값으로 번역한다.
-     * 사용자에게는 분류 코드만, 원문(SQLState·vendor code)은 감사에만 (§6).
+     * 계획에 상한이 없으면 재작성이 LIMIT을 넣지 않았다는 뜻이다 — **상한 없는 실행은 허용하지 않는다**
+     * (fail-closed). 미리보기에는 이 단계가 없으므로 공유 줄기가 아니라 실행 조립에 선다.
      */
-    private fun runQuery(ready: Ready): GateOutcome<ExecutedQuery> {
-        // 계획에 상한이 없으면 재작성이 LIMIT을 넣지 않았다는 뜻이다 — 상한 없는 실행은 허용하지 않는다(fail-closed)
+    private fun requireRowCap(ready: Ready): GateOutcome<Executable> {
         val cap = ready.plan.limitCap
             ?: return stopped(GateStop.Unprocessable(AuditCode.REWRITE_NO_LIMIT, "행 상한을 적용하지 못했습니다 — 실행할 수 없습니다"))
-        return try {
-            val result = executor.execute(ready.rewritten.sql, cap.maxRows, cap.governanceCap)
-            cleared(ExecutedQuery(result, ready.rewritten.sql, ready.rewritten.applied))
-        } catch (e: ExecutionFailure) {
-            stopped(GateStop.Failed(e, ready.rewritten))
-        }
+        return cleared(Executable(ready, cap))
+    }
+
+    /**
+     * 실행 — **인프라 경계**다. 이 게이트에서 예외를 잡는 유일한 자리이고, 잡은 즉시 값으로 번역한다.
+     * 사용자에게는 분류 코드만, 원문(SQLState·vendor code)은 감사에만 (§6).
+     *
+     * 정책 검사가 하나도 없다. [Executable]을 받는다는 것 자체가 "게이트를 다 지났다"는 뜻이다.
+     */
+    private fun runQuery(executable: Executable): GateOutcome<ExecutedQuery> = try {
+        val rewritten = executable.rewritten
+        val result = executor.execute(rewritten.sql, executable.cap.maxRows, executable.cap.governanceCap)
+        cleared(ExecutedQuery(result, rewritten.sql, rewritten.applied))
+    } catch (e: ExecutionFailure) {
+        stopped(GateStop.Failed(e, executable.rewritten))
     }
 
     // ---- 경계 ------------------------------------------------------------

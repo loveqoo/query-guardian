@@ -98,7 +98,16 @@ class MustBeMaskedRule : Rule {
         }
 }
 
-/** 파티션 키 등록 테이블은 §6.1 위치 + §6.6 형태(베어 컬럼 =/IN/BETWEEN, 전부 리터럴)로만 충족. */
+/**
+ * 파티션 키 등록 테이블은 §6.1 위치 + 리터럴 경계로만 충족.
+ *
+ * **모양이 아니라 사실을 묻는다** (spec 011 §5.1). 예전에는 조건 **하나**가 `=`·`IN`·`BETWEEN`
+ * 모양인지 봤고, 그래서 `>= a AND < b`가 막혔다 — `BETWEEN a AND b`와 같은 뜻이고 오히려 더 좁은데도.
+ * 통과하는 `BETWEEN`이 1년이고 막히는 부등호 쌍이 1개월이면 **안전 방향이 거꾸로**다.
+ *
+ * 이제 최상위 conjunct 전체에서 컬럼별 **사실**을 모아 "고정되었는가"를 묻는다:
+ * 등호 · 열거 · (하한 ∧ 상한) 중 하나면 충족. 하한만 있으면(`>= a`) 끝이 없으므로 **미충족**(현행 유지).
+ */
 class RequirePartitionKeyRule : Rule {
     override val id = "require-partition-key"
     override val severity = Severity.BLOCK
@@ -109,17 +118,39 @@ class RequirePartitionKeyRule : Rule {
             // 복합 파티션: 각 키는 독립 요건 — 전부 충족해야 한다 (spec 002 C4)
             catalog.partitionKeys(table.name).mapNotNull { key ->
                 // 인스턴스 키로 판정 — 셀프 조인에서 alias 하나의 조건이 다른 인스턴스를 면제하지 못한다 (§6.4)
-                val satisfied = scope.whereConjuncts.any { satisfiesPartitionKey(it, table.instanceKey, key) }
-                if (satisfied) null
-                else Violation(id, severity, "테이블 ${table.name}(${table.instanceKey})은(는) 파티션 키 `$key` 조건(=/IN/BETWEEN, 함수 래핑 불가)이 WHERE에 필요합니다.")
+                if (isPinned(scope.whereConjuncts, table.instanceKey, key)) null
+                else Violation(id, severity, "테이블 ${table.name}(${table.instanceKey})은(는) 파티션 키 `$key`를 " +
+                    "고정하는 조건이 WHERE에 필요합니다 (= / IN / BETWEEN / 상한·하한 쌍, 함수 래핑 불가).")
             }
         }
 
-    private fun satisfiesPartitionKey(p: Predicate, table: String, key: String): Boolean = when (p) {
-        is Predicate.Comparison -> p.op == Op.EQ && p.value != null && columnMatches(p.column, table, key)
-        is Predicate.InList -> p.values != null && columnMatches(p.column, table, key)
-        is Predicate.Between -> p.low != null && p.high != null && columnMatches(p.column, table, key)
-        else -> false // Or/Not/And/Raw는 충족 불가 (§6.1, §6.3)
+    /**
+     * 컬럼이 **고정**되었는가 — 최상위 AND conjunct들이 함께 만드는 사실로 판단한다.
+     *
+     * 조각을 합치는 것은 **최상위 conjunct 안에서만** 한다(spec 011 I2). `Or`·`Not`·`And`·`Raw`는
+     * 여기서 사실을 내지 않는다 — `OR` 아래의 조각을 합치면 `OR 1=1`류 무력화가 되살아난다.
+     * (`OR` 분기 전부가 고정하는 경우는 spec 011 §5.2의 **미결 결정**이며 여기 없다.)
+     */
+    private fun isPinned(conjuncts: List<Predicate>, table: String, key: String): Boolean {
+        var hasLower = false
+        var hasUpper = false
+        for (p in conjuncts) {
+            when {
+                p is Predicate.Comparison && p.value != null && columnMatches(p.column, table, key) ->
+                    when (p.op) {
+                        Op.EQ -> return true
+                        Op.GT, Op.GTE -> hasLower = true
+                        Op.LT, Op.LTE -> hasUpper = true
+                        // NEQ·LIKE는 범위를 좁히지 않는다 — 스캔은 그대로다
+                        Op.NEQ, Op.LIKE -> Unit
+                    }
+                p is Predicate.InList && p.values != null && columnMatches(p.column, table, key) -> return true
+                p is Predicate.Between && p.low != null && p.high != null && columnMatches(p.column, table, key) ->
+                    return true
+            }
+        }
+        // 한쪽만 있으면 끝이 없는 범위다 — 사실상 전체 스캔이므로 막는 것이 옳다
+        return hasLower && hasUpper
     }
 }
 

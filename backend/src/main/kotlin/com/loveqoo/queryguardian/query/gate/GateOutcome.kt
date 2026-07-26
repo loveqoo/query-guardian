@@ -1,4 +1,4 @@
-package com.loveqoo.queryguardian.query
+package com.loveqoo.queryguardian.query.gate
 
 import com.loveqoo.queryguardian.api.LintReportDto
 import com.loveqoo.queryguardian.exec.AuditTarget
@@ -10,6 +10,11 @@ import com.loveqoo.queryguardian.exec.AuditTarget
  * `FormResolver.toEntity()`가 `validateForm(this).flatMap { createEntity() }` 한 줄로 읽힌다.
  * 같은 모양을 쓰되 타입만 우리 것이다 — `kotlin.Result`는 `Throwable`만 담는데 [GateStop]은
  * **예외가 아니어야** 하기 때문이다(spec 010 I7).
+ *
+ * **이름만 `flatMap`이 아니라 [then]인 이유**: 그 저장소는 `flatMap`과 짝을 이루는 `zip`(병렬 결합)을 함께
+ * 갖지만 게이트에는 병렬 결합이 없다 — 단계는 **순서대로만** 이어진다. 모나드 어휘를 반쯤 들여오면
+ * "그럼 `zip`은 어디 있나"를 묻게 되므로, 있는 것만 이름에 담았다. 선례를 인용하면서 이름을 바꿨으니
+ * 그 차이의 사유를 여기 남긴다.
  *
  * 단계 **증거 타입**과 그 발급자는 여기 없다 — `GateSteps.kt`가 한 파일에 함께 들고 있어야
  * 발급 권한이 닫힌다(I2). 이 파일에는 어느 단계에도 속하지 않는 **운반 수단**만 둔다.

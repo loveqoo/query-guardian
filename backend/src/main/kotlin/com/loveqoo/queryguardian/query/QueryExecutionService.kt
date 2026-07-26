@@ -1,5 +1,14 @@
 package com.loveqoo.queryguardian.query
 
+import com.loveqoo.queryguardian.query.gate.then
+import com.loveqoo.queryguardian.query.gate.stopped
+import com.loveqoo.queryguardian.query.gate.cleared
+import com.loveqoo.queryguardian.query.gate.Ready
+import com.loveqoo.queryguardian.query.gate.GateSteps
+import com.loveqoo.queryguardian.query.gate.GateStop
+import com.loveqoo.queryguardian.query.gate.GateRequest
+import com.loveqoo.queryguardian.query.gate.GateOutcome
+import com.loveqoo.queryguardian.query.gate.Executable
 import com.loveqoo.queryguardian.api.ForbiddenException
 import com.loveqoo.queryguardian.api.LintReportDto
 import com.loveqoo.queryguardian.approval.ApprovalBlockedException

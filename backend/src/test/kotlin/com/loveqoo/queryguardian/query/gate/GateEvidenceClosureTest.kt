@@ -1,4 +1,4 @@
-package com.loveqoo.queryguardian.query
+package com.loveqoo.queryguardian.query.gate
 
 import kotlin.reflect.KClass
 import kotlin.reflect.KVisibility
@@ -35,7 +35,7 @@ class GateEvidenceClosureTest {
 
     /** 게이트가 발급하는 모든 증거 타입. 새 단계를 만들면 여기 추가된다 — 빠뜨리면 그 단계만 열린다. */
     private val stages: List<KClass<*>> = listOf(
-        Parsed::class, Authorized::class, Covered::class, Judged::class,
+        Parsed::class, Authorized::class, ApprovalCovered::class, Judged::class,
         Storable::class, Mapped::class, Planned::class, Ready::class, Executable::class,
     )
 

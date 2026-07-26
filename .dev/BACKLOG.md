@@ -19,9 +19,9 @@
 - **D-D. 감사 append-only가 애플리케이션 관례일 뿐이다.** `ExecutionEventRepository : CrudRepository<…>`
   (`exec/ExecutionAudit.kt:42`)가 `delete`·`deleteById`·`deleteAll`을 상속한다. DB 권한·트리거로 막지 않아
   코드 한 줄로 감사 수정·삭제가 가능하다. → 읽기 전용 상위 인터페이스 + DB 권한(UPDATE/DELETE 회수).
-- **D-E. `QueryExecutor`를 게이트 밖에서 주입할 수 있다.** public 클래스이고 ArchUnit에 제한 규칙이 없다
-  (`ArchIsolationTest.kt` 5개 규칙 중 없음). 새 컨트롤러·서비스가 주입하면 게이트·증거 토큰이 전부 우회된다.
-  → `internal` + "실행기는 검증된 실행 포트만 호출 가능" ArchUnit 규칙.
+- ~~**D-E. `QueryExecutor`를 게이트 밖에서 주입할 수 있다.**~~ **해결(P2 C4, `75e7acd`)** —
+  `ArchGateAccessTest.onlyTheGateMayReachTheExecutor` + `ExecutionOrder` 1인자 포트.
+  `internal`은 붙이지 않았다(모듈이 하나라 규칙이 주는 것 이상을 주지 않는다).
 - **D-F. `RewriteVerifier`의 "계획 밖 재도출"은 마스킹에만 적용된다.** FILTER는 `plan.injections`만
   순회하고(`RewriteVerifier.kt:101`), 테이블은 `plan.tableRenames`만 순회해(`:87-96`) "물리 테이블 집합 ==
   허용 매핑 집합" **동등성을 단정하지 않는다**(008 §3.0.3은 집합 동등성을 요구). planner가 필터·테이블을
@@ -29,9 +29,10 @@
 - **D-A 보강.** "프로브 값에서 출력 ≠ 입력"은 마스킹 증명이 아니다 — 프로브만 다르게 반환하는 `CASE`,
   가역 인코딩, 일부 값 항등 함수가 통과한다. → 허용 함수/템플릿 allowlist 또는 비가역성 계약.
 
-## spec 010 P2 앞에 둘 것 — P1 검토 2채널이 넘긴 것 (2026-07-26)
+## spec 010 P2 앞에 둘 것 — P1 검토 2채널이 넘긴 것 (2026-07-26) — **4건 전부 반영**
 
-craft 검토가 "발급 권한 폐쇄를 **방해**한다"고 지목한 순서다.
+craft 검토가 "발급 권한 폐쇄를 **방해**한다"고 지목한 순서다. 커밋 `4887388`(①)·`61a060e`(②③)·`9e15084`(④).
+빠뜨린 항목 없음(retrospect 015 반성 1의 재발 방지 — 계획서 커밋 표에 4건을 명시하고 대조했다).
 
 1. **`InspectResult`를 sealed로** (`parser/DialectParser.kt`) — 지금은 `parse` + `statement?`가 나란한
    두 필드라 "Success면 핸들이 있다"가 KDoc 산문이다. `Parsed`가 그 원본을 계속 들고 다니므로,

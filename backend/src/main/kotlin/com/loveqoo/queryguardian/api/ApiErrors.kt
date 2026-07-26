@@ -36,8 +36,8 @@ class ApiExceptionHandler {
      * 여기에 `when`이 없는 것이 핵심이다. 새 차단 사유를 추가해도 이 핸들러는 그대로이고,
      * 응답 코드와 감사 코드는 같은 필드(`GateStop.code`)에서 나오므로 갈라질 자리가 없다.
      */
-    @ExceptionHandler(com.loveqoo.queryguardian.query.GateStopException::class)
-    fun gateStopped(e: com.loveqoo.queryguardian.query.GateStopException): ResponseEntity<Any> =
+    @ExceptionHandler(com.loveqoo.queryguardian.query.gate.GateStopException::class)
+    fun gateStopped(e: com.loveqoo.queryguardian.query.gate.GateStopException): ResponseEntity<Any> =
         ResponseEntity.status(e.stop.status).body(e.stop.body)
 
     @ExceptionHandler(IllegalArgumentException::class)

@@ -1,4 +1,4 @@
-package com.loveqoo.queryguardian.query
+package com.loveqoo.queryguardian.query.gate
 
 import com.loveqoo.queryguardian.api.BlockedDetail
 import com.loveqoo.queryguardian.api.LintReportDto

@@ -378,6 +378,47 @@ class ShapeCoverageTest {
             Verdict.PASS, "사용자가 쓴 WHERE는 실제로 파티션을 자른다. 주입 금지(§3.0.2)는 재작성기의 제약이지 " +
                 "판정의 제약이 아니다"),
 
+        // ── R. OR 분배 (spec 011 §5.2, 결정: 파티션·필수 술어 **둘 다** 적용) ──────
+        //
+        // I3: `OR`는 **모든 분기가 고정할 때만** 충족. 한 분기라도 고정하지 않으면 그 분기의 행은 제약이 없다.
+        //
+        // **두 규칙에서 "고정"의 뜻이 다르다** — 이 차이가 이 축의 요점이다:
+        // - 파티션: **어떤 값으로든** 고정이면 된다(분기마다 날짜가 달라도 합치면 `IN`과 같다)
+        // - 필수 술어: **바로 그 값으로** 고정이어야 한다(`동의='Y' OR 동의='N'`은 충족이 아니다)
+        Shape("R1", "OR 분배", "파티션 — 모든 분기가 같은 날짜로 고정",
+            "SELECT id FROM user_events WHERE (event_date = '2026-01-01' AND id > 0) " +
+                "OR (event_date = '2026-01-01' AND id < 0) LIMIT 10",
+            Verdict.PASS, "어느 갈래로 가도 그 날짜만 읽는다 — 스캔이 실제로 좁혀진다"),
+        Shape("R2", "OR 분배", "파티션 — 분기마다 다른 날짜",
+            "SELECT id FROM user_events WHERE event_date = '2026-01-01' OR event_date = '2026-01-02' LIMIT 10",
+            Verdict.PASS, "`IN ('2026-01-01','2026-01-02')`와 같다 — 값이 달라도 둘 다 고정이다"),
+        Shape("R3", "OR 분배", "파티션 — 분기가 경계 쌍으로 고정",
+            "SELECT id FROM user_events WHERE (event_date >= '2026-01-01' AND event_date < '2026-02-01') " +
+                "OR event_date = '2026-03-01' LIMIT 10",
+            Verdict.PASS, "한 갈래는 경계 쌍, 다른 갈래는 등호 — 둘 다 고정이다(Q1과 합성)"),
+        Shape("R4", "OR 분배", "파티션 — 한 분기가 고정하지 않음",
+            "SELECT id FROM user_events WHERE event_date = '2026-01-01' OR id > 0 LIMIT 10",
+            Verdict.BLOCK, "둘째 갈래의 행은 날짜 제약이 없다 — 전체 스캔이다(`Q5`와 같은 사실)"),
+        Shape("R5", "OR 분배", "필수 술어 — 모든 분기가 같은 값",
+            "SELECT id FROM user_events WHERE ((consent_yn = 'Y' AND id > 0) OR (consent_yn = 'Y' AND id < 0)) " +
+                "AND event_date = '2026-01-01' LIMIT 10",
+            Verdict.PASS, "어느 갈래로 가도 동의='Y'다", purpose = "marketing"),
+        Shape("R6", "OR 분배", "필수 술어 — 분기마다 **다른 값** ⚠",
+            "SELECT id FROM user_events WHERE (consent_yn = 'Y' OR consent_yn = 'N') " +
+                "AND event_date = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "파티션과 갈리는 자리 — 필수 술어는 **그 값**이어야 한다. " +
+                "'N' 갈래의 행은 동의하지 않은 사람이다", purpose = "marketing"),
+        Shape("R7", "OR 분배", "필수 술어 — 한 분기만 술어",
+            "SELECT id FROM user_events WHERE (consent_yn = 'Y' OR id > 0) AND event_date = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "둘째 갈래에 동의 조건이 없다", purpose = "marketing"),
+        Shape("R8", "OR 분배", "사용자 규칙 requires — 모든 분기가 같은 값",
+            "SELECT id FROM users WHERE (created_at = '2026-01-01' AND id > 0) " +
+                "OR (created_at = '2026-01-01' AND id < 0) LIMIT 10",
+            Verdict.PASS, "시스템 룰과 사용자 규칙이 같은 판정 함수를 쓴다 — 결과도 같아야 한다", rule = 2),
+        Shape("R9", "OR 분배", "사용자 규칙 requires — 분기마다 다른 값",
+            "SELECT id FROM users WHERE created_at = '2026-01-01' OR created_at = '2026-02-01' LIMIT 10",
+            Verdict.BLOCK, "R6과 같은 이유 — 사용자 규칙에서도 값이 달라지면 안 된다", rule = 2),
+
         // ── I. 귀속 — 한정자가 없을 때 ────────────────────────────────────────────
         Shape("I1", "귀속", "조인 쿼리에서 한정자 없이 차단 컬럼",
             "SELECT ssn FROM users u JOIN user_events e ON u.id = e.id WHERE e.event_date = '2026-01-01' LIMIT 10",
@@ -411,14 +452,14 @@ class ShapeCoverageTest {
      * | 뿌리 | 형태 | 무엇을 못 보는가 |
      * |---|---|---|
      * | 겹을 이어 보지 않는다 | `F2` `H6` **`K4`** | CTE 안 테이블과 바깥 조건이 같은 쿼리라는 사실 |
-     * | 조각을 합쳐 보지 않는다 | ~~`G1`~~ `G5` | ~~부등호 둘이 하나의 경계를~~(**해결**, spec 011 Q1), OR 분기들이 같은 값을 만드는 사실 |
+     * | ~~조각을 합쳐 보지 않는다~~ | ~~`G1`~~ ~~`G5`~~ | **해결**(spec 011 Q1·Q2) — 경계 쌍과 OR 분배를 사실로 본다 |
      * | ~~표기를 알아보지 못한다~~ | ~~`K5`~~ | **해결** — `USING`을 조인 등식으로도 수집 |
      *
      * `K5`는 `USING`을 `columnRefs`에 넣은 수정(`b29047b`)의 **바로 옆**에서 나왔다 —
      * 조인 등식은 여전히 `ON`에서만 만들어지고 있었다. 같은 문법이 금지 쪽에는 보이고 요건 쪽에는
      * 안 보였다. **한쪽만 고치면 나머지가 남는다**는 실례라 지우지 않고 기록으로 남긴다.
      */
-    private val KNOWN_OVERBLOCK: Set<String> = setOf("F2", "G5", "H6", "K4")
+    private val KNOWN_OVERBLOCK: Set<String> = setOf("F2", "H6", "K4")
 
     // ── 실행 ─────────────────────────────────────────────────────────────────────
 

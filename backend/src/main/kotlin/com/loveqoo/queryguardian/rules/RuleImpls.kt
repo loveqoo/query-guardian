@@ -127,9 +127,13 @@ class RequirePartitionKeyRule : Rule {
     /**
      * 컬럼이 **고정**되었는가 — 최상위 AND conjunct들이 함께 만드는 사실로 판단한다.
      *
-     * 조각을 합치는 것은 **최상위 conjunct 안에서만** 한다(spec 011 I2). `Or`·`Not`·`And`·`Raw`는
-     * 여기서 사실을 내지 않는다 — `OR` 아래의 조각을 합치면 `OR 1=1`류 무력화가 되살아난다.
-     * (`OR` 분기 전부가 고정하는 경우는 spec 011 §5.2의 **미결 결정**이며 여기 없다.)
+     * 조각을 합치는 것은 **하나의 AND 묶음 안에서만** 한다(spec 011 I2) — 서로 다른 `OR` 분기의
+     * 조각을 합치면 `OR 1=1`류 무력화가 되살아난다.
+     *
+     * **`OR`는 모든 분기가 각각 고정할 때만 충족**이다(spec 011 I3, 결정 §5.2). 한 분기라도 고정하지
+     * 않으면 그 분기로 들어오는 행은 제약이 없다. 분기마다 **값이 달라도 된다** —
+     * `d='X' OR d='Y'`는 `IN ('X','Y')`와 같고, 파티션이 묻는 것은 "얼마나 읽는가"이기 때문이다.
+     * (필수 술어는 다르다 — [satisfiesRequiredForm] 참조.)
      */
     private fun isPinned(conjuncts: List<Predicate>, table: String, key: String): Boolean {
         var hasLower = false
@@ -147,6 +151,8 @@ class RequirePartitionKeyRule : Rule {
                 p is Predicate.InList && p.values != null && columnMatches(p.column, table, key) -> return true
                 p is Predicate.Between && p.low != null && p.high != null && columnMatches(p.column, table, key) ->
                     return true
+                p is Predicate.Or && p.branches.isNotEmpty() &&
+                    p.branches.all { isPinned(conjunctsOf(it), table, key) } -> return true
             }
         }
         // 한쪽만 있으면 끝이 없는 범위다 — 사실상 전체 스캔이므로 막는 것이 옳다
@@ -202,6 +208,23 @@ internal fun columnMatches(column: ResolvedColumn, table: String, name: String):
         column.column.equals(name, ignoreCase = true)
 
 /** 최상위 AND conjunct가 요구 술어(EQ 리터럴/IN 단일)를 충족하는가 (§6.1·§6.5). 사용자 규칙 requires도 재사용. */
+/**
+ * 하나의 AND 묶음을 conjunct 목록으로 편다. `OR` 분기 안이 `AND`면 그 안의 조각들이 함께 성립한다.
+ * 서로 다른 `OR` 분기를 가로질러 합치지는 않는다(spec 011 I2).
+ */
+internal fun conjunctsOf(p: Predicate): List<Predicate> =
+    if (p is Predicate.And) p.conjuncts.flatMap { conjunctsOf(it) } else listOf(p)
+
+/**
+ * 필수 술어 충족 판정 — **시스템 룰과 사용자 규칙이 공유한다**
+ * (`RequirePredicateRule`, `UserRuleEvaluator.satisfiesRequires`). 기준이 갈라지면 같은 쿼리가
+ * 두 계층에서 다르게 판정된다.
+ *
+ * **`OR`는 모든 분기가 각각 충족할 때만**(spec 011 I3, 결정 §5.2). 파티션과 갈리는 지점이 여기다:
+ * 파티션은 "어떤 값으로든 고정"이면 되지만 필수 술어는 **바로 그 값**이어야 한다.
+ * `동의='Y' OR 동의='N'`은 파티션이라면 `IN`과 같아 충족이지만, 여기서는 'N' 분기의 행이
+ * **동의하지 않은 사람**이므로 충족이 아니다.
+ */
 internal fun satisfiesRequiredForm(conjunct: Predicate, tableInstanceKey: String, required: RequiredForm): Boolean =
     when (conjunct) {
         is Predicate.Comparison ->
@@ -210,5 +233,11 @@ internal fun satisfiesRequiredForm(conjunct: Predicate, tableInstanceKey: String
         is Predicate.InList ->
             conjunct.values?.singleOrNull() == required.value &&
                 columnMatches(conjunct.column, tableInstanceKey, required.column)
-        else -> false // Or/Not/And/Raw는 충족 불가 (§6.1, §6.3)
+        // AND 묶음: 조각 하나라도 술어면 그 묶음은 술어를 함의한다
+        is Predicate.And ->
+            conjunctsOf(conjunct).any { satisfiesRequiredForm(it, tableInstanceKey, required) }
+        is Predicate.Or ->
+            conjunct.branches.isNotEmpty() &&
+                conjunct.branches.all { satisfiesRequiredForm(it, tableInstanceKey, required) }
+        else -> false // Not/Raw는 충족 불가 (§6.1, §6.3)
     }

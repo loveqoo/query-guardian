@@ -1,6 +1,16 @@
 package com.loveqoo.queryguardian
 
+import com.loveqoo.queryguardian.lint.LintService
+import com.loveqoo.queryguardian.rules.InMemoryTableCatalog
+import com.loveqoo.queryguardian.rules.RequiredForm
+import com.loveqoo.queryguardian.rules.RuleCondition
+import com.loveqoo.queryguardian.rules.RuleEngine
+import com.loveqoo.queryguardian.rules.RuleGroup
+import com.loveqoo.queryguardian.rules.RuleOp
+import com.loveqoo.queryguardian.rules.RuleScope
 import com.loveqoo.queryguardian.rules.Severity
+import com.loveqoo.queryguardian.rules.UserRule
+import com.loveqoo.queryguardian.rules.UserRuleEvaluator
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -34,8 +44,9 @@ import kotlin.test.assertTrue
  *
  * ## 범위와 한계 (부풀리지 않는다)
  *
- * - 판정은 [Fixtures]의 **시스템 룰 7종**만 태운다. 사용자 정의 규칙(`joins`·`requires` 트리)은
- *   별도 픽스처가 필요하므로 **여기 없다** — 그 축은 아직 이 파일이 재지 않는다.
+ * - 시스템 룰 7종은 [Fixtures]가, 사용자 정의 규칙 4종(`joins`·`requires`·`blocks`·`must_be_masked`)은
+ *   축 K가 태운다. **형태 하나에 규칙 하나만** 태운다 — 넷을 함께 태웠더니 서로 간섭해 무엇이 막았는지
+ *   알 수 없었다(실측).
  * - 픽스처 카탈로그: `users.ssn` 차단 · `users.email` 마스킹 · `user_events.event_date` 파티션 키 ·
  *   `user_events`는 purpose=marketing일 때 `consent_yn = 'Y'` 필수. 아는 테이블은 두 개뿐이므로
  *   다른 이름을 쓰면 `unknown-table`이 먼저 걸린다.
@@ -45,6 +56,61 @@ import kotlin.test.assertTrue
 class ShapeCoverageTest {
 
     enum class Verdict { PASS, BLOCK }
+
+    // ── 사용자 정의 규칙 픽스처 ─────────────────────────────────────────────────
+    //
+    // [Fixtures]는 시스템 룰 7종만 태운다. 사용자 규칙(`joins`·`requires`·`blocks`·`must_be_masked`)은
+    // **다른 평가기**(`UserRuleEvaluator`)를 지나므로 그 축은 위 형태들이 재지 못했다(retrospect 019가
+    // 남긴 구멍). 여기서 채운다.
+    //
+    // **시스템 룰과 겹치지 않는 컬럼을 쓴다** — `users.phone`·`users.name`·`users.created_at`.
+    // 겹치면 어느 룰이 막았는지 알 수 없어 측정이 무의미해진다.
+    private val ruleCatalog = InMemoryTableCatalog(
+        partitionKeys = mapOf("user_events" to listOf("event_date")),
+        blocked = mapOf("users" to setOf("ssn")),
+        masked = mapOf("users" to setOf("email")),
+        tables = setOf("user_events", "users"),
+        // requires 판정용 정규형: `users.created_at = '2026-01-01'`
+        conditionPredicates = mapOf(901L to RequiredForm("created_at", "2026-01-01")),
+    )
+
+    private val userRules = listOf(
+        UserRule(
+            id = 1, name = "조인 필수", scope = RuleScope.MULTI, enabled = true,
+            tree = RuleGroup(RuleGroup.Combinator.ALL, listOf(
+                RuleCondition(RuleOp.JOINS, Severity.BLOCK, table = "users", column = "id",
+                    refTable = "user_events", refColumn = "id"),
+            )),
+        ),
+        UserRule(
+            id = 2, name = "생성일 조건 필수", scope = RuleScope.SINGLE, enabled = true,
+            tree = RuleGroup(RuleGroup.Combinator.ALL, listOf(
+                RuleCondition(RuleOp.REQUIRES, Severity.BLOCK, table = "users", column = "created_at", defId = 901L),
+            )),
+        ),
+        UserRule(
+            id = 3, name = "전화번호 조회 금지", scope = RuleScope.SINGLE, enabled = true,
+            tree = RuleGroup(RuleGroup.Combinator.ALL, listOf(
+                RuleCondition(RuleOp.BLOCKS, Severity.BLOCK, table = "users", column = "phone"),
+            )),
+        ),
+        UserRule(
+            id = 4, name = "이름 마스킹 필수", scope = RuleScope.SINGLE, enabled = true,
+            tree = RuleGroup(RuleGroup.Combinator.ALL, listOf(
+                RuleCondition(RuleOp.MUST_BE_MASKED, Severity.BLOCK, table = "users", column = "name"),
+            )),
+        ),
+    )
+
+    /**
+     * **규칙 하나만 태운다.** 넷을 함께 태웠더니 서로 간섭했다 — `users`만 조회해도 조인 규칙이 발화해서
+     * "이 형태가 무엇 때문에 막혔는지" 알 수 없었다(실측). 형태 하나가 재는 것은 규칙 하나여야 한다.
+     */
+    private fun serviceFor(ruleId: Int) = LintService(
+        Fixtures.parser,
+        RuleEngine.withDefaultRules(userRuleEvaluator = UserRuleEvaluator { userRules.filter { r -> r.id == ruleId.toLong() } }),
+        ruleCatalog,
+    )
 
     /**
      * @param intent 이 쿼리가 **하려는 일**. 같은 의도의 여러 형태가 다르게 판정되면 그것이 결함이다.
@@ -60,6 +126,8 @@ class ShapeCoverageTest {
         val because: String,
         val purpose: String? = null,
         val debatable: Boolean = false,
+        /** 태울 사용자 정의 규칙 id(축 K). null이면 시스템 룰만. **하나만** 태운다 — 아래 [serviceFor] 참조. */
+        val rule: Int? = null,
     )
 
     private val shapes: List<Shape> = listOf(
@@ -220,6 +288,58 @@ class ShapeCoverageTest {
                 "UNION ALL SELECT id AS v FROM users) x LIMIT 10",
             Verdict.BLOCK, "인라인은 select 목록 안이라 방문자가 훑는다 — J5와 결과가 달라지면 그 차이가 결함이다"),
 
+        // ── K. 사용자 정의 규칙 — 다른 평가기, 같은 질문 ──────────────────────────
+        //
+        // 분모: 룰 어휘 **op 4종**(`joins`·`requires`·`blocks`·`must_be_masked`) × **배치 위치**
+        // (한 겹 / CTE 안 / 겹을 가로질러 / 표기 변형). 상상으로 고른 것이 아니라 어휘를 전수로 훑었다.
+        // 규칙은 시스템 룰과 겹치지 않는 컬럼을 쓴다(`phone`·`name`·`created_at`) — 겹치면 어느 쪽이
+        // 막았는지 알 수 없다.
+        Shape("K1", "사용자 규칙", "joins 충족(한 겹)",
+            "SELECT u.id FROM users u JOIN user_events e ON u.id = e.id WHERE e.event_date = '2026-01-01' LIMIT 10",
+            Verdict.PASS, "요구된 조인 등식이 그대로 있다", rule = 1),
+        Shape("K2", "사용자 규칙", "joins 미충족",
+            "SELECT u.id FROM users u JOIN user_events e ON u.id = e.event_date " +
+                "WHERE e.event_date = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "요구된 등식(users.id ↔ user_events.id)이 없다", rule = 1),
+        Shape("K3", "사용자 규칙", "joins가 CTE 안에서 충족",
+            "WITH t AS (SELECT u.id FROM users u JOIN user_events e ON u.id = e.id " +
+                "WHERE e.event_date = '2026-01-01') SELECT id FROM t LIMIT 10",
+            Verdict.PASS, "같은 겹에서 충족된다", rule = 1),
+        Shape("K4", "사용자 규칙", "테이블은 CTE 안, 조인은 바깥",
+            "WITH t AS (SELECT id FROM users) SELECT t.id FROM t JOIN user_events e ON t.id = e.id " +
+                "WHERE e.event_date = '2026-01-01' LIMIT 10",
+            Verdict.PASS, "인라인되면 같은 조인이다 — F2·H6과 같은 축(겹 경계에서 멈춤)", rule = 1),
+        Shape("K5", "사용자 규칙", "joins를 USING으로 표기",
+            "SELECT u.id FROM users u JOIN user_events e USING (id) WHERE e.event_date = '2026-01-01' LIMIT 10",
+            Verdict.PASS, "`ON u.id = e.id`와 같은 조인이다 — 표기가 판정을 바꾸면 안 된다", rule = 1),
+        Shape("K6", "사용자 규칙", "requires 충족",
+            "SELECT id FROM users WHERE created_at = '2026-01-01' LIMIT 10",
+            Verdict.PASS, "요구된 술어가 최상위 conjunct다", rule = 2),
+        Shape("K7", "사용자 규칙", "requires 미충족",
+            "SELECT id FROM users LIMIT 10",
+            Verdict.BLOCK, "술어가 없다", rule = 2),
+        Shape("K8", "사용자 규칙", "requires를 OR로 무력화",
+            "SELECT id FROM users WHERE created_at = '2026-01-01' OR 1 = 1 LIMIT 10",
+            Verdict.BLOCK, "형태는 있으나 최상위 conjunct가 아니다", rule = 2),
+        Shape("K9", "사용자 규칙", "requires를 IN 단일값으로",
+            "SELECT id FROM users WHERE created_at IN ('2026-01-01') LIMIT 10",
+            Verdict.PASS, "§6.5가 IN 단일값 ≡ = 를 동치로 정했다", rule = 2),
+        Shape("K10", "사용자 규칙", "blocks — 컬럼을 조회",
+            "SELECT phone FROM users WHERE created_at = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "금지 컬럼을 참조했다", rule = 3),
+        Shape("K11", "사용자 규칙", "blocks — 함수로 감싸기",
+            "SELECT CONCAT(phone, '') FROM users WHERE created_at = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "columnRefs 기반이므로 껍질과 무관해야 한다", rule = 3),
+        Shape("K12", "사용자 규칙", "blocks — CTE 안에서 참조",
+            "WITH t AS (SELECT phone AS p FROM users WHERE created_at = '2026-01-01') SELECT p FROM t LIMIT 10",
+            Verdict.BLOCK, "안쪽 겹에 참조가 남는다", rule = 3),
+        Shape("K13", "사용자 규칙", "must_be_masked — 투영만",
+            "SELECT name FROM users WHERE created_at = '2026-01-01' LIMIT 10",
+            Verdict.PASS, "투영 위치는 실행 시 재작성된다(결정 9)", rule = 4),
+        Shape("K14", "사용자 규칙", "must_be_masked — 비투영(WHERE)",
+            "SELECT id FROM users WHERE name = 'x' AND created_at = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "조건에 쓰면 재작성해도 원본으로 걸러진다", rule = 4),
+
         // ── I. 귀속 — 한정자가 없을 때 ────────────────────────────────────────────
         Shape("I1", "귀속", "조인 쿼리에서 한정자 없이 차단 컬럼",
             "SELECT ssn FROM users u JOIN user_events e ON u.id = e.id WHERE e.event_date = '2026-01-01' LIMIT 10",
@@ -245,15 +365,29 @@ class ShapeCoverageTest {
      * **예측이 틀린 것 하나**: `F1`(INNER JOIN의 ON에 파티션 조건)은 과차단일 것이라 예상했으나
      * **통과한다** — 엔진이 이미 INNER JOIN의 ON을 WHERE와 동등하게 본다. 열거가 생각보다 넓은
      * 자리도 있다는 뜻이고, 그래서 추측이 아니라 이 표가 근거여야 한다.
+     *
+     * ## 2차 측정 (2026-07-27, 축 K 추가 — 형태 55개)
+     *
+     * 사용자 정의 규칙 축 14형태: **누락차단 0**, 과차단 2. 뿌리가 하나 늘어 셋이 됐다:
+     *
+     * | 뿌리 | 형태 | 무엇을 못 보는가 |
+     * |---|---|---|
+     * | 겹을 이어 보지 않는다 | `F2` `H6` **`K4`** | CTE 안 테이블과 바깥 조건이 같은 쿼리라는 사실 |
+     * | 조각을 합쳐 보지 않는다 | `G1` `G5` | 부등호 둘이 하나의 경계를, OR 두 분기가 같은 값을 만드는 사실 |
+     * | **표기를 알아보지 못한다** | **`K5`** | `JOIN ... USING (id)`가 `ON a.id = b.id`와 같은 조인이라는 사실 |
+     *
+     * `K5`는 `USING`을 `columnRefs`에 넣은 수정(`b29047b`)의 **바로 옆**에서 나왔다 —
+     * 조인 등식(`joinEqualities`)은 여전히 `ON`에서만 만들어진다. 같은 문법이 금지 쪽에는 보이고
+     * 요건 쪽에는 안 보인다.
      */
-    private val KNOWN_OVERBLOCK: Set<String> = setOf("F2", "G1", "G5", "H6")
+    private val KNOWN_OVERBLOCK: Set<String> = setOf("F2", "G1", "G5", "H6", "K4", "K5")
 
     // ── 실행 ─────────────────────────────────────────────────────────────────────
 
     private data class Outcome(val shape: Shape, val actual: Verdict, val codes: List<String>)
 
     private fun run(): List<Outcome> = shapes.map { s ->
-        val report = Fixtures.lint(s.sql, s.purpose)
+        val report = s.rule?.let { serviceFor(it).lint(s.sql, s.purpose) } ?: Fixtures.lint(s.sql, s.purpose)
         val actual = if (report.blocked) Verdict.BLOCK else Verdict.PASS
         Outcome(s, actual, report.violations.filter { it.severity == Severity.BLOCK }.map { it.ruleId }.distinct())
     }

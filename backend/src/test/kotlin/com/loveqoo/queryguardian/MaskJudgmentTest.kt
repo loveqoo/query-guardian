@@ -44,8 +44,8 @@ class MaskJudgmentTest {
     private fun maskRule(table: String = "users", column: String = "email") = UserRule(
         1, "PII 마스킹 필수", RuleScope.SINGLE, true,
         RuleGroup(
-            RuleGroup.Combinator.all,
-            listOf(RuleCondition(RuleOp.must_be_masked, Severity.BLOCK, table = table, column = column, defId = 1)),
+            RuleGroup.Combinator.ALL,
+            listOf(RuleCondition(RuleOp.MUST_BE_MASKED, Severity.BLOCK, table = table, column = column, defId = 1)),
         ),
     )
 

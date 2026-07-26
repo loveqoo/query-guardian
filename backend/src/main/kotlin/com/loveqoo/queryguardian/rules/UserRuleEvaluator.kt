@@ -68,12 +68,12 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
         val results = group.children.map { evalNode(it, scope, catalog, rule) }.filter { it != Result.Neutral }
         if (results.isEmpty()) return Result.Neutral // 판정 대상 0개 → 미강제 (C3)
         return when (group.combinator) {
-            RuleGroup.Combinator.all -> {
+            RuleGroup.Combinator.ALL -> {
                 val violated = results.filterIsInstance<Result.Violated>()
                 if (violated.isEmpty()) Result.Satisfied
                 else Result.Violated(violated.flatMap { it.violations }, worstSeverity(violated.map { it.maxSeverity }))
             }
-            RuleGroup.Combinator.any -> {
+            RuleGroup.Combinator.ANY -> {
                 if (results.any { it == Result.Satisfied }) Result.Satisfied
                 else { // 전부 미충족 → 그룹 대표 severity로 단일 위반 (§4.1)
                     val violated = results.filterIsInstance<Result.Violated>()
@@ -90,11 +90,11 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
     private fun evalCondition(cond: RuleCondition, scope: SelectScope, catalog: TableCatalog, rule: UserRule): Result {
         if (!cond.judged) return Result.Neutral // must_be_within — 트리·severity에서 제외 (C3)
         val satisfied = when (cond.op) {
-            RuleOp.requires -> satisfiesRequires(cond, scope, catalog)
-            RuleOp.blocks -> !isColumnReferenced(cond, scope) // blocks: 참조되면 미충족(위반)
-            RuleOp.joins -> satisfiesJoins(cond, scope)
+            RuleOp.REQUIRES -> satisfiesRequires(cond, scope, catalog)
+            RuleOp.BLOCKS -> !isColumnReferenced(cond, scope) // blocks: 참조되면 미충족(위반)
+            RuleOp.JOINS -> satisfiesJoins(cond, scope)
             // 컬럼을 조회하지 않는 스코프는 이 조건과 무관하다 — 중립이어야 AND 그룹을 헛되게 깨지 않는다
-            RuleOp.must_be_masked -> when (maskUsage(cond, scope)) {
+            RuleOp.MUST_BE_MASKED -> when (maskUsage(cond, scope)) {
                 MaskUsage.ABSENT -> return Result.Neutral
                 MaskUsage.PROJECTION_ONLY -> true
                 MaskUsage.NOT_EXPRESSIBLE -> false
@@ -178,9 +178,9 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
     }
 
     private fun conditionMessage(rule: UserRule, cond: RuleCondition): String = when (cond.op) {
-        RuleOp.requires -> "규칙 '${rule.name}': ${cond.table}.${cond.column} 필수 조건이 WHERE에 없습니다."
-        RuleOp.blocks -> "규칙 '${rule.name}': ${cond.table}.${cond.column}은(는) 조회가 차단된 컬럼입니다."
-        RuleOp.joins -> "규칙 '${rule.name}': ${cond.table}.${cond.column} ↔ ${cond.refTable}.${cond.refColumn} 필수 조인이 없습니다."
+        RuleOp.REQUIRES -> "규칙 '${rule.name}': ${cond.table}.${cond.column} 필수 조건이 WHERE에 없습니다."
+        RuleOp.BLOCKS -> "규칙 '${rule.name}': ${cond.table}.${cond.column}은(는) 조회가 차단된 컬럼입니다."
+        RuleOp.JOINS -> "규칙 '${rule.name}': ${cond.table}.${cond.column} ↔ ${cond.refTable}.${cond.refColumn} 필수 조인이 없습니다."
         else -> "규칙 '${rule.name}' 위반."
     }
 }

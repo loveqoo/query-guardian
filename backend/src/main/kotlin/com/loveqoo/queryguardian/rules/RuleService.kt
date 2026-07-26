@@ -100,7 +100,7 @@ class RuleService(
 
     private fun validateCondition(c: RuleCondition) {
         when (c.op) {
-            RuleOp.requires -> {
+            RuleOp.REQUIRES -> {
                 val table = requireNotNull(c.table) { "requires 조건은 table이 필요합니다" }
                 val column = requireNotNull(c.column) { "requires 조건은 column이 필요합니다" }
                 val defId = requireNotNull(c.defId) { "requires 조건은 defId가 필요합니다" }
@@ -110,17 +110,17 @@ class RuleService(
                     "판정할 수 없는 술어 형태입니다 (컬럼 = 리터럴 / IN 단일값만 requires로 사용 가능)"
                 }
             }
-            RuleOp.blocks -> {
+            RuleOp.BLOCKS -> {
                 requireNotNull(c.table) { "blocks 조건은 table이 필요합니다" }
                 requireNotNull(c.column) { "blocks 조건은 column이 필요합니다" }
             }
-            RuleOp.joins -> {
+            RuleOp.JOINS -> {
                 requireNotNull(c.table) { "joins 조건은 table이 필요합니다" }
                 requireNotNull(c.column) { "joins 조건은 column이 필요합니다" }
                 requireNotNull(c.refTable) { "joins 조건은 refTable이 필요합니다" }
                 requireNotNull(c.refColumn) { "joins 조건은 refColumn이 필요합니다" }
             }
-            RuleOp.must_be_within, RuleOp.must_be_masked -> { /* 등록·표시만 — 판정 미구현 */ }
+            RuleOp.MUST_BE_WITHIN, RuleOp.MUST_BE_MASKED -> { /* 등록·표시만 — 판정 미구현 */ }
         }
     }
 

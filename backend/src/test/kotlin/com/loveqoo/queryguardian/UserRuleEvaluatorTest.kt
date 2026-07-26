@@ -38,22 +38,22 @@ class UserRuleEvaluatorTest {
         }
 
     private fun group(vararg c: RuleNodeLike): RuleGroup =
-        RuleGroup(RuleGroup.Combinator.all, c.map { it.node })
+        RuleGroup(RuleGroup.Combinator.ALL, c.map { it.node })
 
     // 간편 빌더
     private class RuleNodeLike(val node: com.loveqoo.queryguardian.rules.RuleNode)
     private fun requires(table: String, col: String, defId: Long, sev: Severity = Severity.BLOCK) =
-        RuleNodeLike(RuleCondition(RuleOp.requires, sev, table = table, column = col, defId = defId))
+        RuleNodeLike(RuleCondition(RuleOp.REQUIRES, sev, table = table, column = col, defId = defId))
     private fun blocks(table: String, col: String, sev: Severity = Severity.BLOCK) =
-        RuleNodeLike(RuleCondition(RuleOp.blocks, sev, table = table, column = col, defId = 1))
+        RuleNodeLike(RuleCondition(RuleOp.BLOCKS, sev, table = table, column = col, defId = 1))
     private fun joins(table: String, col: String, refTable: String, refCol: String, sev: Severity = Severity.BLOCK) =
-        RuleNodeLike(RuleCondition(RuleOp.joins, sev, table = table, column = col, refTable = refTable, refColumn = refCol))
+        RuleNodeLike(RuleCondition(RuleOp.JOINS, sev, table = table, column = col, refTable = refTable, refColumn = refCol))
     private fun mustMask(table: String, col: String) =
-        RuleNodeLike(RuleCondition(RuleOp.must_be_masked, Severity.BLOCK, table = table, column = col, defId = 1))
+        RuleNodeLike(RuleCondition(RuleOp.MUST_BE_MASKED, Severity.BLOCK, table = table, column = col, defId = 1))
 
     private fun rule(scope: RuleScope, tree: RuleGroup) = UserRule(1, "테스트 규칙", scope, true, tree)
 
-    private fun anyGroup(vararg c: RuleNodeLike) = RuleGroup(RuleGroup.Combinator.any, c.map { it.node })
+    private fun anyGroup(vararg c: RuleNodeLike) = RuleGroup(RuleGroup.Combinator.ANY, c.map { it.node })
 
     // ---- requires ----
 

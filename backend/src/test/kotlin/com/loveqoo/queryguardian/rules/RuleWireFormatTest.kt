@@ -51,13 +51,13 @@ class RuleWireFormatTest {
 
         val ops = collectConditions(tree).map { it.op }
         assertEquals(
-            listOf(RuleOp.requires, RuleOp.must_be_masked, RuleOp.joins, RuleOp.blocks, RuleOp.must_be_within),
+            listOf(RuleOp.REQUIRES, RuleOp.MUST_BE_MASKED, RuleOp.JOINS, RuleOp.BLOCKS, RuleOp.MUST_BE_WITHIN),
             ops,
             "저장된 소문자 표현이 상수로 읽히지 않았다 — 기존 규칙이 손상(corrupt)으로 떨어진다",
         )
-        assertEquals(RuleGroup.Combinator.all, tree.combinator)
+        assertEquals(RuleGroup.Combinator.ALL, tree.combinator)
         assertEquals(
-            RuleGroup.Combinator.any,
+            RuleGroup.Combinator.ANY,
             tree.children.filterIsInstance<RuleGroup>().single().combinator,
         )
     }

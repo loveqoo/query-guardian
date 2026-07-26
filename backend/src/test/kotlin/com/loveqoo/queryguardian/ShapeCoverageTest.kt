@@ -340,6 +340,44 @@ class ShapeCoverageTest {
             "SELECT id FROM users WHERE name = 'x' AND created_at = '2026-01-01' LIMIT 10",
             Verdict.BLOCK, "조건에 쓰면 재작성해도 원본으로 걸러진다", rule = 4),
 
+        // ── Q. 완화 안전망 — spec 011의 악용 후보 (§7.1) ──────────────────────────
+        //
+        // spec 011은 요건 룰을 **완화**한다(조각 합산·겹 잇기). 완화는 틀리면 **유출**이므로,
+        // 완화로 *새로 통과하게 될 수 있는* 형태 중 **요건의 목적을 달성하지 못하는 것**을
+        // 완화보다 **먼저** 등록한다. 지금도 차단이고 완화 뒤에도 차단이어야 한다.
+        //
+        // 이 축이 없으면 완화 후 뚫렸을 때 "원래 그랬는지 내가 뚫었는지" 구분할 수 없다 — 기준선이다.
+        Shape("Q1", "완화 안전망", "집계 결과에 조건 — 스캔을 줄이지 않는다",
+            "WITH a AS (SELECT COUNT(*) AS c, MAX(event_date) AS m FROM user_events) " +
+                "SELECT c FROM a WHERE m = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "집계 **후** 조건이라 안쪽 스캔은 전체다. 겹을 이어도 이건 밀어넣을 수 없다"),
+        Shape("Q2", "완화 안전망", "표현식으로 개명한 컬럼에 조건",
+            "WITH a AS (SELECT id, DATE(event_date) AS d FROM user_events) " +
+                "SELECT id FROM a WHERE d = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "`DATE(event_date)`는 `event_date`와 다른 값이다 — 안쪽 컬럼을 고정하지 못한다"),
+        Shape("Q3", "완화 안전망", "LIMIT이 낀 CTE에 바깥 조건",
+            "WITH a AS (SELECT id, event_date FROM user_events LIMIT 100) " +
+                "SELECT id FROM a WHERE event_date = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "안쪽이 이미 잘린 뒤라 바깥 조건은 다른 것을 거른다 — 행 집합이 바뀐다"),
+        Shape("Q4", "완화 안전망", "UNION 한 팔만 조건, 바깥에서 통일 시도",
+            "WITH a AS (SELECT id, event_date FROM user_events WHERE event_date = '2026-01-01' " +
+                "UNION ALL SELECT id, event_date FROM user_events) " +
+                "SELECT id FROM a WHERE event_date = '2026-01-01' LIMIT 10",
+            Verdict.BLOCK, "조건 없는 팔이 전체 스캔이다. 바깥 조건은 UNION 결과를 거를 뿐 안쪽 스캔을 못 줄인다"),
+        Shape("Q5", "완화 안전망", "OR 한 분기만 컬럼을 고정",
+            "SELECT id FROM user_events WHERE event_date = '2026-01-01' OR id > 0 LIMIT 10",
+            Verdict.BLOCK, "둘째 분기의 행은 날짜 제약이 없다 — I3(모든 분기가 고정해야 충족)"),
+        // ⚠️ 이 형태는 **내 기대가 틀렸던 자리**다. 처음에 BLOCK으로 적었다가 측정에서 PASS로 드러났고,
+        // 다시 보니 엔진이 옳았다. 혼동한 것: spec 008 §3.0.2의 "널 생성 쪽" 규칙은 재작성기가 필터를
+        // **주입**할 때의 제약이다. 여기서는 사용자가 **직접 쓴** 조건이고, 파티션 요건이 묻는 것은
+        // "스캔이 좁혀지는가"이며 실제로 좁혀진다(WHERE가 LEFT JOIN을 사실상 INNER로 만들면서 파티션을 자른다).
+        // **작성된 조건과 주입된 조건은 다른 것**이라는 구분을 고정하려고 남긴다.
+        Shape("Q6", "완화 안전망", "OUTER JOIN 널 생성 쪽에 **사용자가 쓴** 조건",
+            "SELECT u.id FROM users u LEFT JOIN user_events e ON u.id = e.id " +
+                "WHERE e.event_date = '2026-01-01' LIMIT 10",
+            Verdict.PASS, "사용자가 쓴 WHERE는 실제로 파티션을 자른다. 주입 금지(§3.0.2)는 재작성기의 제약이지 " +
+                "판정의 제약이 아니다"),
+
         // ── I. 귀속 — 한정자가 없을 때 ────────────────────────────────────────────
         Shape("I1", "귀속", "조인 쿼리에서 한정자 없이 차단 컬럼",
             "SELECT ssn FROM users u JOIN user_events e ON u.id = e.id WHERE e.event_date = '2026-01-01' LIMIT 10",

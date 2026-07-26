@@ -274,8 +274,16 @@ class ExecutionFlowIntegrationTest {
         val before = previewEvents("ap1").size
 
         // 승인 범위 밖 테이블 (요청은 users만 커버)
-        assertEquals(HttpStatus.FORBIDDEN, postAs("/api/preview-rewrite", "u1", mapOf(
-            "sql" to "SELECT id FROM marketing_consents", "requestId" to requestId)).statusCode)
+        val denied = postAs("/api/preview-rewrite", "u1", mapOf(
+            "sql" to "SELECT id FROM marketing_consents", "requestId" to requestId))
+        assertEquals(HttpStatus.FORBIDDEN, denied.statusCode)
+        // **바디에 자기 필드가 살아 있는가.** `AccessDenied`·`ApprovalDenied` 두 변종을
+        // `Blocked(BlockedDetail)` 하나로 합치면서, 응답이 공통 인터페이스로 직렬화되어
+        // `deniedTables` 같은 자기 필드가 사라질 수 있었다 — 프론트가 그 목록으로 분기한다.
+        assertTrue(
+            (denied.body?.get("deniedTables") as? List<*>).orEmpty().isNotEmpty(),
+            "권한 차단 바디에서 거부 테이블 목록이 사라졌다: ${denied.body}",
+        )
         // 남의 승인 요청
         assertEquals(HttpStatus.FORBIDDEN, postAs("/api/preview-rewrite", "u2", mapOf(
             "sql" to "SELECT id FROM users", "requestId" to requestId)).statusCode)

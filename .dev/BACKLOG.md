@@ -47,6 +47,15 @@ craft 검토가 "발급 권한 폐쇄를 **방해**한다"고 지목한 순서�
    생짜 `approvalGate.check`(ApprovalBlocked)가 20줄 안에 나란히 있다. 승인 검사가 값을 돌려줘야 해서
    체인에 못 들어갔는데, 그 값을 상태에 담으면 된다(`Judged → Approved`).
 
+## spec 010 P2 검토가 남긴 것
+
+- **`InspectResult.Parsed(ir, statement)`의 짝 일치는 타입이 보장하지 못한다.** 서로 다른 파싱의 ir과
+  핸들을 조합해도 컴파일된다. 오늘은 생성 지점이 `DruidMySqlParser.inspect()` 하나뿐이라 위험이 낮고,
+  `scopeId` 난스가 재작성 시점에 짝을 검사한다(spec 008 결정 13). **캐싱·메모이제이션 레이어가 생기면
+  다시 봐야 한다** — "판정 대상과 실행 대상이 갈라지는" §2.5-1의 위협이 그 지점에서 다시 열린다.
+- **CI가 없다**(`.github/workflows` 부재). ArchUnit·리플렉션 감시자는 누군가 테스트를 돌릴 때만 발화한다.
+  P2에서 컴파일러로 올릴 수 있는 것은 전부 올렸으나, 남은 감시자들은 이 사실 위에서 읽어야 한다.
+
 ## 범위 밖 — 이번에 도입된 것이 아니나 적대 검토가 발견 (spec 005 H4 재검토 대상)
 
 **저장 게이트의 purpose 오라클.** `QueryService.gate`가 `approvalGate.findRequest(requestId)?.purposeCode`로

@@ -560,6 +560,7 @@ class DruidMySqlParser(
         val joinEqualities = mutableListOf<ColumnEquality>()
         block.where?.let { flattenAnd(it, conjuncts, resolver, children, registry, joinEqualities) }
         innerOnExprs.forEach { flattenAnd(it, conjuncts, resolver, children, registry, joinEqualities) }
+        block.from?.let { collectUsingEqualities(it, tables, isCte, joinEqualities) }
         // OUTER JOIN ON의 서브쿼리도 **스코프**다. INNER ON은 위 flattenAnd 경로에서 이미 등록되지만
         // OUTER ON은 술어로 채택하지 않으므로(§6.1) 그 경로를 타지 않는다 — 등록하지 않으면 그 안의 테이블이
         // IR에서 사라져 권한·필수조건·매핑 허용목록이 무발화한다(구조 불변식 테스트가 잡아낸 구멍).
@@ -690,6 +691,45 @@ class DruidMySqlParser(
 
             override fun visit(x: SQLExprTableSource): Boolean = false
         })
+    }
+
+    /**
+     * `JOIN ... USING (col)`을 조인 등식으로 수집한다.
+     *
+     * `USING (id)`는 `ON a.id = b.id`와 **같은 조인**인데, 등식은 `ON`에서만 만들어지고 있었다.
+     * 그래서 같은 조인을 `USING`으로 쓰면 `joins` 룰이 그것을 못 보고 **과차단**했다(실측: `K5`).
+     * 금지 쪽은 `USING` 컬럼을 이미 참조로 수집하는데(`collectColumnRefs`) 요건 쪽만 못 보고 있었다 —
+     * 같은 문법을 한쪽만 고치면 나머지가 남는다.
+     *
+     * **양쪽이 각각 단일 인스턴스일 때만** 만든다. 조인 트리 한쪽에 테이블이 여럿이면 `USING`의 컬럼이
+     * 그중 어느 것에 붙는지 **스키마를 봐야** 안다 — 추측해서 등식을 만들면 요건이 거짓으로 충족될 수
+     * 있으므로, 그 경우는 만들지 않는다(현행 과차단 유지 = 안전한 방향).
+     *
+     * ⚠️ **이 가드는 아직 측정되지 않았다.** `singleOrNull`을 `firstOrNull`로 완화해도(=추측 도입)
+     * 전체 테스트가 그대로 통과한다(실측). 즉 다중 인스턴스 `USING`을 태우는 형태가 커버리지에 없다.
+     * 형태를 지어내지 않은 이유는 그 경우 MySQL의 모호성 처리를 확인하지 못했기 때문이다 —
+     * 기대 판정을 defend할 수 없는 형태를 넣으면 그 줄이 현재 동작을 축복하는 자리가 된다.
+     * 백로그 항목이며, 채우기 전까지 이 가드의 근거는 **논증이지 측정이 아니다**.
+     */
+    private fun collectUsingEqualities(
+        source: SQLTableSource,
+        tables: List<TableRef>,
+        isCte: (String) -> Boolean,
+        into: MutableList<ColumnEquality>,
+    ) {
+        if (source !is SQLJoinTableSource) return
+        collectUsingEqualities(source.left, tables, isCte, into)
+        collectUsingEqualities(source.right, tables, isCte, into)
+
+        val using = source.using?.takeIf { it.isNotEmpty() } ?: return
+        val leftRef = instanceKeysOf(source.left, isCte).singleOrNull()
+            ?.let { key -> tables.firstOrNull { it.instanceKey == key } } ?: return
+        val rightRef = instanceKeysOf(source.right, isCte).singleOrNull()
+            ?.let { key -> tables.firstOrNull { it.instanceKey == key } } ?: return
+        using.forEach { col ->
+            val name = norm(col.toString())
+            into += ColumnEquality(ColumnRef(leftRef, name), ColumnRef(rightRef, name))
+        }
     }
 
     private fun collectTables(

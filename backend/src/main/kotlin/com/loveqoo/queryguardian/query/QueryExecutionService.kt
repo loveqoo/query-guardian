@@ -103,13 +103,12 @@ class QueryExecutionService(
             .then { runQuery(it) }
             .orRaise(request)
 
-        // **기록 먼저, 반환 나중** — 감사 저장이 실패하면 데이터를 내보내지 않는다(fail-closed).
-        // "누가 그 PII를 봤는가"를 남길 수 없으면 보여주지 않는 것이 이 제품의 통제 방식이다.
-        audit.record(
-            queryId, actor, ExecutionOutcome.SUCCESS, request.sql,
-            rewrittenSql = executed.rewrittenSql, applied = executed.applied, result = executed.result,
-        )
-        return executed
+        return exportOnlyIfRecorded(executed) {
+            audit.record(
+                queryId, actor, ExecutionOutcome.SUCCESS, request.sql,
+                rewrittenSql = executed.rewrittenSql, applied = executed.applied, result = executed.result,
+            )
+        }
     }
 
     /**
@@ -129,12 +128,14 @@ class QueryExecutionService(
             .then { runGate(it) }
             .orRaise(request)
 
-        // 미리보기도 기록한다 — 데이터는 나가지 않지만 **적용될 강제식**이 노출된다(카탈로그 오라클).
-        audit.record(
-            null, actor, ExecutionOutcome.PREVIEW, sql,
-            rewrittenSql = ready.rewritten.sql, applied = ready.rewritten.applied,
-        )
-        return PreviewedRewrite(ready.rewritten.sql, ready.rewritten.applied, ready.report)
+        // 미리보기도 **반출**이다 — 데이터 행은 없지만 적용될 강제식 원문이 나간다(카탈로그 오라클).
+        // 데이터가 없다고 반출이 아닌 것이 아니므로 SUCCESS와 같은 등급을 받는다(spec 010 I4).
+        return exportOnlyIfRecorded(PreviewedRewrite(ready.rewritten.sql, ready.rewritten.applied, ready.report)) {
+            audit.record(
+                null, actor, ExecutionOutcome.PREVIEW, sql,
+                rewrittenSql = ready.rewritten.sql, applied = ready.rewritten.applied,
+            )
+        }
     }
 
     // ---- 줄기 ------------------------------------------------------------
@@ -292,19 +293,35 @@ class QueryExecutionService(
         }
     }
 
+    /**
+     * **반출이 없는 종결의 기록은 best-effort다** (spec 010 I5).
+     *
+     * 감사 저장이 실패해도 **원래 사유가 이긴다** — 감사 예외로 바꿔치면 "무엇이 막혔는지"를 잃고
+     * 403이 500이 된다. 대신 유실은 조용히 지나가지 않는다: 실패 자체가 경보 대상이다.
+     *
+     * 이 `runCatching`이 안전한 이유는 게이트가 **트랜잭션을 열지 않기 때문**이다(spec 010 I6).
+     * 감사의 `REQUIRES_NEW`가 롤백돼도 되돌릴 바깥 쓰기가 없다.
+     */
+    /**
+     * **반출이 있는 종결은 기록이 반출의 선행 조건이다** (spec 010 I4).
+     *
+     * "누가 그 PII를 봤는가"를 남길 수 없으면 보여주지 않는 것이 이 제품의 통제 방식이다.
+     * 그래서 여기서는 [recordStop]과 반대로 **기록 실패가 응답을 대신한다** — 잡지 않는다.
+     * 순서를 뒤집을 수 없게 이름을 붙였다: 값은 이미 만들어져 있고, 기록이 성공해야만 밖으로 나간다.
+     */
+    private inline fun <T> exportOnlyIfRecorded(value: T, record: () -> Unit): T {
+        record()
+        return value
+    }
+
     private fun recordStop(request: GateRequest, stop: GateStop) {
-        val write = {
+        runCatching {
             audit.record(
                 request.queryId, request.actor, stop.outcome, request.sql,
                 rewrittenSql = stop.rewritten?.sql, applied = stop.rewritten?.applied,
                 errorCode = stop.code, errorDetail = stop.detail,
             )
-        }
-        when (stop.grade) {
-            AuditGrade.REQUIRED -> write()
-            // 감사 저장이 실패해도 **원래 사유가 이긴다** — 감사 예외로 바꿔치면 무엇이 실패했는지 잃는다.
-            AuditGrade.BEST_EFFORT -> runCatching { write() }
-        }
+        }.onFailure { audit.alertRecordFailure(it, stop.outcome, stop.code, request.actor) }
     }
 
     /**

@@ -11,20 +11,6 @@ import com.loveqoo.queryguardian.exec.ExecutionFailure
 import com.loveqoo.queryguardian.ir.RewriteOutcome
 
 /**
- * 감사 기록의 등급 (spec 010 I4·I5).
- *
- * P1-C1은 **현행 등급을 그대로 옮긴다** — 차단은 필수 기록, 실행 오류는 best-effort.
- * 등급의 재배치(반출이 있는 종결은 기록이 선행 조건)는 C2의 몫이다.
- */
-enum class AuditGrade {
-    /** 기록에 실패하면 그 실패가 응답을 대신한다. */
-    REQUIRED,
-
-    /** 기록에 실패해도 **원래 사유가 이긴다** — 감사 예외로 바꿔치면 무엇이 실패했는지 잃는다. */
-    BEST_EFFORT,
-}
-
-/**
  * 게이트가 멈춘 이유 — **한 종류의 값** (spec 010 I3·I7).
  *
  * 예전에는 같은 개념이 한 함수 안에서 네 문법으로 쓰였다(try/catch·지역 `blocked()`·5인자
@@ -35,6 +21,10 @@ enum class AuditGrade {
  * 값이므로 게이트 본문은 예외를 만들지도 잡지도 않는다. 예외로의 번역은 [raise] 한 곳에서만 일어나고,
  * 그것도 `when`이 아니라 **다형성**으로 갈린다 — 변종을 추가해도 호출부는 그대로다.
  *
+ * **모든 `GateStop`은 "반출이 없는 종결"이다**(spec 010 I5) — 정의상 데이터도 강제식도 나가지 않는다.
+ * 그래서 감사 기록은 전부 best-effort이고 **원래 사유가 기록 실패를 이긴다**. 등급을 필드로 들 필요가
+ * 없다: 반출이 있는 종결(SUCCESS·PREVIEW)은 애초에 이 타입이 아니라 진입점이 다룬다.
+ *
  * 예외 기반 비지역 반환을 쓰지 않는 이유는 스타일이 아니다: 예외는 **호출자의 트랜잭션을 롤백시키는
  * side-effect**를 갖는데, 게이트에는 되돌릴 쓰기가 없으므로(spec 010 I6) 그 효과는 우리가 통제하지
  * 않는 경계에 남기는 레버가 된다. 그리고 차단은 예외 상황이 아니라 **이 제품의 정상 결과**다.
@@ -43,7 +33,6 @@ sealed interface GateStop {
     val code: AuditCode
     val detail: String?
     val outcome: ExecutionOutcome get() = ExecutionOutcome.BLOCKED
-    val grade: AuditGrade get() = AuditGrade.REQUIRED
 
     /** 실행 오류처럼 **재작성까지는 끝난** 종결만 값을 갖는다 — 감사에 재작성문·적용 목록을 남긴다. */
     val rewritten: RewriteOutcome.Rewritten? get() = null
@@ -89,7 +78,6 @@ sealed interface GateStop {
         override val code: AuditCode get() = failure.kind.auditCode
         override val detail: String get() = failure.detail
         override val outcome: ExecutionOutcome get() = ExecutionOutcome.ERROR
-        override val grade: AuditGrade get() = AuditGrade.BEST_EFFORT
         override fun raise(): Nothing = throw failure
     }
 }

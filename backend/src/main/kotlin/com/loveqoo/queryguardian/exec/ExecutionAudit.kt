@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.audit.ExecutionOutcome
 import com.loveqoo.queryguardian.ir.AppliedRewrite
+import org.slf4j.LoggerFactory
 import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
 import org.springframework.data.repository.CrudRepository
@@ -61,6 +62,8 @@ class ExecutionAudit(
     private val repository: ExecutionEventRepository,
     private val objectMapper: ObjectMapper,
 ) {
+    private val log = LoggerFactory.getLogger(ExecutionAudit::class.java)
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun record(
         queryId: Long?,
@@ -91,6 +94,27 @@ class ExecutionAudit(
             at = Instant.now(),
         )
     )
+
+    /**
+     * **감사 기록 실패 자체가 경보 대상이다** (spec 010 I5).
+     *
+     * 반출이 없는 종결(차단·오류)에서는 기록이 실패해도 **원래 사유가 이긴다** — 감사 예외로 바꿔치면
+     * 무엇이 실패했는지 잃기 때문이다. 그러나 그 대가로 "기록이 없다"는 사실이 조용해진다.
+     * 조용해지면 "감사가 있다"는 이 제품의 전제가 무너지므로, 유실은 반드시 소리를 내야 한다.
+     *
+     * 여기서는 ERROR 로그까지만 한다 — 실제 알림 채널(페이지·슬랙) 연결은 운영의 몫이고,
+     * `AUDIT_WRITE_FAILED`가 그 훅으로 쓰라고 남긴 고정 문자열이다.
+     *
+     * ⚠️ `@Transactional`을 붙이지 않는다. [record]의 `REQUIRES_NEW`는 **프록시 경계를 지날 때만**
+     * 열리므로, 이 클래스 안에서 [record]를 자기호출로 감싸면 그 격리가 조용히 사라진다.
+     * 등급 판단(기록이 선행 조건인가 best-effort인가)은 **호출자 쪽에** 둔다.
+     */
+    fun alertRecordFailure(cause: Throwable, outcome: ExecutionOutcome, code: AuditCode?, actor: String) {
+        log.error(
+            "AUDIT_WRITE_FAILED outcome={} code={} actor={} — 감사 기록이 유실됐다(원래 사유는 응답에 보존됨)",
+            outcome, code, actor, cause,
+        )
+    }
 
     fun historyOf(queryId: Long): List<ExecutionEvent> = repository.findByQueryIdOrderByIdDesc(queryId)
 

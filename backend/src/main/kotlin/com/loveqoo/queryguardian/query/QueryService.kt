@@ -11,7 +11,6 @@ import com.loveqoo.queryguardian.api.QuerySummaryDto
 import com.loveqoo.queryguardian.api.ReviewRequest
 import com.loveqoo.queryguardian.api.SaveQueryRequest
 import com.loveqoo.queryguardian.approval.ApprovalGate
-import com.loveqoo.queryguardian.approval.ApprovalRequest
 import com.loveqoo.queryguardian.approval.Directory
 import com.loveqoo.queryguardian.approval.QueryReviewEvent
 import com.loveqoo.queryguardian.approval.QueryReviewEventRepository
@@ -33,7 +32,9 @@ class QueryService(
 ) {
     /** 저장 게이트: 룰(422) 선행 → 승인 검사(403) (spec 005 §4, H4). */
     fun save(actor: String, request: SaveQueryRequest): QueryDto {
-        val (approval, report) = gate(actor, request)
+        validateName(request)
+        val storable = gate(actor, request)
+        val approval = storable.approval
         val now = Instant.now()
         val saved = repository.save(
             SavedQuery(
@@ -41,7 +42,7 @@ class QueryService(
                 purposeCode = approval.purposeCode,           // 클라이언트 입력 무시, 요청에서 주입 (C1)
                 requestId = approval.id!!,
                 reviewStatus = ReviewStatus.PENDING_REVIEW.name,
-                lintReportJson = objectMapper.writeValueAsString(report),
+                lintReportJson = objectMapper.writeValueAsString(storable.report),
                 createdAt = now, updatedAt = now,
             )
         )
@@ -71,15 +72,17 @@ class QueryService(
                 "저장된 쿼리의 근거 승인 요청은 바꿀 수 없습니다 — 다른 요청으로 저장하려면 새 쿼리로 저장하세요",
             )
         }
+        validateName(request)
         // 게이트는 **원래 요청 id**로 재실행한다(클라이언트가 보낸 것을 신뢰하지 않는다)
-        val (approval, report) = gate(actor, request.copy(requestId = existing.requestId))
+        val storable = gate(actor, request.copy(requestId = existing.requestId))
+        val approval = storable.approval
         val saved = repository.save(
             existing.copy(
                 name = request.name, dialect = request.dialect, sqlText = request.sql,
                 purposeCode = approval.purposeCode, requestId = approval.id!!,
                 reviewStatus = ReviewStatus.PENDING_REVIEW.name,   // 항상 재검토로 리셋
                 reviewer = null, reviewedAt = null, reviewNote = null,
-                lintReportJson = objectMapper.writeValueAsString(report),
+                lintReportJson = objectMapper.writeValueAsString(storable.report),
                 updatedAt = Instant.now(),
             )
         )
@@ -172,8 +175,7 @@ class QueryService(
      * (`parser.parse()` 한 번, `lintService.lint(sql)` 안에서 또 한 번). 그래서 "판정과 재작성이 같은
      * AST를 쓴다"(spec 008 결정 13)가 실행 게이트에서만 성립했다.
      */
-    private fun gate(actor: String, request: SaveQueryRequest): Pair<ApprovalRequest, LintReportDto> {
-        require(request.name.isNotBlank() && request.name.length <= 100) { "이름은 1~100자여야 합니다" }
+    private fun gate(actor: String, request: SaveQueryRequest): Storable {
         // purposeCode는 클라이언트 입력이 아니라 승인 요청에서 주입한다 (C1). 요청이 없으면 null로 lint 후 403.
         val purposeCode = request.requestId?.let { approvalGate.findRequest(it)?.purposeCode }
         val ctx = GateRequest(
@@ -182,18 +184,31 @@ class QueryService(
         )
 
         // 데이터 권한이 룰보다 **앞**이다 (spec 007 §6.0) — 권한 없는 사용자에게 위반 메시지를 주지 않는다.
-        val outcome = steps.parseOnce(ctx)
+        val judged = steps.parseOnce(ctx)
             .then(steps::checkAccess)
             .then(steps::judgeRules)
 
         // 룰 hit 통계는 **차단된 쿼리도 포함**한다 — "무엇이 자주 걸리는가"가 통계의 목적이므로
         // 걸린 것을 빼면 목적이 뒤집힌다. 그래서 통과·차단 양쪽에서 보고서를 꺼내 기록한다.
-        outcome.judgedReport()?.let(::recordRuleHits)
+        judged.judgedReport()?.let(::recordRuleHits)
 
-        val judged = outcome.orThrowWithoutAudit()
-        // 승인 검사 — 요청 존재·승인·요청자·테이블 커버
-        val approval = approvalGate.check(request.requestId, actor, judged.prior.ir)
-        return approval to judged.report
+        // 승인 검사(요청 존재·승인·요청자·테이블 커버)가 **판정 뒤**에 오는 것이 저장의 정책이다.
+        return judged.then(steps::requireApproval).orThrowWithoutAudit()
+    }
+
+    /**
+     * 이름 길이는 **요청 검증**이지 거버넌스 판정이 아니다 — 그래서 게이트 줄기 밖에 있다.
+     *
+     * 예전에는 [gate] 첫 줄이었고, 그 결과 20줄 안에 실패 문법이 셋 나란히 있었다
+     * (`require` 400 · `GateStop` · 생짜 `approvalGate.check` 403). 무엇이 게이트 검사이고 무엇이
+     * 입력 검증인지 읽어서는 갈리지 않았다. `GateStop`으로 바꾸지 않은 이유: 그러면 새 `AuditCode`가
+     * 생기고 A0 전수 검증이 따라붙는다 — 없앨 수 있는 것에 감사 어휘를 늘리지 않는다.
+     *
+     * 호출 위치는 예전과 같다(저장은 게이트 직전, 수정은 소유권 검사 **뒤**) — 순서가 바뀌면
+     * 남의 쿼리에 잘못된 이름으로 PUT했을 때 403이 400으로 바뀐다.
+     */
+    private fun validateName(request: SaveQueryRequest) {
+        require(request.name.isNotBlank() && request.name.length <= 100) { "이름은 1~100자여야 합니다" }
     }
 
     /**

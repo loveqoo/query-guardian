@@ -47,3 +47,24 @@ tasks.test {
         showStandardStreams = false
     }
 }
+
+/**
+ * IR 구조를 아스키 트리로 본다 — `gradle dependencies`와 같은 용도.
+ *
+ *     ./gradlew -q irTree -Psql="SELECT u.id FROM users u WHERE u.id > 10"
+ *
+ * 판정 사각은 대부분 "어느 스코프가 등록되지 않았는가"에서 생기므로, 스코프 중첩이 눈에 보이는 것이
+ * 곧 진단이다.
+ */
+tasks.register<JavaExec>("irTree") {
+    group = "help"
+    description = "SQL 하나를 파싱해 IR을 아스키 트리로 출력한다 (-Psql=\"...\")"
+    classpath = sourceSets["test"].runtimeClasspath
+    mainClass.set("com.loveqoo.queryguardian.tools.IrTreeMainKt")
+    doFirst {
+        args = listOf(
+            project.findProperty("sql")?.toString()
+                ?: error("-Psql=\"<SQL>\" 이 필요합니다. 예: ./gradlew -q irTree -Psql=\"SELECT 1 FROM t\""),
+        )
+    }
+}

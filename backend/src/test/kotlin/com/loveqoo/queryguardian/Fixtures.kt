@@ -1,7 +1,10 @@
 package com.loveqoo.queryguardian
 
+import com.loveqoo.queryguardian.ir.QueryIR
+import com.loveqoo.queryguardian.ir.toAsciiTree
 import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.parser.DruidMySqlParser
+import com.loveqoo.queryguardian.parser.ParseResult
 import com.loveqoo.queryguardian.rules.InMemoryTableCatalog
 import com.loveqoo.queryguardian.rules.LintReport
 import com.loveqoo.queryguardian.rules.RequiredPredicate
@@ -36,17 +39,38 @@ object Fixtures {
 
     fun lint(sql: String, purpose: String? = null): LintReport = service.lint(sql, purpose)
 
+    /**
+     * 파싱해서 IR을 준다. 디버깅 중에 구조를 보고 싶으면 `println(Fixtures.ir(sql).toAsciiTree())`.
+     * 파싱이 실패하면 그 사실을 예외로 알린다 — null을 돌려주면 호출부가 조용히 넘어간다.
+     */
+    fun ir(sql: String): QueryIR = when (val r = parser.parse(sql)) {
+        is ParseResult.Success -> r.ir
+        is ParseResult.Failure -> error("파싱 실패 [${r.kind}] ${r.message}\n  sql: $sql")
+    }
+
+    /**
+     * SQL의 IR 트리 문자열. **단정 메시지에 붙이는 용도**다 —
+     * `println` 디버깅은 통과할 때도 쏟아지고 CI 로그에서 사라진다.
+     *
+     * 파싱 실패도 문자열로 돌려준다: 실패한 이유 자체가 디버깅 정보이고,
+     * 단정 메시지를 만드는 도중에 예외가 나면 원래 실패가 가려진다.
+     */
+    fun irTree(sql: String): String = when (val r = parser.parse(sql)) {
+        is ParseResult.Success -> r.ir.toAsciiTree()
+        is ParseResult.Failure -> "파싱 실패 [${r.kind}] ${r.message}"
+    }
+
     fun assertBlockedBy(sql: String, ruleIdPrefix: String, purpose: String? = null) {
         val report = lint(sql, purpose)
-        assertTrue(report.blocked, "차단되어야 하는데 통과함: $sql\n$report")
+        assertTrue(report.blocked, "차단되어야 하는데 통과함: $sql\n$report\n${irTree(sql)}")
         assertTrue(
             report.violations.any { it.ruleId.startsWith(ruleIdPrefix) },
-            "룰 [$ruleIdPrefix] 위반이 있어야 함: $sql\n$report",
+            "룰 [$ruleIdPrefix] 위반이 있어야 함: $sql\n$report\n${irTree(sql)}",
         )
     }
 
     fun assertNotBlocked(sql: String, purpose: String? = null) {
         val report = lint(sql, purpose)
-        assertFalse(report.blocked, "통과해야 하는데 차단됨: $sql\n$report")
+        assertFalse(report.blocked, "통과해야 하는데 차단됨: $sql\n$report\n${irTree(sql)}")
     }
 }

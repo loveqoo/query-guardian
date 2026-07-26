@@ -63,8 +63,7 @@ import kotlin.test.assertTrue
  * ⑵ 시나리오는 전부 **실제 HTTP 요청**이다 — 감사 API를 직접 부르지 않는다.
  * ⑶ 요청 뒤 새로 생긴 `execution_event` 행이 **정확히 하나**이고, 그 행의 `error_code`·`outcome`·
  *    `query_id` 유무, HTTP 상태, **응답 본문의 분류 코드**가 전부 기대와 같은지 본다. 하나라도 어긋나면
- *    실패한다. 특히 본문 코드를 계약에 넣은 이유: 감사에는 남는데 응답에는 안 실리는 경로가 **9개**이고
- *    (`null`로 적혀 있다), 그것이 리뷰 R3가 "스타일이 아니라 계약 결함"이라 지목한 지점이다.
+ *    실패한다. 본문 코드를 계약에 넣은 것이 P1-C3의 판정 기준이 됐다 — 아래를 보라.
  *
  * ## 축은 "코드별"이 아니라 **"코드 × 진입점"** 이다
  *
@@ -84,11 +83,16 @@ import kotlin.test.assertTrue
  * 빈(3개)을 spy로 강제하되, **요청은 여전히 HTTP를 통과하고 게이트 본문은 실제로 실행된다** — 검증
  * 대상인 "게이트가 그 실패를 어떤 감사 코드로 번역하는가"는 진짜 경로에서 확인된다.
  *
- * ## 이 테스트가 기록하는 현행 계약의 어긋남
+ * ## 안전망이 변경 목록이 된 자리 (P1-C3)
  *
- * 재작성 실패 6종은 **403**으로 응답한다. 권한 실패가 아닌데도 그렇다. P0은 이것을 고치지 않고
- * **있는 그대로 고정**한다 — P1(A2)이 응답 코드를 `GateStop` 하나로 모을 때 이 단정들이 "무엇이
- * 바뀌었는지"를 정확히 짚어 준다. 안전망은 현실을 재야 안전망이다.
+ * P0은 두 가지 어긋남을 **고치지 않고 있는 그대로 고정**했다. 안전망은 현실을 재야 안전망이기 때문이다.
+ * ⑴ 감사에는 남는 분류가 응답에는 실리지 않는 경로 — `bodyCode = null`로 적혀 있었다.
+ * ⑵ 재작성·매핑 실패가 **403**으로 나가는 것 — 권한 실패가 아닌데도.
+ *
+ * P1-C3가 `GateStop`을 응답 코드의 유일한 출처로 만들자 **정확히 14개 시나리오가 깨졌고**, 그 목록이
+ * 곧 변경 내역이었다. 이제 `bodyCode`는 **기본값이 없는 필수 인자**다 — 코드 없는 종결을 새로 만들면
+ * 컴파일이 막는다(기본값을 남겨 두면 다음 시나리오가 조용히 `null`로 들어온다). 그리고 상태는 기준을 얻었다:
+ * **403은 "이 사람이 할 수 없다", 422는 "이 요청을 처리할 수 없다".**
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -170,7 +174,7 @@ class AuditCodeCoverageTest {
          * 감사에는 남는 코드가 사용자에게는 전달되지 않는 지점이고(리뷰 R3), P1(A2)이 닫을 대상이다.
          * 여기에 적어 두어야 P1의 변경이 "무엇이 달라졌는지"로 드러난다.
          */
-        val bodyCode: String? = null,
+        val bodyCode: String,
         /** 요청을 보낸 사람. 감사 행이 **그 요청의 것인지** 확인하는 연결 키다(codex 검토 #1). */
         val actor: String = "u1",
         val run: (Fixtures) -> ResponseEntity<*>,
@@ -180,7 +184,7 @@ class AuditCodeCoverageTest {
         code: AuditCode,
         status: HttpStatus,
         outcome: ExecutionOutcome = ExecutionOutcome.BLOCKED,
-        bodyCode: String? = null,
+        bodyCode: String,
         actor: String = "u1",
         run: (Fixtures) -> ResponseEntity<*>,
     ) = Scenario(code, "execute", status, outcome, expectQueryId = true, bodyCode = bodyCode,
@@ -189,7 +193,7 @@ class AuditCodeCoverageTest {
     private fun previewScenario(
         code: AuditCode,
         status: HttpStatus,
-        bodyCode: String? = null,
+        bodyCode: String,
         run: (Fixtures) -> ResponseEntity<*>,
     ) = Scenario(code, "preview", status, ExecutionOutcome.BLOCKED, expectQueryId = false,
         bodyCode = bodyCode, run = run)
@@ -198,13 +202,13 @@ class AuditCodeCoverageTest {
 
     private fun scenarios(): List<Scenario> = listOf(
         // ── 열람 ──
-        execScenario(AuditCode.FORBIDDEN_READ, HttpStatus.FORBIDDEN, actor = "u2") { f ->
+        execScenario(AuditCode.FORBIDDEN_READ, HttpStatus.FORBIDDEN, bodyCode = "FORBIDDEN_READ", actor = "u2") { f ->
             // 남의 저장 쿼리 id로 실행 시도 — 열거 시도 자체가 감사 대상이다
             client.postAs("/api/queries/${f.approvedQueryId}/execute", "u2")
         },
 
         // ── 승인 ──
-        previewScenario(AuditCode.NO_REQUEST, HttpStatus.FORBIDDEN) {
+        previewScenario(AuditCode.NO_REQUEST, HttpStatus.FORBIDDEN, bodyCode = "NO_REQUEST") {
             preview("SELECT email FROM users", requestId = null)
         },
         previewScenario(AuditCode.NOT_APPROVED, HttpStatus.FORBIDDEN, bodyCode = "NOT_APPROVED") { f ->
@@ -215,14 +219,14 @@ class AuditCodeCoverageTest {
         execScenario(AuditCode.NOT_APPROVED, HttpStatus.FORBIDDEN, bodyCode = "NOT_APPROVED") { f ->
             client.postAs("/api/queries/${f.unapprovedQueryId}/execute", "u1")
         },
-        execScenario(AuditCode.REQUESTER_MISMATCH, HttpStatus.FORBIDDEN, actor = "ap1") { f ->
+        execScenario(AuditCode.REQUESTER_MISMATCH, HttpStatus.FORBIDDEN, bodyCode = "REQUESTER_MISMATCH", actor = "ap1") { f ->
             // STEWARD는 열람은 되지만 **대행 실행은 불가**(spec 008 결정 14)
             client.postAs("/api/queries/${f.approvedQueryId}/execute", "ap1")
         },
         previewScenario(AuditCode.TABLES_NOT_COVERED, HttpStatus.FORBIDDEN, bodyCode = "TABLES_NOT_COVERED") { f ->
             preview("SELECT id FROM marketing_consents", f.narrowRequestId)
         },
-        execScenario(AuditCode.NOT_REVIEWED, HttpStatus.FORBIDDEN) { f ->
+        execScenario(AuditCode.NOT_REVIEWED, HttpStatus.FORBIDDEN, bodyCode = "NOT_REVIEWED") { f ->
             client.postAs("/api/queries/${f.pendingReviewQueryId}/execute", "u1")
         },
 
@@ -239,34 +243,36 @@ class AuditCodeCoverageTest {
         },
 
         // ── 접수·판정 ──
-        previewScenario(AuditCode.PARSE_FAILED, HttpStatus.UNPROCESSABLE_ENTITY) { f ->
+        previewScenario(AuditCode.PARSE_FAILED, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "PARSE_FAILED") { f ->
             preview("SELEC email FROM users", f.approvedRequestId)
         },
-        previewScenario(AuditCode.RULE_BLOCKED, HttpStatus.UNPROCESSABLE_ENTITY) { f ->
+        previewScenario(AuditCode.RULE_BLOCKED, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "RULE_BLOCKED") { f ->
             preview("SELECT ssn FROM users", f.approvedRequestId)
         },
         // execute 경로의 **완전 재판정**: 저장·검토를 통과한 쿼리라도 지금 카탈로그로 다시 본다.
-        execScenario(AuditCode.RULE_BLOCKED, HttpStatus.UNPROCESSABLE_ENTITY) { f ->
+        execScenario(AuditCode.RULE_BLOCKED, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "RULE_BLOCKED") { f ->
             client.postAs("/api/queries/${f.relintQueryId}/execute", "u1")
         },
 
         // ── 실행 대상 매핑 ──
-        previewScenario(AuditCode.NO_DEMO_MAPPING, HttpStatus.FORBIDDEN) { f ->
+        previewScenario(AuditCode.NO_DEMO_MAPPING, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "NO_DEMO_MAPPING") { f ->
             preview("SELECT id FROM orphan_table", f.approvedRequestId)
         },
-        previewScenario(AuditCode.INVALID_PHYSICAL_NAME, HttpStatus.FORBIDDEN) { f ->
+        previewScenario(AuditCode.INVALID_PHYSICAL_NAME, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "INVALID_PHYSICAL_NAME") { f ->
             preview("SELECT id FROM bad_map_table", f.approvedRequestId)
         },
 
         // ── 재작성 ──
-        previewScenario(AuditCode.REWRITE_MASK_NOT_EXPRESSIBLE, HttpStatus.FORBIDDEN) { f ->
+        previewScenario(AuditCode.REWRITE_MASK_NOT_EXPRESSIBLE, HttpStatus.UNPROCESSABLE_ENTITY,
+            bodyCode = "REWRITE_MASK_NOT_EXPRESSIBLE") { f ->
             // 실측: `SELECT UPPER(email) FROM users`는 여기 오지 못한다 — 판정의 mask 룰이 같은
             // 기준(MaskUsage)으로 **먼저 BLOCK**한다(RuleImpls: "실행 단계에서 거부될 쿼리를 저장
             // 시점에 막는다"). 즉 이 코드는 판정과 재작성이 갈라질 때만 발화하는 2선 방어다.
             forcePlanRefusal(RewriteRefusal.MASK_NOT_EXPRESSIBLE)
             preview("SELECT email FROM users", f.approvedRequestId)
         },
-        previewScenario(AuditCode.REWRITE_OUTER_JOIN_FILTER, HttpStatus.FORBIDDEN) { f ->
+        previewScenario(AuditCode.REWRITE_OUTER_JOIN_FILTER, HttpStatus.UNPROCESSABLE_ENTITY,
+            bodyCode = "REWRITE_OUTER_JOIN_FILTER") { f ->
             // 주입이 LEFT JOIN을 INNER로 바꾸므로 fail-closed. 필수 술어를 **직접 써서** 판정을 통과시킨
             // 뒤에야 이 거부가 드러난다 — WHERE가 없으면 require-predicate(BLOCK)가 먼저 잡는다.
             preview(
@@ -275,19 +281,22 @@ class AuditCodeCoverageTest {
                 f.approvedRequestId,
             )
         },
-        previewScenario(AuditCode.REWRITE_EXPRESSION_NOT_USABLE, HttpStatus.FORBIDDEN) { f ->
+        previewScenario(AuditCode.REWRITE_EXPRESSION_NOT_USABLE, HttpStatus.UNPROCESSABLE_ENTITY,
+            bodyCode = "REWRITE_EXPRESSION_NOT_USABLE") { f ->
             // 강제식이 파싱되지 않는다 — 등록 검증을 우회해 들어온 행(마이그레이션·시드)을 가정한다
             preview("SELECT note FROM broken_mask_table", f.approvedRequestId)
         },
-        previewScenario(AuditCode.REWRITE_SCOPE_NOT_FOUND, HttpStatus.FORBIDDEN) { f ->
+        previewScenario(AuditCode.REWRITE_SCOPE_NOT_FOUND, HttpStatus.UNPROCESSABLE_ENTITY,
+            bodyCode = "REWRITE_SCOPE_NOT_FOUND") { f ->
             forceRewriteRefusal(RewriteRefusal.SCOPE_NOT_FOUND)
             preview("SELECT email FROM users", f.approvedRequestId)
         },
-        previewScenario(AuditCode.REWRITE_VERIFY_FAILED, HttpStatus.FORBIDDEN) { f ->
+        previewScenario(AuditCode.REWRITE_VERIFY_FAILED, HttpStatus.UNPROCESSABLE_ENTITY,
+            bodyCode = "REWRITE_VERIFY_FAILED") { f ->
             forceRewriteRefusal(RewriteRefusal.VERIFY_FAILED)
             preview("SELECT email FROM users", f.approvedRequestId)
         },
-        execScenario(AuditCode.REWRITE_NO_LIMIT, HttpStatus.FORBIDDEN) { f ->
+        execScenario(AuditCode.REWRITE_NO_LIMIT, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "REWRITE_NO_LIMIT") { f ->
             // 계획에 상한이 없으면 실행하지 않는다 — 상한 없는 반출을 허용하지 않는 fail-closed
             forcePlanWithoutLimit()
             client.postAs("/api/queries/${f.approvedQueryId}/execute", "u1")

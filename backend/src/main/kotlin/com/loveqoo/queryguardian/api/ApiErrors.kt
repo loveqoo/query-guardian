@@ -33,6 +33,16 @@ class ApiExceptionHandler {
         ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
             .body(mapOf("code" to e.kind.auditCode.name, "message" to e.kind.userMessage))
 
+    /**
+     * **게이트 차단 — 상태와 바디를 `GateStop`이 정한다** (spec 010 A2).
+     *
+     * 여기에 `when`이 없는 것이 핵심이다. 새 차단 사유를 추가해도 이 핸들러는 그대로이고,
+     * 응답 코드와 감사 코드는 같은 필드(`GateStop.code`)에서 나오므로 갈라질 자리가 없다.
+     */
+    @ExceptionHandler(com.loveqoo.queryguardian.query.GateStopException::class)
+    fun gateStopped(e: com.loveqoo.queryguardian.query.GateStopException): ResponseEntity<Any> =
+        ResponseEntity.status(e.stop.status).body(e.stop.body)
+
     @ExceptionHandler(BlockedException::class)
     fun blocked(e: BlockedException): ResponseEntity<LintReportDto> =
         ResponseEntity.unprocessableEntity().body(e.report)

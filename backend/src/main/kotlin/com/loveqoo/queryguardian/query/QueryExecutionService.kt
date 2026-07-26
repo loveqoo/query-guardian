@@ -169,7 +169,7 @@ class QueryExecutionService(
         // 파싱 성공인데 핸들이 없는 조합은 성립하지 않는다. 성립한다면 상류 버그이므로 fail-closed로 떨어뜨린다
         // — 예전에는 이 자리가 `inspected.statement!!`였다(50줄 위의 분기를 근거로 삼는 `!!`).
         val statement = inspected.statement ?: return stopped(
-            GateStop.Refused(AuditCode.PARSE_FAILED, "재작성 핸들을 얻지 못했습니다"),
+            GateStop.Unprocessable(AuditCode.PARSE_FAILED, "재작성 핸들을 얻지 못했습니다"),
         )
         return cleared(Parsed(request, inspected, ir, statement, approvalGate.physicalTables(ir)))
     }
@@ -208,28 +208,28 @@ class QueryExecutionService(
     private fun resolveMapping(judged: Judged): GateOutcome<Mapped> =
         when (val resolved = demoTables.resolve(judged.logicalTables)) {
             is DemoMapping.Resolved -> cleared(Mapped(judged, resolved.byLogical))
-            is DemoMapping.Incomplete -> stopped(GateStop.Refused(
+            is DemoMapping.Incomplete -> stopped(GateStop.Unprocessable(
                 AuditCode.NO_DEMO_MAPPING,
                 "실행 대상 매핑이 없는 테이블이 있습니다: ${resolved.unmapped.joinToString(", ")}",
             ))
-            is DemoMapping.Invalid -> stopped(GateStop.Refused(
+            is DemoMapping.Invalid -> stopped(GateStop.Unprocessable(
                 AuditCode.INVALID_PHYSICAL_NAME,
                 "실행 대상 테이블명이 식별자 규칙을 위반했습니다: ${resolved.badNames.joinToString(", ")}",
             ))
-            DemoMapping.Empty -> stopped(GateStop.Refused(AuditCode.NO_DEMO_MAPPING, "실행할 대상 테이블이 없습니다"))
+            DemoMapping.Empty -> stopped(GateStop.Unprocessable(AuditCode.NO_DEMO_MAPPING, "실행할 대상 테이블이 없습니다"))
         }
 
     private fun planRewrite(mapped: Mapped): GateOutcome<Planned> =
         when (val planned = planner.plan(mapped.ir, mapped.request.purposeCode, mapped.mapping)) {
             is PlanOutcome.Planned -> cleared(Planned(mapped, planned.plan))
-            is PlanOutcome.Refused -> stopped(GateStop.Refused(auditCodeOf(planned.refusal), planned.message))
+            is PlanOutcome.Refused -> stopped(GateStop.Unprocessable(auditCodeOf(planned.refusal), planned.message))
         }
 
     /** 재작성 + 자체 검증(§3.0.3). 검증 기대치는 계획이 아니라 **카탈로그**에서 재도출한다. */
     private fun rewriteAndVerify(planned: Planned): GateOutcome<Ready> =
         when (val outcome = rewriter.rewrite(planned.statement, planned.plan, planned.ir, maskedColumnsOf())) {
             is RewriteOutcome.Rewritten -> cleared(Ready(planned, outcome))
-            is RewriteOutcome.Refused -> stopped(GateStop.Refused(auditCodeOf(outcome.refusal), outcome.message))
+            is RewriteOutcome.Refused -> stopped(GateStop.Unprocessable(auditCodeOf(outcome.refusal), outcome.message))
         }
 
     // ---- 진입점 전용 단계 -------------------------------------------------
@@ -240,12 +240,12 @@ class QueryExecutionService(
      */
     private fun requireOwnExecution(query: SavedQuery, request: GateRequest): GateOutcome<GateRequest> {
         val approval = approvalGate.findRequest(query.requestId)
-            ?: return stopped(GateStop.Refused(AuditCode.NO_REQUEST, "근거 승인 요청을 찾을 수 없어 실행할 수 없습니다"))
+            ?: return stopped(GateStop.Denied(AuditCode.NO_REQUEST, "근거 승인 요청을 찾을 수 없어 실행할 수 없습니다"))
         if (approval.requester != request.actor) {
-            return stopped(GateStop.Refused(AuditCode.REQUESTER_MISMATCH, "본인이 요청·작성한 쿼리만 실행할 수 있습니다"))
+            return stopped(GateStop.Denied(AuditCode.REQUESTER_MISMATCH, "본인이 요청·작성한 쿼리만 실행할 수 있습니다"))
         }
         if (query.reviewStatus != ReviewStatus.APPROVED.name) {
-            return stopped(GateStop.Refused(
+            return stopped(GateStop.Denied(
                 AuditCode.NOT_REVIEWED, "검토 승인된 쿼리만 실행할 수 있습니다 (현재 ${query.reviewStatus})"))
         }
         return cleared(request)
@@ -257,7 +257,7 @@ class QueryExecutionService(
      */
     private fun injectPurpose(request: GateRequest): GateOutcome<GateRequest> {
         val approval = request.requestId?.let { approvalGate.findRequest(it) }
-            ?: return stopped(GateStop.Refused(AuditCode.NO_REQUEST, "승인된 요청을 선택해야 재작성을 미리 볼 수 있습니다"))
+            ?: return stopped(GateStop.Denied(AuditCode.NO_REQUEST, "승인된 요청을 선택해야 재작성을 미리 볼 수 있습니다"))
         return cleared(request.copy(purposeCode = approval.purposeCode))
     }
 
@@ -268,7 +268,7 @@ class QueryExecutionService(
     private fun runQuery(ready: Ready): GateOutcome<ExecutedQuery> {
         // 계획에 상한이 없으면 재작성이 LIMIT을 넣지 않았다는 뜻이다 — 상한 없는 실행은 허용하지 않는다(fail-closed)
         val cap = ready.plan.limitCap
-            ?: return stopped(GateStop.Refused(AuditCode.REWRITE_NO_LIMIT, "행 상한을 적용하지 못했습니다 — 실행할 수 없습니다"))
+            ?: return stopped(GateStop.Unprocessable(AuditCode.REWRITE_NO_LIMIT, "행 상한을 적용하지 못했습니다 — 실행할 수 없습니다"))
         return try {
             val result = executor.execute(ready.rewritten.sql, cap.maxRows, cap.governanceCap)
             cleared(ExecutedQuery(result, ready.rewritten.sql, ready.rewritten.applied))
@@ -331,11 +331,10 @@ class QueryExecutionService(
     private fun visibleOrRecord(queryId: Long, actor: String, privileged: Boolean): SavedQuery = try {
         queries.visible(queryId, actor, privileged)
     } catch (e: ForbiddenException) {
-        recordStop(
-            GateRequest(queryId, null, null, REDACTED_SQL, actor),
-            GateStop.Refused(AuditCode.FORBIDDEN_READ, e.message ?: "열람 권한이 없습니다"),
-        )
-        throw e
+        // 게이트의 결말이므로 게이트의 값으로 바꿔 든다 — 그래야 분류 코드가 응답에도 실린다.
+        val stop = GateStop.Denied(AuditCode.FORBIDDEN_READ, e.message ?: "열람 권한이 없습니다")
+        recordStop(GateRequest(queryId, null, null, REDACTED_SQL, actor), stop)
+        stop.raise()
     }
 
     // ---- 부속 ------------------------------------------------------------

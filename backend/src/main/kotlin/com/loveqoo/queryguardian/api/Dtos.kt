@@ -1,5 +1,7 @@
 package com.loveqoo.queryguardian.api
 
+import com.loveqoo.queryguardian.audit.AuditCode
+
 import com.loveqoo.queryguardian.rules.LintReport
 import com.loveqoo.queryguardian.rules.Severity
 import java.time.Instant
@@ -11,7 +13,15 @@ data class LintRequest(val dialect: String, val sql: String, val requestId: Long
 
 data class ViolationDto(val ruleId: String, val severity: Severity, val message: String)
 
-data class LintReportDto(val violations: List<ViolationDto>, val blocked: Boolean) {
+data class LintReportDto(
+    val violations: List<ViolationDto>,
+    val blocked: Boolean,
+    /**
+     * 게이트가 이 판정으로 차단했을 때의 분류 코드. 저장 게이트는 감사를 남기지 않으므로 null이다 —
+     * **응답 코드와 감사 코드의 출처가 하나**여야 하므로(spec 010 A2), 감사가 없으면 코드도 없다.
+     */
+    val code: AuditCode? = null,
+) {
     companion object {
         fun from(report: LintReport) = LintReportDto(
             violations = report.violations.map { ViolationDto(it.ruleId, it.severity, it.message) },

@@ -1,5 +1,6 @@
 package com.loveqoo.queryguardian.rules
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonSubTypes
 import com.fasterxml.jackson.annotation.JsonTypeInfo
 
@@ -46,16 +47,17 @@ data class RuleCondition(
     val subject: String? = null,
     val value: String? = null,
 ) : RuleNode {
-    /** 이번 스펙에서 실제 판정하는 op인가 (§4.2). must_be_*는 false → 트리·severity 집계에서 제외. */
     /**
      * 대상 테이블·컬럼 — **공백 문자열은 미지정으로 본다**.
      *
      * `""`를 값으로 취급하면 "그 컬럼은 어디에도 없다"가 되어 조건이 조용히 중립·충족으로 떨어진다(fail-open).
      * 손상된 조건은 판정 불가로 다뤄야 한다 (spec 001 §6 fail-closed).
      */
-    val targetTable: String? get() = table?.takeIf { it.isNotBlank() }
-    val targetColumn: String? get() = column?.takeIf { it.isNotBlank() }
+    @get:JsonIgnore val targetTable: String? get() = table?.takeIf { it.isNotBlank() }
 
-    val judged: Boolean get() =
+    @get:JsonIgnore val targetColumn: String? get() = column?.takeIf { it.isNotBlank() }
+
+    /** 실제 판정하는 op인가 (§4.2). `must_be_within`은 등록·표시만이므로 false → 트리·severity 집계에서 제외. */
+    @get:JsonIgnore val judged: Boolean get() =
         op == RuleOp.requires || op == RuleOp.blocks || op == RuleOp.joins || op == RuleOp.must_be_masked
 }

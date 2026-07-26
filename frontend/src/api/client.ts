@@ -295,8 +295,11 @@ export const ruleOpSchema = z.enum([
 export type RuleOp = z.infer<typeof ruleOpSchema>;
 
 /**
- * 조건 leaf (§3.1). `node:"cond"`으로 판별. `judged`는 백엔드가 계산해 함께 직렬화하는
- * 읽기 전용 플래그(requires/blocks/joins=true) — 저장 시엔 보내지 않는다.
+ * 조건 leaf (§3.1). `node:"cond"`으로 판별.
+ *
+ * `judged`는 **더 이상 백엔드가 보내지 않는다**(파생 값을 `tree_json`에 저장하면 원본과 어긋날 수 있고,
+ * 엄격 파서에서 규칙 전체가 손상으로 떨어진다 — 손상 규칙은 평가에서 제외되므로 fail-open이다).
+ * 화면은 이미 `isJudgedOp(op)`로 스스로 계산하므로 그대로 동작한다. 옛 응답 호환을 위해 optional로 남긴다.
  */
 export const ruleConditionSchema = z.object({
   node: z.literal("cond"),

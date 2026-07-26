@@ -17,8 +17,12 @@ data class LintReportDto(
     val violations: List<ViolationDto>,
     val blocked: Boolean,
     /**
-     * 게이트가 이 판정으로 차단했을 때의 분류 코드. 저장 게이트는 감사를 남기지 않으므로 null이다 —
-     * **응답 코드와 감사 코드의 출처가 하나**여야 하므로(spec 010 A2), 감사가 없으면 코드도 없다.
+     * 이 판정으로 차단됐을 때의 분류 코드. `GateStop.Violated`가 채우므로 **저장·실행 게이트 모두**
+     * 값을 싣는다 — 출처는 언제나 `GateStop.code` 하나다(spec 010 A2).
+     *
+     * null인 경우는 차단이 아닌 판정 결과다(lint 조회, 저장 성공 시 `lint_report_json`).
+     * (P1-C3 시점 주석은 "저장 게이트는 감사를 남기지 않으므로 null"이라 적었는데, C4가 저장 게이트를
+     * 같은 단계 단위로 옮기면서 사실이 아니게 됐다 — 적대 검토가 실측으로 잡았다.)
      */
     val code: AuditCode? = null,
 ) {

@@ -1,6 +1,7 @@
 package com.loveqoo.queryguardian.query
 
 import com.loveqoo.queryguardian.api.LintReportDto
+import com.loveqoo.queryguardian.exec.AuditTarget
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewriteOutcome
 import com.loveqoo.queryguardian.ir.RewritePlan
@@ -35,17 +36,6 @@ fun <T> cleared(value: T): GateOutcome<T> = GateOutcome.Cleared(value)
 /** 단계가 멈출 때. */
 fun stopped(stop: GateStop): GateOutcome<Nothing> = GateOutcome.Stopped(stop)
 
-/**
- * **감사 없이** 경계로 내보낸다 — 저장 게이트용.
- *
- * 저장은 실행이 아니라 `execution_event`를 남기지 않는다(감사의 대상은 실행 시도다). 실행 게이트는
- * 대신 기록 후 내보내는 자기 경계를 쓴다.
- */
-fun <T> GateOutcome<T>.orThrow(): T = when (this) {
-    is GateOutcome.Cleared -> value
-    is GateOutcome.Stopped -> stop.raise()
-}
-
 // ---- 게이트 상태 -----------------------------------------------------------
 
 /**
@@ -56,13 +46,15 @@ fun <T> GateOutcome<T>.orThrow(): T = when (this) {
  */
 data class GateRequest(
     /** 미리보기는 저장된 쿼리가 없어 null이다 — 감사의 `query_id`가 된다. */
-    val queryId: Long?,
+    override val queryId: Long?,
     val requestId: Long?,
     /** 클라이언트 입력이 아니라 **서버가 승인 요청에서 주입**한다(spec 005 C1). */
     val purposeCode: String?,
     val sql: String,
-    val actor: String,
-)
+    override val actor: String,
+) : AuditTarget {
+    override val sqlByteLength: Int get() = sql.toByteArray().size
+}
 
 /**
  * 단계가 진행되며 쌓이는 상태. 각 단계는 앞 단계를 **품고** 다음 사실을 더한다 — 마지막 단계가
@@ -94,14 +86,12 @@ data class Mapped(val judged: Judged, val mapping: Map<String, String>) {
 
 /** 재작성 계획이 섰다. */
 data class Planned(val mapped: Mapped, val plan: RewritePlan) {
-    val request: GateRequest get() = mapped.request
     val ir: QueryIR get() = mapped.ir
     val statement: ParsedStatement get() = mapped.judged.parsed.statement
 }
 
 /** 재작성과 자체 검증까지 끝났다 — 실행하거나 미리 보여줄 수 있다. */
 data class Ready(val planned: Planned, val rewritten: RewriteOutcome.Rewritten) {
-    val request: GateRequest get() = planned.request
     val plan: RewritePlan get() = planned.plan
     val report: LintReportDto get() = planned.mapped.judged.report
 }

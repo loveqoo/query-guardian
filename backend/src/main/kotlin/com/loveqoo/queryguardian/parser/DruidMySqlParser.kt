@@ -34,7 +34,6 @@ import com.alibaba.druid.sql.ast.statement.SQLSubqueryTableSource
 import com.alibaba.druid.sql.ast.statement.SQLTableSource
 import com.alibaba.druid.sql.ast.statement.SQLUnionQuery
 import com.alibaba.druid.sql.ast.statement.SQLUnionQueryTableSource
-import com.alibaba.druid.sql.ast.statement.SQLWithSubqueryClause
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.MySqlSelectQueryBlock
 import com.alibaba.druid.sql.dialect.mysql.visitor.MySqlASTVisitorAdapter
 import com.alibaba.druid.sql.visitor.SQLASTVisitorAdapter

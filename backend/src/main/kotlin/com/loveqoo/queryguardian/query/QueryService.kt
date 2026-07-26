@@ -2,7 +2,6 @@ package com.loveqoo.queryguardian.query
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
-import com.loveqoo.queryguardian.api.BlockedException
 import com.loveqoo.queryguardian.api.ConflictException
 import com.loveqoo.queryguardian.api.ForbiddenException
 import com.loveqoo.queryguardian.api.LintReportDto
@@ -12,14 +11,11 @@ import com.loveqoo.queryguardian.api.QuerySummaryDto
 import com.loveqoo.queryguardian.api.ReviewRequest
 import com.loveqoo.queryguardian.api.SaveQueryRequest
 import com.loveqoo.queryguardian.approval.ApprovalGate
-import com.loveqoo.queryguardian.auth.AccessControl
 import com.loveqoo.queryguardian.approval.ApprovalRequest
 import com.loveqoo.queryguardian.approval.Directory
 import com.loveqoo.queryguardian.approval.QueryReviewEvent
 import com.loveqoo.queryguardian.approval.QueryReviewEventRepository
 import com.loveqoo.queryguardian.lint.LintService
-import com.loveqoo.queryguardian.parser.DialectParser
-import com.loveqoo.queryguardian.parser.ParseResult
 import com.loveqoo.queryguardian.rules.RuleService
 import org.springframework.stereotype.Service
 import java.security.MessageDigest
@@ -194,10 +190,23 @@ class QueryService(
         // 걸린 것을 빼면 목적이 뒤집힌다. 그래서 통과·차단 양쪽에서 보고서를 꺼내 기록한다.
         steps.reportOf(outcome)?.let { recordRuleHits(it) }
 
-        val judged = outcome.orThrow()
+        val judged = outcome.orThrowWithoutAudit()
         // 승인 검사 — 요청 존재·승인·요청자·테이블 커버
         val approval = approvalGate.check(request.requestId, actor, judged.parsed.ir)
         return approval to judged.report
+    }
+
+    /**
+     * **감사 없이** 경계로 내보낸다 — 저장 게이트 전용이라 `private`이다.
+     *
+     * 저장은 실행이 아니므로 `execution_event`를 남기지 않는다(감사의 대상은 실행 시도다).
+     * 공개 확장으로 두었더니 실행 게이트에서 `orRaise(request)` 대신 이것을 쓸 수 있었고, 그러면
+     * **응답은 같은데 감사만 조용히 사라진다** — 이 저장소에서 실제로 일어났던 사고("403인데 감사 0건")의
+     * 정확한 형태다. 게다가 이름이 짧고 인자가 없어 더 싸 보였다. 이름과 가시성으로 그 길을 닫는다.
+     */
+    private fun <T> GateOutcome<T>.orThrowWithoutAudit(): T = when (this) {
+        is GateOutcome.Cleared -> value
+        is GateOutcome.Stopped -> stop.raise()
     }
 
     /** 규칙 hit 통계 (spec 004 §7 개정 — 권한 통과 후에만 기록). */

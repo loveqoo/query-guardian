@@ -18,8 +18,6 @@ fun QueryIR.toAsciiTree(): String {
     return root.render()
 }
 
-fun SelectScope.toAsciiTree(): String = Node("SelectScope").also { it.scope(this) }.render()
-
 // ---- 트리 모델 -------------------------------------------------------------
 
 /**

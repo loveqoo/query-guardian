@@ -179,15 +179,6 @@ class QueryExecutionService(
     }
 
     /**
-     * **반출이 없는 종결의 기록은 best-effort다** (spec 010 I5).
-     *
-     * 감사 저장이 실패해도 **원래 사유가 이긴다** — 감사 예외로 바꿔치면 "무엇이 막혔는지"를 잃고
-     * 403이 500이 된다. 대신 유실은 조용히 지나가지 않는다: 실패 자체가 경보 대상이다.
-     *
-     * 이 `runCatching`이 안전한 이유는 게이트가 **트랜잭션을 열지 않기 때문**이다(spec 010 I6).
-     * 감사의 `REQUIRES_NEW`가 롤백돼도 되돌릴 바깥 쓰기가 없다.
-     */
-    /**
      * **반출이 있는 종결은 기록이 반출의 선행 조건이다** (spec 010 I4).
      *
      * "누가 그 PII를 봤는가"를 남길 수 없으면 보여주지 않는 것이 이 제품의 통제 방식이다.
@@ -199,6 +190,21 @@ class QueryExecutionService(
         return value
     }
 
+    /**
+     * **반출이 없는 종결의 기록은 best-effort다** (spec 010 I5).
+     *
+     * 감사 저장이 실패해도 **원래 사유가 이긴다** — 감사 예외로 바꿔치면 "무엇이 막혔는지"를 잃고
+     * 403이 500이 된다. 대신 유실은 조용히 지나가지 않는다: 실패 자체가 경보 대상이다.
+     *
+     * 이 `runCatching`이 안전한 이유는 게이트가 **트랜잭션을 열지 않기 때문**이다(spec 010 I6).
+     * 감사의 `REQUIRES_NEW`가 롤백돼도 되돌릴 바깥 쓰기가 없다.
+     *
+     * **대가를 정직하게 적는다**: 차단 응답은 데이터 행을 담지 않지만 *아무것도* 안 내보내는 것은
+     * 아니다 — 룰 위반 보고서는 어떤 컬럼이 BLOCK인지를, 권한 차단은 거부된 테이블 목록을 담는다.
+     * 감사 DB가 죽은 동안 그것을 반복 조회하면 무기록 오라클이 된다. 그럼에도 best-effort인 이유는
+     * 반대쪽 대가가 더 크기 때문이다(차단이 500으로 바뀌면 무엇이 막혔는지 잃고, 그것이 곧 우회 신호가
+     * 된다). 그래서 유실 구간을 사후에 재구성할 수 있도록 경보에 대상 식별자를 함께 싣는다.
+     */
     private fun recordStop(request: GateRequest, stop: GateStop) {
         runCatching {
             audit.record(
@@ -206,7 +212,7 @@ class QueryExecutionService(
                 rewrittenSql = stop.rewritten?.sql, applied = stop.rewritten?.applied,
                 errorCode = stop.code, errorDetail = stop.detail,
             )
-        }.onFailure { audit.alertRecordFailure(it, stop.outcome, stop.code, request.actor) }
+        }.onFailure { audit.alertRecordFailure(it, stop.outcome, stop.code, request) }
     }
 
     /**

@@ -50,6 +50,13 @@ interface ExecutionEventRepository : CrudRepository<ExecutionEvent, Long> {
     ): List<ExecutionEvent>
 }
 
+/** 감사 유실 경보가 가리켜야 할 대상 — 누가 무엇을 시도하다 기록을 잃었는가. */
+interface AuditTarget {
+    val actor: String
+    val queryId: Long?
+    val sqlByteLength: Int
+}
+
 /**
  * 실행 감사 (spec 008 §6).
  *
@@ -102,6 +109,10 @@ class ExecutionAudit(
      * 무엇이 실패했는지 잃기 때문이다. 그러나 그 대가로 "기록이 없다"는 사실이 조용해진다.
      * 조용해지면 "감사가 있다"는 이 제품의 전제가 무너지므로, 유실은 반드시 소리를 내야 한다.
      *
+     * 대상 식별자(actor·queryId·SQL 바이트 수)를 함께 싣는다 — 없으면 "언젠가 무언가 유실됐다"만 남아
+     * 유실 구간을 사후에 재구성할 수 없다. **SQL 본문은 싣지 않는다**: 로그는 감사 테이블보다 접근
+     * 통제가 약하고, 본문을 남기려던 곳이 바로 지금 실패한 감사다.
+     *
      * 여기서는 ERROR 로그까지만 한다 — 실제 알림 채널(페이지·슬랙) 연결은 운영의 몫이고,
      * `AUDIT_WRITE_FAILED`가 그 훅으로 쓰라고 남긴 고정 문자열이다.
      *
@@ -109,10 +120,11 @@ class ExecutionAudit(
      * 열리므로, 이 클래스 안에서 [record]를 자기호출로 감싸면 그 격리가 조용히 사라진다.
      * 등급 판단(기록이 선행 조건인가 best-effort인가)은 **호출자 쪽에** 둔다.
      */
-    fun alertRecordFailure(cause: Throwable, outcome: ExecutionOutcome, code: AuditCode?, actor: String) {
+    fun alertRecordFailure(cause: Throwable, outcome: ExecutionOutcome, code: AuditCode?, target: AuditTarget) {
         log.error(
-            "AUDIT_WRITE_FAILED outcome={} code={} actor={} — 감사 기록이 유실됐다(원래 사유는 응답에 보존됨)",
-            outcome, code, actor, cause,
+            "AUDIT_WRITE_FAILED outcome={} code={} actor={} queryId={} sqlBytes={} — " +
+                "감사 기록이 유실됐다(원래 사유는 응답에 보존됨)",
+            outcome, code, target.actor, target.queryId, target.sqlByteLength, cause,
         )
     }
 

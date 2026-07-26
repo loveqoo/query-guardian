@@ -6,7 +6,6 @@ import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.parser.DruidMySqlParser
 import com.loveqoo.queryguardian.parser.ParseResult
 import com.loveqoo.queryguardian.rules.InMemoryTableCatalog
-import com.loveqoo.queryguardian.rules.LintContext
 import com.loveqoo.queryguardian.rules.RuleCondition
 import com.loveqoo.queryguardian.rules.RuleEngine
 import com.loveqoo.queryguardian.rules.RuleGroup

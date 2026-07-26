@@ -31,12 +31,16 @@ import kotlin.test.assertTrue
 class ExceptionBoundaryTest {
 
     /**
-     * 예외 취급으로 세는 문법. `fold`·`getOrElse`는 `Result`에 쓰이면 예외 취급이지만 컬렉션에도 있다 —
+     * 예외 취급으로 세는 문법. **`throw`가 들어 있는 것이 핵심이다** — I7은 "만들지도 잡지도 않는다"인데
+     * 처음에는 `catch` 쪽만 봤다. 정작 이 저장소에서 사고를 낸 것은 *만든* 쪽이다(예외가 게이트를 그대로
+     * 빠져나가 "403인데 감사 0건"). 잡는 것만 세면 불변식의 절반만 지킨다.
+     *
+     * 나머지 — `fold`·`getOrElse`는 `Result`에 쓰이면 예외 취급이지만 컬렉션에도 있다 —
      * 오탐 가능성을 알면서 넣는다. `query` 패키지에서 컬렉션 fold가 필요하면 그때 이 결정을 다시 본다
      * (오탐은 눈에 띄고, 누락은 안 띈다).
      */
     private val exceptionSyntax = Regex(
-        """\btry\s*\{|\bcatch\s*\(|\brunCatching\b|\brecoverCatching\b|\bgetOrElse\b|\.fold\(""",
+        """\btry\s*\{|\bcatch\s*\(|\bthrow\b|\brunCatching\b|\brecoverCatching\b|\bgetOrElse\b|\.fold\(""",
     )
 
     private val functionDecl = Regex(
@@ -49,6 +53,10 @@ class ExceptionBoundaryTest {
      * 바꾸는" 한 가지 일만 한다.
      */
     private val allowedBoundaries = mapOf(
+        "GateStop.raise" to "GateStop → 예외로의 유일한 번역점. 경계(orRaise/orThrowWithoutAudit)에서만 불린다",
+        "QueryService.visible" to "열람 스코프 — 게이트 진입 전 조회 계약(ForbiddenException)",
+        "QueryService.update" to "소유권·request_id 교체 거부 — 저장 계약(게이트 아님)",
+        "QueryService.review" to "검토 결정의 사전조건 — 저장 계약(게이트 아님)",
         "GateSteps.checkAccess" to "AccessControl이 던지는 권한 차단을 값으로",
         "GateSteps.checkApproval" to "ApprovalGate가 던지는 승인 차단을 값으로",
         "QueryExecutionService.requireOwnExecution" to "ApprovalGate.requireOwned가 던지는 소유권 차단을 값으로",

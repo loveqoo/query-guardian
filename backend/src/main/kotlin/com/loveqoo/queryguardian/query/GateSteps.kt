@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component
  * ArchUnit `irIsTheSharedVocabulary`가 `ir → audit` 의존을 금지한다. 번역이 게이트 쪽에 오는 것은
  * 그 경계 결정이 치르는 값이다.)
  */
-internal fun auditCodeOf(refusal: RewriteRefusal): AuditCode = when (refusal) {
+private fun auditCodeOf(refusal: RewriteRefusal): AuditCode = when (refusal) {
     RewriteRefusal.MASK_NOT_EXPRESSIBLE -> AuditCode.REWRITE_MASK_NOT_EXPRESSIBLE
     RewriteRefusal.OUTER_JOIN_FILTER -> AuditCode.REWRITE_OUTER_JOIN_FILTER
     RewriteRefusal.EXPRESSION_NOT_USABLE -> AuditCode.REWRITE_EXPRESSION_NOT_USABLE
@@ -137,8 +137,6 @@ class GateSteps(
             is RewriteOutcome.Rewritten -> cleared(Ready(planned, outcome))
             is RewriteOutcome.Refused -> stopped(GateStop.Unprocessable(auditCodeOf(outcome.refusal), outcome.message))
         }
-
-
 
     /**
      * 차단됐든 통과했든 **판정 보고서**를 꺼낸다.

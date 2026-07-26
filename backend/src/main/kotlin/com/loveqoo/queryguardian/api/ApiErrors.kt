@@ -5,9 +5,6 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 
-/** 게이트 차단: 저장 요청이 BLOCK 위반에 걸렸다. 422 + 위반 목록으로 응답한다 (spec §8). */
-class BlockedException(val report: LintReportDto) : RuntimeException("query blocked")
-
 class NotFoundException(message: String) : RuntimeException(message)
 
 /** 미인증 → 401 (spec 007 §4). 프론트 부트스트랩의 정상 흐름이기도 하다. */
@@ -42,10 +39,6 @@ class ApiExceptionHandler {
     @ExceptionHandler(com.loveqoo.queryguardian.query.GateStopException::class)
     fun gateStopped(e: com.loveqoo.queryguardian.query.GateStopException): ResponseEntity<Any> =
         ResponseEntity.status(e.stop.status).body(e.stop.body)
-
-    @ExceptionHandler(BlockedException::class)
-    fun blocked(e: BlockedException): ResponseEntity<LintReportDto> =
-        ResponseEntity.unprocessableEntity().body(e.report)
 
     @ExceptionHandler(IllegalArgumentException::class)
     fun badRequest(e: IllegalArgumentException): ResponseEntity<ErrorResponse> =

@@ -593,18 +593,20 @@ class DruidMySqlParser(
         }
         block.orderBy?.items?.forEach { collectOutputRef(it.expr) }
 
-        // 컬럼 참조 수집 (spec 002 §5.1) — BLOCK 판정의 근거. 술어 모델과 독립적으로 전 절을 훑는다.
+        // 컬럼 참조 수집 (spec 002 §5.1) — BLOCK 판정의 근거.
+        //
+        // **절을 나열하지 않는다.** 예전에는 여섯 절(select·where·groupBy·having·orderBy·on)을 손으로 적어
+        // 그것만 훑었고, 목록 밖 문법이 컬럼을 참조하면 그 참조는 IR에서 **소리 없이 사라졌다**. 실측으로
+        // 셋이 뚫려 있었다 — `JOIN ... USING (col)` · `NATURAL JOIN`(암묵 조인 키) · `WINDOW w AS (...)`.
+        // 특히 named window는 `ORDER BY ssn`(차단 대상)을 순위 **값으로** 돌려주어 원래 막던 것보다 더 샜다.
+        //
+        // 열거는 **빠뜨리는 쪽으로** 실패하고, 그 실패는 조용하다. 그래서 기본값을 뒤집는다:
+        // **블록 전체를 훑고, 따로 검사되는 것만 뺀다.** 새 문법이 생겨도 기본이 "수집됨"이다.
+        // 빼는 것은 둘뿐이며 이유가 각각 명확하다:
+        //   ⑴ FROM의 테이블 **이름** — 컬럼 참조가 아니다(넣으면 테이블명이 컬럼으로 잡혀 오차단이 된다)
+        //   ⑵ 하위 **서브쿼리** — 별도 스코프로 수집되어 거기서 판정된다(여기서 훑으면 중복이고 귀속도 틀린다)
         val columnRefs = mutableListOf<ColumnRef>()
-        val refExprs = mutableListOf<SQLExpr>()
-        block.selectList.forEach { refExprs += it.expr }
-        block.where?.let { refExprs += it }
-        block.groupBy?.let { groupBy ->
-            refExprs += groupBy.items.filterIsInstance<SQLExpr>()
-            groupBy.having?.let { refExprs += it }
-        }
-        block.orderBy?.items?.forEach { refExprs += it.expr }
-        refExprs += allOnExprs
-        refExprs.forEach { collectColumnRefs(it, resolver, columnRefs) }
+        collectColumnRefs(block, resolver, columnRefs)
 
         // ORDER BY·GROUP BY·HAVING 안의 서브쿼리도 **스코프**다. 여기서 수집하지 않으면 그 안의 테이블·컬럼이
         // IR에서 완전히 사라져 권한·BLOCK·마스킹·매핑 허용목록이 **전부 무발화**한다 —
@@ -633,8 +635,17 @@ class DruidMySqlParser(
      * 표현식 안의 모든 컬럼 참조를 수집한다 — 함수 인자·CASE·Between/In 피연산자 포함.
      * 서브쿼리 경계에서 멈춘다(자식 스코프가 자체 수집). star는 no-select-star 담당이라 제외.
      */
-    private fun collectColumnRefs(expr: SQLExpr, resolver: AliasResolver, into: MutableList<ColumnRef>) {
-        expr.accept(object : SQLASTVisitorAdapter() {
+    /**
+     * 컬럼 참조 수집. [node]는 표현식 하나일 수도, **쿼리 블록 전체**일 수도 있다 —
+     * 블록을 넘기면 절을 나열하지 않고 전부 훑는다(§6.5 "모든 식별자는 IR에 들어가기 전에 통과").
+     *
+     * 멈추는 곳은 셋뿐이고 각각 이유가 다르다:
+     * - **테이블 이름**([SQLExprTableSource]): 컬럼이 아니다. 훑으면 `FROM users`의 `users`가 컬럼으로 잡힌다.
+     * - **서브쿼리**: 별도 스코프에서 판정된다. 여기서 훑으면 바깥 별칭 해석기로 귀속돼 **틀린 테이블**에 붙는다.
+     * - **`NATURAL JOIN`**: 조인 키가 문법에 없다 — 무엇인지 알 수 없으므로 [buildFromSelect]가 검증 불가로 거부한다.
+     */
+    private fun collectColumnRefs(node: SQLObject, resolver: AliasResolver, into: MutableList<ColumnRef>) {
+        node.accept(object : SQLASTVisitorAdapter() {
             override fun visit(x: SQLIdentifierExpr): Boolean {
                 into += ColumnRef(resolver.resolveUnqualifiedRef(), norm(x.name))
                 return false
@@ -656,6 +667,28 @@ class DruidMySqlParser(
 
             override fun visit(x: SQLQueryExpr): Boolean = false
             override fun visit(x: SQLExistsExpr): Boolean = false
+
+            /** 하위 스코프 — 파생 테이블·CTE·UNION 팔은 각자 [buildFromSelect]에서 판정된다. */
+            override fun visit(x: SQLSelect): Boolean = false
+            override fun visit(x: SQLUnionQuery): Boolean = false
+
+            /**
+             * FROM의 테이블 **이름**은 컬럼이 아니다. 다만 조인은 이름 말고도 볼 것이 있어
+             * 여기서 직접 갈라 준다 — `ON`은 이 스코프의 조건이고, **`USING (col)`은 조인 키다**.
+             *
+             * `USING`의 컬럼은 어느 쪽 테이블 것인지 문법이 말하지 않으므로 **귀속 없이**(table = null)
+             * 넣는다. 그러면 §6.4의 fail-closed가 받는다 — 스코프의 물리 테이블 중 동명 차단 컬럼이
+             * 있으면 차단된다. 추측해서 한쪽에 붙이는 것보다 안전하다.
+             */
+            override fun visit(x: SQLJoinTableSource): Boolean {
+                x.condition?.let { collectColumnRefs(it, resolver, into) }
+                x.using?.forEach { into += ColumnRef(null, norm(it.toString())) }
+                x.left?.accept(this)
+                x.right?.accept(this)
+                return false
+            }
+
+            override fun visit(x: SQLExprTableSource): Boolean = false
         })
     }
 
@@ -691,6 +724,11 @@ class DruidMySqlParser(
                 }
             }
             is SQLJoinTableSource -> {
+                // **NATURAL JOIN은 조인 키가 문법에 없다.** 양쪽의 동명 컬럼 전부가 키인데, 그것이 무엇인지는
+                // 스키마를 봐야 안다. 추측해서 수집하면 빠뜨린 컬럼이 조용히 검사 밖으로 나가므로
+                // (실측: `users a NATURAL JOIN users b`가 차단 컬럼 `ssn`으로 조인하면서 통과했다)
+                // **검증 불가로 거부한다.** 카탈로그를 파서에 끌어들이는 대신 거부를 택한 것이다.
+                if (source.isNatural) unsupported += "NATURAL JOIN"
                 collectTables(source.left, tables, derived, unions, unsupported, innerOnExprs, outerOnExprs, allOnExprs, nullProducing, isCte)
                 collectTables(source.right, tables, derived, unions, unsupported, innerOnExprs, outerOnExprs, allOnExprs, nullProducing, isCte)
                 // OUTER JOIN의 보존되지 않는 쪽은 null이 생성된다 → 그 인스턴스에 WHERE 술어를 주입하면

@@ -64,6 +64,14 @@ sealed interface ParseResult {
 
 enum class FailureKind {
     SYNTAX_ERROR,
+
+    /**
+     * 재귀가 감당 범위를 넘었다 — 문법 오류가 아니다.
+     *
+     * 예전에는 `StackOverflowError`가 `SYNTAX_ERROR`로 기록됐다. 감사에서 **오타와 공격을 구분할 수 없다**는
+     * 뜻이고, 폭주 입력을 던지는 사람과 괄호를 잘못 닫은 사람이 같은 줄로 남는다.
+     */
+    TOO_COMPLEX,
     MULTI_STATEMENT,
     NOT_SELECT,
     INPUT_TOO_LARGE,

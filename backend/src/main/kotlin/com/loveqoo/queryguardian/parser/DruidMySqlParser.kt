@@ -56,6 +56,16 @@ import java.util.concurrent.TimeoutException
 class DruidMySqlParser(
     private val maxSqlBytes: Int = 64 * 1024,
     private val parseTimeoutMillis: Long = 2_000,
+    /**
+     * 파싱 재귀 깊이 상한. **정상 쿼리가 필요로 하는 만큼**으로 잡는다 — 실측상 실제 쿼리의 깊이는 2다.
+     * 스택이 견디는 만큼(약 20,000, 환경 의존)으로 잡으면 계수기가 세기 전에 스택이 먼저 터진다.
+     */
+    private val maxParseDepth: Int = 100,
+    /**
+     * 연속 덧셈·뺄셈 연산자 개수 상한. Druid의 `additiveRest`가 자기 재귀인데 `final`이라 어댑터를
+     * 끼울 수 없어, 그 고리만 파싱 **전에** 텍스트로 막는다. 실측: 5,000항은 통과하고 30,000항에서 터진다.
+     */
+    private val maxAdditiveRun: Int = 1_000,
 ) : DialectParser {
 
     override val dialect = Dialect.MYSQL
@@ -144,8 +154,20 @@ class DruidMySqlParser(
                 lexical,
             )
         }
+        // 봉인된 재귀 고리 하나(산술 좌결합)는 어댑터로 못 막으므로 여기서 텍스트로 막는다.
+        val additiveRun = scan.withoutLiterals.count { it == '+' || it == '-' }
+        if (additiveRun > maxAdditiveRun) {
+            return InspectResult(
+                ParseResult.Failure(
+                    FailureKind.TOO_COMPLEX,
+                    "덧셈·뺄셈 연산자가 너무 많습니다 (${additiveRun}개, 상한 $maxAdditiveRun)",
+                ),
+                lexical,
+            )
+        }
+
         val future = executor.submit<List<com.alibaba.druid.sql.ast.SQLStatement>> {
-            SQLUtils.parseStatements(sql, DbType.mysql)
+            BoundedMySqlParser(sql, maxParseDepth).parseAll()
         }
         val statements = try {
             future.get(parseTimeoutMillis, TimeUnit.MILLISECONDS)
@@ -156,10 +178,18 @@ class DruidMySqlParser(
                 lexical,
             )
         } catch (e: Exception) {
-            return InspectResult(
-                ParseResult.Failure(FailureKind.SYNTAX_ERROR, "문법 오류: ${e.cause?.message ?: e.message}"),
-                lexical,
-            )
+            // 재귀 폭주는 문법 오류가 아니다 — 제 이름으로 기록해야 사후에 오타와 공격을 가른다.
+            // 두 모양을 다 받는다: 우리 상한(ParseTooDeep)과, 어댑터가 못 막은 고리의 StackOverflowError.
+            val cause = e.cause
+            val kind = when {
+                cause is ParseTooDeep || cause is StackOverflowError -> FailureKind.TOO_COMPLEX
+                else -> FailureKind.SYNTAX_ERROR
+            }
+            val message = when (kind) {
+                FailureKind.TOO_COMPLEX -> (cause as? ParseTooDeep)?.message ?: "쿼리 중첩이 너무 깊습니다"
+                else -> "문법 오류: ${cause?.message ?: e.message}"
+            }
+            return InspectResult(ParseResult.Failure(kind, message), lexical)
         }
 
         if (statements.size != 1) {

@@ -75,12 +75,13 @@ data class GateRequest(
  */
 data class Parsed(
     val request: GateRequest,
-    val inspected: InspectResult,
-    val ir: QueryIR,
-    /** 파싱 성공과 **한 타입 안에서** 묶인다 — `inspected.statement!!`가 여기서 사라진다. */
-    val statement: ParsedStatement,
+    /** 파싱 성공 갈래이므로 IR과 핸들이 **여기 안에서** non-null이다 — `inspected.statement!!`가 사라진 자리. */
+    val inspected: InspectResult.Parsed,
     val logicalTables: Set<String>,
-)
+) {
+    val ir: QueryIR get() = inspected.ir
+    val statement: ParsedStatement get() = inspected.statement
+}
 
 /** 권한·승인 재검사와 접수·룰 재판정을 통과했다. */
 data class Judged(val parsed: Parsed, val report: LintReportDto) {

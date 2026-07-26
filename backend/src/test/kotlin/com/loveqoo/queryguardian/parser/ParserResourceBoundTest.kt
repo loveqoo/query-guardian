@@ -62,9 +62,9 @@ class ParserResourceBoundTest {
                 "[$label] 파서가 값이 아니라 ${result.exceptionOrNull()?.let { it::class.simpleName }}를 던졌다 — " +
                     "게이트는 잡을 자리가 없어 무기록 500이 된다",
             )
-            val parsed = result.getOrThrow().parse
+            val inspected = result.getOrThrow()
             assertTrue(
-                parsed !is ParseResult.Failure || parsed.kind != FailureKind.INPUT_TOO_LARGE,
+                inspected !is InspectResult.Unparsed || inspected.failure.kind != FailureKind.INPUT_TOO_LARGE,
                 "[$label] 바이트 상한에 먼저 걸려 재귀를 타지 않았다 — 이 사례는 아무것도 증명하지 못한다",
             )
         }
@@ -106,7 +106,7 @@ class ParserResourceBoundTest {
     fun `리터럴 안의 연산자는 상한에 세지 않는다`() {
         val sql = "SELECT id FROM t WHERE note = '" + "+".repeat(200) + " AND ".repeat(200) + "'"
         val result = tight.inspect(sql)
-        assertTrue(result.parse is ParseResult.Success, "리터럴을 세어 오차단했다: ${result.parse}")
+        assertTrue(result is InspectResult.Parsed, "리터럴을 세어 오차단했다: $result")
     }
 
     // ---- 오차단이 없다 -----------------------------------------------------
@@ -122,7 +122,7 @@ class ParserResourceBoundTest {
         )
         for (sql in queries) {
             val result = parser.inspect(sql)
-            assertTrue(result.parse is ParseResult.Success, "정상 쿼리가 막혔다: $sql\n  ${result.parse}")
+            assertTrue(result is InspectResult.Parsed, "정상 쿼리가 막혔다: $sql\n  $result")
         }
     }
 
@@ -168,12 +168,12 @@ class ParserResourceBoundTest {
         }
         // 공격 **직후** 정상 요청이 통과해야 한다 — worker가 물려 있으면 여기서 드러난다.
         val normal = parser.inspect("SELECT u.id FROM users u WHERE u.id > 1 LIMIT 10")
-        assertTrue(normal.parse is ParseResult.Success, "공격 뒤 정상 쿼리가 막혔다: ${normal.parse}")
+        assertTrue(normal is InspectResult.Parsed, "공격 뒤 정상 쿼리가 막혔다: $normal")
     }
 
     private fun failureOf(p: DialectParser, sql: String): ParseResult.Failure {
-        val parsed = p.inspect(sql).parse
-        assertTrue(parsed is ParseResult.Failure, "실패해야 하는데 통과했다: ${sql.take(60)}…")
-        return parsed
+        val inspected = p.inspect(sql)
+        assertTrue(inspected is InspectResult.Unparsed, "실패해야 하는데 통과했다: ${sql.take(60)}…")
+        return inspected.failure
     }
 }

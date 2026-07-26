@@ -35,14 +35,32 @@ interface DialectParser {
 /**
  * [DialectParser.inspect] 결과 — 같은 파싱에서 나온 판정 입력과 형태 검사 결과, 그리고 그 파싱의 핸들.
  *
- * [statement]는 파싱 성공 시에만 있다. 재작성(M1)은 이 핸들을 통해 **판정에 쓰인 그 AST**를 고친다 —
+ * **합 타입인 이유**(spec 010 A4): 예전에는 `parse: ParseResult` 옆에 `statement: ParsedStatement?`가
+ * 나란히 놓인 곱 타입이었고, "성공이면 핸들이 있다"는 상관관계가 **KDoc 산문**으로만 적혀 있었다.
+ * 그래서 호출부에 `inspected.statement!!`가 생겼고 — 50줄 위의 `when` 분기를 근거로 삼는 `!!`였다 —
+ * `parse=Success ∧ statement=null`이라는 성립하지 않는 조합이 여전히 표현 가능했다.
+ *
+ * 이제 그 조합은 **만들 수 없다**. 재작성(M1)은 [Parsed.statement]로 **판정에 쓰인 그 AST**를 고친다 —
  * 재파싱하면 판정 대상과 실행 대상이 갈라진다(spec 008 §2.5-1).
+ *
+ * 접수 위반은 두 갈래에 **모두** 있다: 주석·문형 검사는 어휘 층이라 파싱 성공 여부와 무관하게 나온다.
  */
-data class InspectResult(
-    val parse: ParseResult,
-    val intakeViolations: List<IntakeViolation>,
-    val statement: ParsedStatement? = null,
-)
+sealed interface InspectResult {
+    val intakeViolations: List<IntakeViolation>
+
+    /** 파싱 성공 — IR과 그 파싱의 핸들이 **함께** 있다. 둘 중 하나만 있는 상태는 없다. */
+    data class Parsed(
+        val ir: QueryIR,
+        val statement: ParsedStatement,
+        override val intakeViolations: List<IntakeViolation>,
+    ) : InspectResult
+
+    /** 파싱 실패 — 고칠 AST가 없으므로 핸들도 없다. */
+    data class Unparsed(
+        val failure: ParseResult.Failure,
+        override val intakeViolations: List<IntakeViolation>,
+    ) : InspectResult
+}
 
 /**
  * 파싱 1회의 **불투명 핸들** (spec 008 결정 13). 방언 AST 타입을 밖으로 노출하지 않으면서

@@ -27,8 +27,8 @@ class SqlRewriterTest {
     private val rewriter = SqlRewriter(parser)
 
     private fun inspect(sql: String): Pair<QueryIR, ParsedStatement> {
-        val result = parser.inspect(sql)
-        return (result.parse as ParseResult.Success).ir to result.statement!!
+        val result = parser.inspect(sql) as InspectResult.Parsed
+        return result.ir to result.statement
     }
 
     private fun scopes(scope: SelectScope): List<SelectScope> =

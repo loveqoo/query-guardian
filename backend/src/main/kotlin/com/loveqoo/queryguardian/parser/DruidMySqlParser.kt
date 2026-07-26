@@ -150,8 +150,15 @@ class DruidMySqlParser(
         executor.shutdownNow()
     }
 
-    /** 기존 호출자 유지 — 파싱과 접수 검사는 [inspect]에서 **한 번의 파싱으로** 함께 나온다. */
-    override fun parse(sql: String): ParseResult = inspect(sql).parse
+    /** IR만 필요한 호출자용(판정 미리보기·룰 편집기) — 게이트는 [inspect]를 쓴다. */
+    override fun parse(sql: String): ParseResult = when (val result = inspect(sql)) {
+        is InspectResult.Parsed -> ParseResult.Success(result.ir)
+        is InspectResult.Unparsed -> result.failure
+    }
+
+    /** 실패 갈래를 만드는 자리가 일곱 곳이라 모양을 하나로 둔다. */
+    private fun unparsed(kind: FailureKind, message: String, intake: List<IntakeViolation>) =
+        InspectResult.Unparsed(ParseResult.Failure(kind, message), intake)
 
     /**
      * 단독 호출용 접수 검사. 파싱 실패·비-SELECT는 "검사 불가"이므로 [IntakeCode.UNVERIFIABLE]을 얹는다 —
@@ -159,10 +166,10 @@ class DruidMySqlParser(
      */
     override fun checkIntake(sql: String): List<IntakeViolation> {
         val result = inspect(sql)
-        val failure = result.parse as? ParseResult.Failure ?: return result.intakeViolations
+        if (result !is InspectResult.Unparsed) return result.intakeViolations
         return result.intakeViolations + IntakeViolation(
             IntakeCode.UNVERIFIABLE,
-            "형태를 검사할 수 없습니다: ${failure.message}",
+            "형태를 검사할 수 없습니다: ${result.failure.message}",
         )
     }
 
@@ -190,19 +197,14 @@ class DruidMySqlParser(
         }
 
         if (sql.toByteArray(Charsets.UTF_8).size > maxSqlBytes) {
-            return InspectResult(
-                ParseResult.Failure(FailureKind.INPUT_TOO_LARGE, "SQL이 최대 크기(${maxSqlBytes}B)를 초과했습니다"),
-                lexical,
-            )
+            return unparsed(FailureKind.INPUT_TOO_LARGE, "SQL이 최대 크기(${maxSqlBytes}B)를 초과했습니다", lexical)
         }
         // 평면 이진 연쇄는 어댑터의 깊이 계수기 밖이다(Druid가 반복으로 파싱한다). 텍스트로 막는다.
         val chain = binaryOperatorCount(scan.withoutLiterals)
         if (chain > maxOperatorChain) {
-            return InspectResult(
-                ParseResult.Failure(
-                    FailureKind.TOO_COMPLEX,
-                    "이진 연산자가 너무 많습니다 (${chain}개, 상한 $maxOperatorChain)",
-                ),
+            return unparsed(
+                FailureKind.TOO_COMPLEX,
+                "이진 연산자가 너무 많습니다 (${chain}개, 상한 $maxOperatorChain)",
                 lexical,
             )
         }
@@ -213,10 +215,7 @@ class DruidMySqlParser(
             }
         } catch (e: RejectedExecutionException) {
             // 포화도 값이다 — 예외로 나가면 무기록 500이 된다.
-            return InspectResult(
-                ParseResult.Failure(FailureKind.OVERLOADED, "파싱 요청이 몰려 처리할 수 없습니다"),
-                lexical,
-            )
+            return unparsed(FailureKind.OVERLOADED, "파싱 요청이 몰려 처리할 수 없습니다", lexical)
         }
         val statements = try {
             future.get(parseTimeoutMillis, TimeUnit.MILLISECONDS)
@@ -226,10 +225,7 @@ class DruidMySqlParser(
             // 막아 준다는 뜻으로 읽혔는데 사실이 아니었다. 잔존 작업을 실제로 막는 것은 어댑터·연쇄 상한이
             // 입력을 유계로 만든 것이고, 이 호출은 풀에 "이 작업은 버려졌다"를 알리는 것까지다.
             future.cancel(true)
-            return InspectResult(
-                ParseResult.Failure(FailureKind.TIMEOUT, "파싱이 ${parseTimeoutMillis}ms 안에 끝나지 않았습니다"),
-                lexical,
-            )
+            return unparsed(FailureKind.TIMEOUT, "파싱이 ${parseTimeoutMillis}ms 안에 끝나지 않았습니다", lexical)
         } catch (e: Exception) {
             // 재귀 폭주는 문법 오류가 아니다 — 제 이름으로 기록해야 사후에 오타와 공격을 가른다.
             // 두 모양을 다 받는다: 우리 상한(ParseTooDeep)과, 어댑터가 못 막은 고리의 StackOverflowError.
@@ -242,24 +238,25 @@ class DruidMySqlParser(
                 FailureKind.TOO_COMPLEX -> (cause as? ParseTooDeep)?.message ?: "쿼리 중첩이 너무 깊습니다"
                 else -> "문법 오류: ${cause?.message ?: e.message}"
             }
-            return InspectResult(ParseResult.Failure(kind, message), lexical)
+            return unparsed(kind, message, lexical)
         }
 
         if (statements.size != 1) {
-            return InspectResult(
-                ParseResult.Failure(FailureKind.MULTI_STATEMENT, "문은 정확히 1개여야 합니다 (${statements.size}개 제출됨)"),
+            return unparsed(
+                FailureKind.MULTI_STATEMENT,
+                "문은 정확히 1개여야 합니다 (${statements.size}개 제출됨)",
                 lexical,
             )
         }
         val statement = statements[0] as? SQLSelectStatement
-            ?: return InspectResult(ParseResult.Failure(FailureKind.NOT_SELECT, "SELECT 문만 저장할 수 있습니다"), lexical)
+            ?: return unparsed(FailureKind.NOT_SELECT, "SELECT 문만 저장할 수 있습니다", lexical)
 
         val registry = ScopeRegistry(parseCounter.incrementAndGet())
         val root = buildFromSelect(statement.select, ScopeKind.ROOT, parentResolver = null, registry = registry, injectable = true)
-        return InspectResult(
-            ParseResult.Success(QueryIR(root, sql)),
-            lexical + astIntakeChecks(statement, root),
+        return InspectResult.Parsed(
+            QueryIR(root, sql),
             DruidParsedStatement(statement, registry.nodes.toMap()),
+            lexical + astIntakeChecks(statement, root),
         )
     }
 

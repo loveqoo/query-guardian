@@ -88,7 +88,7 @@ class ScopeCoverageTest {
         val gaps = mutableListOf<String>()
         for ((label, sql) in corpus) {
             val result = parser.inspect(sql)
-            val handle = result.statement as? DruidMySqlParser.DruidParsedStatement
+            val handle = (result as? InspectResult.Parsed)?.statement as? DruidMySqlParser.DruidParsedStatement
             if (handle == null) {
                 gaps += "$label: 핸들이 없다 (파싱 실패) — $sql"
                 continue

@@ -2,7 +2,6 @@ package com.loveqoo.queryguardian.lint
 
 import com.loveqoo.queryguardian.parser.DialectParser
 import com.loveqoo.queryguardian.parser.InspectResult
-import com.loveqoo.queryguardian.parser.ParseResult
 import com.loveqoo.queryguardian.rules.LintContext
 import com.loveqoo.queryguardian.rules.LintReport
 import com.loveqoo.queryguardian.rules.RuleEngine
@@ -33,16 +32,16 @@ class LintService(
         val intakeViolations = inspected.intakeViolations.map {
             Violation("intake/${it.code.name.lowercase().replace('_', '-')}", Severity.BLOCK, it.message)
         }
-        return when (val result = inspected.parse) {
-            is ParseResult.Failure -> LintReport(
+        return when (inspected) {
+            is InspectResult.Unparsed -> LintReport(
                 intakeViolations + Violation(
-                    "parse/${result.kind.name.lowercase().replace('_', '-')}",
+                    "parse/${inspected.failure.kind.name.lowercase().replace('_', '-')}",
                     Severity.BLOCK,
-                    result.message,
+                    inspected.failure.message,
                 )
             )
-            is ParseResult.Success -> LintReport(
-                intakeViolations + engine.lint(result.ir, catalog, LintContext(purposeCode)).violations
+            is InspectResult.Parsed -> LintReport(
+                intakeViolations + engine.lint(inspected.ir, catalog, LintContext(purposeCode)).violations
             )
         }
     }

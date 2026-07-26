@@ -6,7 +6,7 @@ import com.loveqoo.queryguardian.exec.RewriteCatalog
 import com.loveqoo.queryguardian.exec.RewritePlanner
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewriteRefusal
-import com.loveqoo.queryguardian.parser.ParseResult
+import com.loveqoo.queryguardian.parser.InspectResult
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -39,7 +39,7 @@ class RewritePlannerTest {
     }
 
     private fun ir(sql: String): QueryIR =
-        (Fixtures.parser.inspect(sql).parse as ParseResult.Success).ir
+        (Fixtures.parser.inspect(sql) as InspectResult.Parsed).ir
 
     private fun plan(
         sql: String,

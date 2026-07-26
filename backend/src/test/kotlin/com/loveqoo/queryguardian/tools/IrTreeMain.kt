@@ -2,7 +2,7 @@ package com.loveqoo.queryguardian.tools
 
 import com.loveqoo.queryguardian.ir.toAsciiTree
 import com.loveqoo.queryguardian.parser.DruidMySqlParser
-import com.loveqoo.queryguardian.parser.ParseResult
+import com.loveqoo.queryguardian.parser.InspectResult
 
 /**
  * SQL 하나를 파싱해 IR을 아스키 트리로 출력한다.
@@ -25,8 +25,9 @@ fun main(args: Array<String>) {
         println()
     }
 
-    when (val parsed = inspected.parse) {
-        is ParseResult.Success -> println(parsed.ir.toAsciiTree())
-        is ParseResult.Failure -> println("파싱 실패 [${parsed.kind}] ${parsed.message}")
+    when (inspected) {
+        is InspectResult.Parsed -> println(inspected.ir.toAsciiTree())
+        is InspectResult.Unparsed ->
+            println("파싱 실패 [${inspected.failure.kind}] ${inspected.failure.message}")
     }
 }

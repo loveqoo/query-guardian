@@ -15,7 +15,7 @@ import com.loveqoo.queryguardian.exec.RewritePlanner
 import com.loveqoo.queryguardian.ir.RewriteOutcome
 import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.parser.DialectParser
-import com.loveqoo.queryguardian.parser.ParseResult
+import com.loveqoo.queryguardian.parser.InspectResult
 import com.loveqoo.queryguardian.parser.SqlRewriter
 import org.springframework.stereotype.Component
 
@@ -44,21 +44,21 @@ class GateSteps(
 
     // ---- 단계 ------------------------------------------------------------
 
-    /** **파싱 1회** — IR·접수 위반·AST 핸들을 함께 얻어 판정과 재작성이 같은 AST를 쓴다(결정 13). */
+    /**
+     * **파싱 1회** — IR·접수 위반·AST 핸들을 함께 얻어 판정과 재작성이 같은 AST를 쓴다(결정 13).
+     *
+     * 갈래가 둘뿐인 것은 [InspectResult]가 합 타입이 된 결과다. 예전에는 셋이었다 — 파싱 실패, 그리고
+     * **"성공인데 핸들이 없다"** 는 성립하지 않는 조합을 fail-closed로 떨어뜨리는 분기. 그 분기는
+     * 규율이었지 검사가 아니었고, 그 자리가 원래 `inspected.statement!!`였다.
+     */
     fun parseOnce(request: GateRequest): GateOutcome<Parsed> {
         val inspected = parser.inspect(request.sql)
-        val ir = when (val parsed = inspected.parse) {
-            is ParseResult.Success -> parsed.ir
-            is ParseResult.Failure -> return stopped(
+        if (inspected !is InspectResult.Parsed) {
+            return stopped(
                 GateStop.Violated(AuditCode.PARSE_FAILED, LintReportDto.from(lintService.judge(inspected))),
             )
         }
-        // 파싱 성공인데 핸들이 없는 조합은 성립하지 않는다. 성립한다면 상류 버그이므로 fail-closed로 떨어뜨린다
-        // — 예전에는 이 자리가 `inspected.statement!!`였다(50줄 위의 분기를 근거로 삼는 `!!`).
-        val statement = inspected.statement ?: return stopped(
-            GateStop.Unprocessable(AuditCode.PARSE_FAILED, "재작성 핸들을 얻지 못했습니다"),
-        )
-        return cleared(Parsed(request, inspected, ir, statement, approvalGate.physicalTables(ir)))
+        return cleared(Parsed(request, inspected, approvalGate.physicalTables(inspected.ir)))
     }
 
     /** 데이터 권한은 **현재 기준**으로 다시 본다 — 저장 후 회수됐을 수 있다. 룰보다 앞(spec 007 §6.0). */

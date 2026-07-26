@@ -3,7 +3,6 @@ package com.loveqoo.queryguardian.parser
 import com.loveqoo.queryguardian.ir.SelectScope
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -33,9 +32,8 @@ class ScopeIdentityTest {
 
     @Test
     fun `모든 스코프에 유일한 식별자가 있다`() {
-        val result = parser.inspect(nested)
-        val ir = (result.parse as ParseResult.Success).ir
-        val scopes = allScopes(ir.root)
+        val result = parser.inspect(nested) as InspectResult.Parsed
+        val scopes = allScopes(result.ir.root)
 
         assertTrue(scopes.size >= 7, "중첩 스코프가 모두 만들어져야 함: ${scopes.size}개 — ${scopes.map { it.kind }}")
         assertTrue(scopes.none { it.scopeId.isBlank() }, "빈 scopeId가 있음: ${scopes.map { it.kind to it.scopeId }}")
@@ -48,18 +46,21 @@ class ScopeIdentityTest {
 
     @Test
     fun `핸들의 식별자 집합이 IR과 정확히 일치한다`() {
-        val result = parser.inspect(nested)
-        val ir = (result.parse as ParseResult.Success).ir
-        val handle = assertNotNull(result.statement, "파싱 성공 시 핸들이 있어야 함")
+        val result = parser.inspect(nested) as InspectResult.Parsed
 
-        assertEquals(allScopes(ir.root).map { it.scopeId }.toSet(), handle.scopeIds)
+        assertEquals(allScopes(result.ir.root).map { it.scopeId }.toSet(), result.statement.scopeIds)
     }
 
+    /**
+     * 예전에는 이 테스트가 `result.statement == null`을 단정했다 — **"고칠 AST가 없으면 핸들도 없다"** 를
+     * 런타임으로 지키고 있었다. [InspectResult]가 합 타입이 된 지금 그 성질은 타입이 보유하므로
+     * (`Unparsed`에 핸들 필드가 아예 없다) 여기서는 **갈래가 갈렸다는 것**만 본다.
+     * 타입 성질 자체는 `InspectResultShapeTest`(spec 010 A4)가 지킨다.
+     */
     @Test
-    fun `파싱 실패에는 핸들이 없다`() {
+    fun `파싱 실패는 Unparsed 갈래로 나온다`() {
         val result = parser.inspect("SELECT FROM WHERE ((")
-        assertTrue(result.parse is ParseResult.Failure)
-        assertEquals(null, result.statement, "고칠 AST가 없으면 핸들도 없어야 한다")
+        assertTrue(result is InspectResult.Unparsed, "파싱 실패인데 ${result::class.simpleName}로 나왔다")
     }
 
     /**
@@ -69,12 +70,12 @@ class ScopeIdentityTest {
      */
     @Test
     fun `다른 파싱의 스코프 id는 겹치지 않는다`() {
-        val a = parser.inspect(nested)
-        val b = parser.inspect(nested)
+        val a = parser.inspect(nested) as InspectResult.Parsed
+        val b = parser.inspect(nested) as InspectResult.Parsed
         assertTrue(a.statement !== b.statement, "핸들은 파싱마다 별개다")
         assertEquals(
             emptySet(),
-            a.statement!!.scopeIds intersect b.statement!!.scopeIds,
+            a.statement.scopeIds intersect b.statement.scopeIds,
             "같은 SQL이라도 파싱이 다르면 id가 겹쳐선 안 된다",
         )
     }

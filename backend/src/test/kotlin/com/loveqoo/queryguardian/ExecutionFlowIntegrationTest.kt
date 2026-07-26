@@ -1,5 +1,6 @@
 package com.loveqoo.queryguardian
 
+import com.loveqoo.queryguardian.audit.ExecutionOutcome
 import org.junit.jupiter.api.MethodOrderer
 import org.junit.jupiter.api.Order
 import org.junit.jupiter.api.TestMethodOrder
@@ -291,7 +292,7 @@ class ExecutionFlowIntegrationTest {
         // 미리보기는 query_id가 없으므로 쿼리별 이력에는 안 잡힌다 — 대신 전체 기록이 늘었는지 본다.
         // (쿼리별 이력 API만으로는 확인할 수 없으므로 감사 저장소를 직접 본다.)
         val recorded = executionEvents.findAll().filter {
-            it.outcome == "BLOCKED" && it.queryId == null
+            it.outcome == ExecutionOutcome.BLOCKED && it.queryId == null
         }
         // 이 카탈로그에는 marketing_consents가 없으므로 **권한 검사**(승인 커버보다 앞)에서 먼저 막힌다 —
         // 미등록 테이블은 fail-closed로 TABLES_UNKNOWN이다(spec 007: 오타와 권한 부족을 구분).
@@ -414,6 +415,17 @@ class ExecutionFlowIntegrationTest {
         // 행위자 좁히기
         val mine = client.getListAs("/api/executions?actor=u2", "ap1").body!!.filterIsInstance<Map<*, *>>()
         assertTrue(mine.all { it["actor"] == "u2" }, "actor 필터가 새어 나갔다: $mine")
+
+        // **결말 좁히기** — 이 필터는 테스트가 0건이었다(P3 착수 시 실측). 지금 붙이는 이유는
+        // `outcome`이 String에서 enum이 되면서 **알 수 없는 값의 처리가 정책이 됐기** 때문이다.
+        val blocked = client.getListAs("/api/executions?outcome=blocked", "ap1").body!!.filterIsInstance<Map<*, *>>()
+        assertTrue(blocked.isNotEmpty(), "BLOCKED 기록이 없다 — 이 단정 자체가 공허해진다")
+        assertTrue(blocked.all { it["outcome"] == "BLOCKED" }, "outcome 필터가 새어 나갔다: $blocked")
+
+        // **오타는 전체를 열지 않는다.** 필터를 조용히 버리면 `outcome=BLOKED` 하나로 감사 전건이 나간다 —
+        // 필터를 건 사람은 좁혀 봤다고 믿는데 실제로는 넓게 본다. 빈 결과가 fail-closed다.
+        val typo = client.getListAs("/api/executions?outcome=BLOKED", "ap1").body!!.filterIsInstance<Map<*, *>>()
+        assertEquals(emptyList(), typo, "알 수 없는 outcome이 필터를 버리고 전체를 열었다")
     }
 
     /**
@@ -608,7 +620,7 @@ class ExecutionFlowIntegrationTest {
         )
         // 차단도 감사 대상이다(§6)
         assertTrue(
-            executionEvents.findAll().any { it.queryId == id && it.outcome == "BLOCKED" },
+            executionEvents.findAll().any { it.queryId == id && it.outcome == ExecutionOutcome.BLOCKED },
             "차단이 기록되지 않았다",
         )
     }

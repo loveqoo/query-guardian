@@ -19,7 +19,7 @@ data class ExecutionEvent(
     /** 미리보기는 저장된 쿼리가 없어 null이다. */
     val queryId: Long? = null,
     val actor: String,
-    val outcome: String,
+    val outcome: ExecutionOutcome,
     val originalSql: String,
     val rewrittenSql: String? = null,
     val appliedJson: String? = null,
@@ -28,7 +28,16 @@ data class ExecutionEvent(
     val effectiveLimit: Long? = null,
     val configuredCap: Long? = null,
     val moreRowsExist: Boolean? = null,
-    /** 사용자에게 보여줄 분류 코드. 값 집합은 [AuditCode]가 닫는다 — 여기가 String인 것은 저장 경계이기 때문이다. */
+    /**
+     * 사용자에게 보여줄 분류 코드. 값 집합은 [AuditCode]가 닫는다.
+     *
+     * **[outcome]은 enum인데 이것은 String인 이유**(spec 010 I13의 경계선): 도메인이 **분기하는 값은 enum,
+     * 나르기만 하는 값은 문자열**이다. `outcome`은 등급 판단(반출 있음/없음)에 쓰이므로 분기하고,
+     * `errorCode`는 응답과 감사로 옮겨질 뿐 어디서도 분기하지 않는다(실측: 프로덕션 분기 0곳).
+     *
+     * 그리고 감사는 **append-only 이력**이다 — 어휘에서 코드 하나를 지우는 순간 enum이면 그 값을 가진
+     * 옛 행을 **읽을 수 없게 된다**. 이력을 읽지 못하게 만드는 통제는 통제가 아니다.
+     */
     val errorCode: String? = null,
     /** 원문 — STEWARD/ADMIN 전용. MySQL 오류는 데이터 값을 에코하므로 일반 사용자에게 주지 않는다. */
     val errorDetail: String? = null,
@@ -42,10 +51,10 @@ interface ExecutionEventRepository : CrudRepository<ExecutionEvent, Long> {
     // 밀어낼 수 있다**(적대 검토 D3). 그러면 삭제로 은닉하던 것과 같은 결말에 다른 문으로 도달한다.
     fun findTop200ByIdLessThanOrderByIdDesc(before: Long): List<ExecutionEvent>
     fun findTop200ByActorAndIdLessThanOrderByIdDesc(actor: String, before: Long): List<ExecutionEvent>
-    fun findTop200ByOutcomeAndIdLessThanOrderByIdDesc(outcome: String, before: Long): List<ExecutionEvent>
+    fun findTop200ByOutcomeAndIdLessThanOrderByIdDesc(outcome: ExecutionOutcome, before: Long): List<ExecutionEvent>
     fun findTop200ByActorAndOutcomeAndIdLessThanOrderByIdDesc(
         actor: String,
-        outcome: String,
+        outcome: ExecutionOutcome,
         before: Long,
     ): List<ExecutionEvent>
 }
@@ -86,7 +95,7 @@ class ExecutionAudit(
         ExecutionEvent(
             queryId = queryId,
             actor = actor,
-            outcome = outcome.name,
+            outcome = outcome,
             originalSql = originalSql,
             rewrittenSql = rewrittenSql,
             // 적용된 강제식 **원문**을 남긴다 — STEWARD가 마스크 식을 약화시켜도 사후 탐지가 가능해야 한다(§6)
@@ -142,7 +151,7 @@ class ExecutionAudit(
      * 옛 SUCCESS 기록을 조회 범위 밖으로 밀어낼 수 있었다 — 저장은 남지만 아무도 볼 수 없으니
      * 삭제 은닉과 결말이 같다(적대 검토 D3).
      */
-    fun recent(actor: String?, outcome: String?, before: Long?): List<ExecutionEvent> {
+    fun recent(actor: String?, outcome: ExecutionOutcome?, before: Long?): List<ExecutionEvent> {
         // 커서는 "이 id보다 앞"이다. 없으면 맨 앞부터 — Long.MAX_VALUE로 같은 질의를 쓴다.
         val cursor = before ?: Long.MAX_VALUE
         return when {

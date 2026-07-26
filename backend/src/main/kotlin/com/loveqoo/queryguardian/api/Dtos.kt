@@ -4,6 +4,8 @@ import com.loveqoo.queryguardian.audit.AuditCode
 
 import com.loveqoo.queryguardian.rules.LintReport
 import com.loveqoo.queryguardian.rules.Severity
+import com.loveqoo.queryguardian.audit.ExecutionOutcome
+import com.loveqoo.queryguardian.query.ReviewStatus
 import java.time.Instant
 
 // ---- lint ----
@@ -50,7 +52,7 @@ data class QuerySummaryDto(
     val dialect: String,
     val purposeCode: String?,
     val requestId: Long,
-    val reviewStatus: String,
+    val reviewStatus: ReviewStatus,
     val reviewer: String?,
     val createdAt: Instant,
     val updatedAt: Instant,
@@ -63,7 +65,7 @@ data class QueryDto(
     val sql: String,
     val purposeCode: String?,
     val requestId: Long,
-    val reviewStatus: String,
+    val reviewStatus: ReviewStatus,
     val reviewer: String?,
     val reviewedAt: Instant?,
     val reviewNote: String?,
@@ -166,7 +168,8 @@ data class AppliedRewriteDto(val kind: String, val table: String, val column: St
 data class ExecutionEventDto(
     val id: Long,
     val actor: String,
-    val outcome: String,
+    /** enum을 그대로 싣는다 — Jackson이 이름으로 직렬화하므로 **JSON은 바뀌지 않는다**(spec 010 I13). */
+    val outcome: ExecutionOutcome,
     val rowCount: Int?,
     val elapsedMs: Long?,
     val effectiveLimit: Long?,

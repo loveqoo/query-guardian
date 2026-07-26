@@ -345,7 +345,7 @@ class AuditCodeCoverageTest {
             assertEquals(1, fresh.size, "$where: 감사 행이 정확히 1건이 아니다 — ${describe(fresh)}")
             val event = fresh.single()
             assertEquals(code.name, event.errorCode, "$where: 감사 코드가 다르다 — ${describe(fresh)}")
-            assertEquals(scenario.outcome.name, event.outcome, "$where: outcome이 다르다")
+            assertEquals(scenario.outcome, event.outcome, "$where: outcome이 다르다")
             assertEquals(
                 scenario.expectQueryId, event.queryId != null,
                 "$where: query_id 유무가 다르다 — 없으면 `/api/queries/{id}/executions` 이력에서 사라진다",

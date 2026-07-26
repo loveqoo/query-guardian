@@ -80,6 +80,12 @@ data class QueryReviewEvent(
     @Id val id: Long? = null,
     val queryId: Long,
     val actor: String,
+    /**
+     * **이력이므로 문자열이다** — `SavedQuery.reviewStatus`가 enum인 것과 다른 이유(spec 010 I13의 경계선):
+     * 도메인이 **분기하는 값은 enum, 나르기만 하는 값은 문자열**이다. 현재 상태는 실행 게이트가 분기하지만
+     * 이 행은 append-only 기록이라 어디서도 분기하지 않는다. 그리고 어휘에서 값을 지우면 enum은 **옛 행을
+     * 읽을 수 없게 만든다** — 이력을 읽지 못하게 하는 통제는 통제가 아니다(`ExecutionEvent.errorCode`와 같은 판단).
+     */
     val decision: String,
     val note: String? = null,
     val sqlHash: String,

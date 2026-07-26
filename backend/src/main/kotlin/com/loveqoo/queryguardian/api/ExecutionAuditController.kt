@@ -1,5 +1,6 @@
 package com.loveqoo.queryguardian.api
 
+import com.loveqoo.queryguardian.audit.ExecutionOutcome
 import com.loveqoo.queryguardian.auth.AuthService
 import com.loveqoo.queryguardian.auth.Role
 import com.loveqoo.queryguardian.exec.ExecutionAudit
@@ -36,7 +37,13 @@ class ExecutionAuditController(
     ): List<ExecutionEventDto> {
         auth.requireRole(http, Role.STEWARD, Role.ADMIN)
         response.setHeader("X-QG-Audit-Total", audit.total().toString())
-        return audit.recent(actor, outcome?.uppercase(), before).map {
+        // **경계에서만 문자열**(spec 010 I13). 알 수 없는 값이면 필터를 **버리지 않고 빈 결과**를 준다 —
+        // 버리면 `outcome=BLOKED` 오타 하나로 감사 전건이 나간다: 좁혀 봤다고 믿는데 실제로는 넓게 본다.
+        // 예전에도 결과는 0건이었으나 그건 리포지토리가 매칭에 실패한 **우연**이었고, 이제 정책이다.
+        val filter = outcome?.let { raw ->
+            ExecutionOutcome.entries.firstOrNull { it.name == raw.uppercase() } ?: return emptyList()
+        }
+        return audit.recent(actor, filter, before).map {
             ExecutionEventDto(
                 id = it.id!!, actor = it.actor, outcome = it.outcome,
                 rowCount = it.rowCount, elapsedMs = it.elapsedMs, effectiveLimit = it.effectiveLimit, configuredCap = it.configuredCap, moreRowsExist = it.moreRowsExist,

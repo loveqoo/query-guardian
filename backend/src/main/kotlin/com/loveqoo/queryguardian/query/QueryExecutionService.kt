@@ -139,7 +139,7 @@ class QueryExecutionService(
         } catch (e: ApprovalBlockedException) {
             return stopped(GateStop.Blocked(e.detail))
         }
-        if (query.reviewStatus != ReviewStatus.APPROVED.name) {
+        if (query.reviewStatus != ReviewStatus.APPROVED) {
             return stopped(GateStop.Denied(
                 AuditCode.NOT_REVIEWED, "검토 승인된 쿼리만 실행할 수 있습니다 (현재 ${query.reviewStatus})"))
         }

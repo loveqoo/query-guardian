@@ -22,6 +22,7 @@ import com.loveqoo.queryguardian.approval.QueryReviewEvent
 import com.loveqoo.queryguardian.approval.QueryReviewEventRepository
 import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.rules.RuleService
+import com.loveqoo.queryguardian.rules.Severity
 import org.springframework.stereotype.Service
 import java.security.MessageDigest
 import java.time.Instant
@@ -47,7 +48,7 @@ class QueryService(
                 name = request.name, dialect = request.dialect, sqlText = request.sql,
                 purposeCode = approval.purposeCode,           // 클라이언트 입력 무시, 요청에서 주입 (C1)
                 requestId = approval.id!!,
-                reviewStatus = ReviewStatus.PENDING_REVIEW.name,
+                reviewStatus = ReviewStatus.PENDING_REVIEW,
                 lintReportJson = objectMapper.writeValueAsString(storable.report),
                 createdAt = now, updatedAt = now,
             )
@@ -86,7 +87,7 @@ class QueryService(
             existing.copy(
                 name = request.name, dialect = request.dialect, sqlText = request.sql,
                 purposeCode = approval.purposeCode, requestId = approval.id!!,
-                reviewStatus = ReviewStatus.PENDING_REVIEW.name,   // 항상 재검토로 리셋
+                reviewStatus = ReviewStatus.PENDING_REVIEW,   // 항상 재검토로 리셋
                 reviewer = null, reviewedAt = null, reviewNote = null,
                 lintReportJson = objectMapper.writeValueAsString(storable.report),
                 updatedAt = Instant.now(),
@@ -102,7 +103,9 @@ class QueryService(
     fun review(id: Long, actor: String, request: ReviewRequest): QueryDto {
         requireNotNull(Directory.findAnyone(actor)) { "등록되지 않은 행위자: $actor" }
         val existing = repository.findById(id).orElseThrow { NotFoundException("쿼리 $id 없음") }
-        val decision = ReviewStatus.entries.firstOrNull { it.name == request.decision.uppercase() && it != ReviewStatus.PENDING_REVIEW }
+        // 경계에서만 문자열이다(I13) — 여기가 그 경계이고, **결정 가능한 값만** 통과시킨다.
+        val decision = ReviewStatus.entries
+            .firstOrNull { it.name == request.decision.uppercase() && it != ReviewStatus.PENDING_REVIEW }
             ?: throw IllegalArgumentException("decision은 APPROVED 또는 REJECTED여야 합니다")
 
         val approval = approvalGate.findRequest(existing.requestId)
@@ -114,12 +117,12 @@ class QueryService(
         val current = LintReportDto.from(lintService.lint(existing.sqlText, existing.purposeCode))
         if (decision == ReviewStatus.APPROVED && current.blocked) {
             throw ConflictException("현재 규칙 기준으로 위반이 있어 검토 승인할 수 없습니다: " +
-                current.violations.filter { it.severity.name == "BLOCK" }.joinToString("; ") { it.message })
+                current.violations.filter { it.severity == Severity.BLOCK }.joinToString("; ") { it.message })
         }
 
         val now = Instant.now()
         val saved = repository.save(existing.copy(
-            reviewStatus = decision.name, reviewer = actor, reviewedAt = now, reviewNote = request.note,
+            reviewStatus = decision, reviewer = actor, reviewedAt = now, reviewNote = request.note,
             lintReportJson = objectMapper.writeValueAsString(current), // 재-lint 결과로 갱신
         ))
         reviewEvents.save(QueryReviewEvent(

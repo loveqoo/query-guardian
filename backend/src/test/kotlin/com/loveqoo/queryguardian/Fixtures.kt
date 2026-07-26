@@ -1,10 +1,12 @@
 package com.loveqoo.queryguardian
 
+import com.loveqoo.queryguardian.ir.Predicate
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.toAsciiTree
 import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.parser.DruidMySqlParser
 import com.loveqoo.queryguardian.parser.ParseResult
+import com.loveqoo.queryguardian.parser.PredicateParse
 import com.loveqoo.queryguardian.rules.InMemoryTableCatalog
 import com.loveqoo.queryguardian.rules.LintReport
 import com.loveqoo.queryguardian.rules.RequiredPredicate
@@ -25,7 +27,9 @@ object Fixtures {
             InMemoryTableCatalog.Entry(
                 table = "user_events",
                 purposeCode = "marketing",
-                predicate = RequiredPredicate("consent_yn = 'Y'", parser.parsePredicate("consent_yn = 'Y'")!!),
+                // 픽스처가 파싱에 실패하면 그 자리에서 터져야 한다 — 조용히 Raw로 흐르면
+                // 구조 비교 테스트가 텍스트 비교로 바뀐 채 초록이 된다.
+                predicate = RequiredPredicate("consent_yn = 'Y'", parsedFixture("consent_yn = 'Y'")),
             ),
         ),
         // spec 002: users.ssn은 BLOCK 매핑 (디자인 표본 — 조회 전면 차단)
@@ -46,6 +50,12 @@ object Fixtures {
     fun ir(sql: String): QueryIR = when (val r = parser.parse(sql)) {
         is ParseResult.Success -> r.ir
         is ParseResult.Failure -> error("파싱 실패 [${r.kind}] ${r.message}\n  sql: $sql")
+    }
+
+    /** 술어 픽스처. [ir]과 같은 모양 — 실패는 예외로 알린다(이제 이유까지 나온다). */
+    fun parsedFixture(predicateSql: String): Predicate = when (val r = parser.parsePredicate(predicateSql)) {
+        is PredicateParse.Parsed -> r.predicate
+        is PredicateParse.Unparsed -> error("술어 파싱 실패: ${r.reason}\n  sql: $predicateSql")
     }
 
     /**

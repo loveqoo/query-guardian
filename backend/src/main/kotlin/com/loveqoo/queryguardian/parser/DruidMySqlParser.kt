@@ -373,12 +373,14 @@ class DruidMySqlParser(
         scope.tables.filter { it.physical && it.name.lowercase() !in PSEUDO_TABLES }.map { it.name.lowercase() }.toSet() +
             scope.children.flatMap { physicalTables(it) }
 
-    override fun parsePredicate(predicateSql: String): Predicate? = try {
+    override fun parsePredicate(predicateSql: String): PredicateParse = try {
         val expr = SQLUtils.toSQLExpr(predicateSql, DbType.mysql)
         // 술어만 파싱하는 경로 — 스코프를 만들지 않으므로 난스는 의미 없다(버려지는 등록부)
-        toPredicate(expr, AliasResolver(emptyList(), null), mutableListOf(), ScopeRegistry(0))
+        PredicateParse.Parsed(toPredicate(expr, AliasResolver(emptyList(), null), mutableListOf(), ScopeRegistry(0)))
     } catch (e: Exception) {
-        null
+        // 예전에는 여기서 `null`을 냈고 이유가 사라졌다. 메시지가 없는 예외도 있으니 타입명까지 갖춘다 —
+        // "왜 안 되는지 모른다"는 답을 등록자에게 주지 않기 위해서다.
+        PredicateParse.Unparsed(e.message ?: e::class.simpleName ?: "알 수 없는 파싱 실패")
     }
 
     override fun predicateContainsSubquery(predicateSql: String): Boolean = try {

@@ -10,8 +10,8 @@ interface DialectParser {
 
     fun parse(sql: String): ParseResult
 
-    /** 카탈로그의 필수 술어 문자열(`consent_yn = 'Y'`)을 구조 비교용 Predicate로 파싱 (§6.5). 실패 시 null. */
-    fun parsePredicate(predicateSql: String): Predicate?
+    /** 카탈로그의 필수 술어 문자열(`consent_yn = 'Y'`)을 구조 비교용 Predicate로 파싱 (§6.5). */
+    fun parsePredicate(predicateSql: String): PredicateParse
 
     /** 강제식 등록 검증용 — 술어 표현식에 서브쿼리가 포함되면 true (spec 002 §3.3: 등록 거부 대상). */
     fun predicateContainsSubquery(predicateSql: String): Boolean
@@ -60,6 +60,35 @@ sealed interface InspectResult {
         val failure: ParseResult.Failure,
         override val intakeViolations: List<IntakeViolation>,
     ) : InspectResult
+}
+
+/**
+ * [DialectParser.parsePredicate] 결과 (spec 010 P3 C4).
+ *
+ * **합 타입인 이유**: 예전 반환형은 `Predicate?`였고 `null`은 오직 `catch (e: Exception)`에서만 나왔다
+ * (`toPredicate`는 non-null을 낸다 — 실측). 즉 `null`의 뜻은 정확히 **"예외가 났고 그 이유를 버렸다"** 였다.
+ * 이유를 버린 대가가 호출부에 남아 있었다:
+ *
+ * - 강제식 **등록** 거부가 "파싱할 수 없습니다: <식>"까지만 말했다 — 어디가 틀렸는지는 없다
+ * - 강제식 **매핑** 거부는 단정 하나(`predicate != null && requiredForm(predicate) != null`)가 서로 다른
+ *   두 실패를 덮고 **그중 하나의 이름만** 댔다. 파싱이 안 된 경우에도 "판정 미지원 형태"라고 답해서
+ *   등록자가 엉뚱한 곳을 고치러 갔다
+ * - 카탈로그 로드는 `?: Predicate.Raw(sql)`로 **구조 검증을 텍스트 비교로 격하**시키면서 조용했다
+ *
+ * `null` 하나가 다섯 호출부에서 다섯 정책을 뜻했다. 이제 실패는 이유를 갖는 값이고, 정책은 각자
+ * `when`으로 적는다 — 이유가 정책에 영향을 주지 않는 자리만 [predicateOrNull]을 쓴다.
+ */
+sealed interface PredicateParse {
+    data class Parsed(val predicate: Predicate) : PredicateParse
+
+    /** [reason]은 파서가 준 문장이다. 대상은 카탈로그에 등록된 **우리 강제식**이므로 사용자 데이터가 아니다. */
+    data class Unparsed(val reason: String) : PredicateParse
+
+    /**
+     * 폴백이 이미 정해져 있어 **이유가 정책을 바꾸지 않는** 호출부용.
+     * 이유를 쓸 곳이 있으면 `when`으로 갈라라 — 그것이 이 타입을 만든 목적이다.
+     */
+    val predicateOrNull: Predicate? get() = (this as? Parsed)?.predicate
 }
 
 /**

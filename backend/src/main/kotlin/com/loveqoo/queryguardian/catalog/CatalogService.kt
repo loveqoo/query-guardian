@@ -12,6 +12,7 @@ import com.loveqoo.queryguardian.api.SaveMappingRequest
 import com.loveqoo.queryguardian.api.SaveTableRequest
 import com.loveqoo.queryguardian.api.TableDto
 import com.loveqoo.queryguardian.parser.DialectParser
+import com.loveqoo.queryguardian.parser.PredicateParse
 import com.loveqoo.queryguardian.rules.requiredForm
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.data.relational.core.conversion.DbActionExecutionException
@@ -104,8 +105,18 @@ class CatalogService(
                 val sampleParams = Expressions.paramNames(expression).associateWith { "1" }
                 val sample = Expressions.substitute(expression, "qg_col_placeholder", sampleParams)
                 requireNotNull(sample) { "강제식 파라미터 치환에 실패했습니다" }
+                // **파싱을 먼저 본다.** 순서가 반대였을 때 문법이 깨진 강제식은 "서브쿼리를 포함할 수
+                // 없습니다"라는 답을 받았다 — `predicateContainsSubquery`가 파싱 실패에 fail-closed로 `true`를
+                // 내기 때문이다(그 자체는 옳다). 두 검사 모두 거절이지만 **거절 이유가 등록자의 수정 대상**이고,
+                // 그래서 더 구체적인 진단이 앞에 와야 한다. 실측으로 확인했다(그 순서에서는 파싱 검사가
+                // 아예 도달 불가였다 — 죽은 코드였다).
+                when (val parsed = parser.parsePredicate(sample)) {
+                    is PredicateParse.Unparsed -> throw IllegalArgumentException(
+                        "강제식을 파싱할 수 없습니다: $expression — ${parsed.reason}",
+                    )
+                    is PredicateParse.Parsed -> Unit
+                }
                 require(!parser.predicateContainsSubquery(sample)) { "강제식에 서브쿼리를 포함할 수 없습니다 (단일 술어 표현식만 허용)" }
-                requireNotNull(parser.parsePredicate(sample)) { "강제식을 파싱할 수 없습니다: $expression" }
             }
         }
         return ConstraintDef(id = id, cls = cls, kind = kind, name = request.name,
@@ -163,11 +174,23 @@ class CatalogService(
             require(purposes.findByCode(request.purposeCode) != null) { "등록되지 않은 purpose: ${request.purposeCode}" }
         }
 
-        // C2: 판정 미지원 형태의 FILTER는 매핑 거부 — 매핑하면 spec 003 전까지 해당 테이블 전체가 차단되므로
+        // C2: 판정 미지원 형태의 FILTER는 매핑 거부 — 매핑하면 spec 003 전까지 해당 테이블 전체가 차단되므로.
+        //
+        // **세 실패를 갈라 말한다.** 예전에는 단정 하나(`predicate != null && requiredForm(...) != null`)가
+        // 치환 실패·파싱 실패·판정 미지원을 전부 덮고 **마지막 하나의 이름만** 댔다. 그래서 파싱이 안 된
+        // 강제식을 매핑하면 "판정 미지원 형태"라는 답이 돌아왔고, 등록자는 엉뚱한 곳을 고치러 갔다.
         if (def.kind == DefKind.FILTER) {
-            val substituted = expression?.let { Expressions.substitute(it, column.name, params) }
-            val predicate = substituted?.let { parser.parsePredicate(it) }
-            require(predicate != null && requiredForm(predicate) != null) {
+            // FILTER는 강제식이 필수다(validatedDef가 등록 시 강제) — 없으면 저장된 정의가 깨진 것이다.
+            val filterExpression = requireNotNull(expression) { "FILTER 제약에 강제식이 없습니다 (정의 ${def.id})" }
+            val substituted = Expressions.substitute(filterExpression, column.name, params)
+                ?: throw IllegalArgumentException("강제식 파라미터 치환에 실패했습니다: $filterExpression")
+            val predicate = when (val parsed = parser.parsePredicate(substituted)) {
+                is PredicateParse.Unparsed -> throw IllegalArgumentException(
+                    "강제식을 파싱할 수 없습니다: $substituted — ${parsed.reason}",
+                )
+                is PredicateParse.Parsed -> parsed.predicate
+            }
+            requireNotNull(requiredForm(predicate)) {
                 "판정 미지원 형태의 FILTER는 아직 매핑할 수 없습니다 (컬럼 = 리터럴 / IN 단일값만 지원, spec 003에서 확장)"
             }
         }

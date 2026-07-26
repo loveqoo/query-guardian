@@ -3,6 +3,7 @@ package com.loveqoo.queryguardian.catalog
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.loveqoo.queryguardian.ir.Predicate
 import com.loveqoo.queryguardian.parser.DialectParser
+import com.loveqoo.queryguardian.parser.PredicateParse
 import com.loveqoo.queryguardian.rules.RequiredForm
 import com.loveqoo.queryguardian.rules.RequiredPredicate
 import com.loveqoo.queryguardian.rules.TableCatalog
@@ -20,6 +21,8 @@ class DbTableCatalog(
     private val mappings: ConstraintMappingRepository,
     private val objectMapper: ObjectMapper,
 ) : TableCatalog {
+
+    private val log = org.slf4j.LoggerFactory.getLogger(DbTableCatalog::class.java)
 
     private fun boundFor(tableName: String): List<ConstraintBinding> = bindings.forTable(tableName)
 
@@ -40,8 +43,30 @@ class DbTableCatalog(
                 val expression = bound.def.expression ?: return@map unverifiable(bound)
                 val params = Expressions.parseParams(objectMapper, bound.mapping.paramsJson) ?: return@map unverifiable(bound)
                 val sql = Expressions.substitute(expression, bound.column.name, params) ?: return@map unverifiable(bound)
-                RequiredPredicate("${bound.def.name} ($sql)", parser.parsePredicate(sql) ?: Predicate.Raw(sql))
+                RequiredPredicate("${bound.def.name} ($sql)", predicateOrRaw(bound, sql))
             }
+
+    /**
+     * 파싱 실패 시 `Raw`로 격하한다 — 그러면 `RewriteVerifier`가 **구조 비교 대신 텍스트 비교**로
+     * 확인한다(`matches`의 `expected == null` 분기와 같은 자리). 정책 자체는 유지하되 **조용하지 않게** 한다.
+     *
+     * **도달 경로를 구체적으로 제시하지는 못했다** — `Expressions.substitute`가 값의 `'`를 `''`로
+     * 이스케이프하고 비숫자 값을 인용부호로 감싸므로 파라미터로 문법을 깨는 뻔한 길은 막혀 있다.
+     * 그래도 등록 시 파싱이 여기서의 파싱을 **보장하지는 않는다**: 등록 검증은 모든 파라미터를 `"1"`로
+     * 치환한 표본(숫자, 인용부호 없음)으로 확인하고 여기서는 실제 값(대개 인용부호 있음)으로 치환하므로
+     * **같은 문자열이 아니다**. 보장하지 못하는 것을 보장한다고 적는 대신, 벌어지면 소리가 나게 해 둔다.
+     */
+    private fun predicateOrRaw(bound: ConstraintBinding, sql: String): Predicate =
+        when (val parsed = parser.parsePredicate(sql)) {
+            is PredicateParse.Parsed -> parsed.predicate
+            is PredicateParse.Unparsed -> {
+                log.warn(
+                    "FORCED_PREDICATE_UNPARSED def={} sql={} reason={} — 구조 검증이 텍스트 비교로 격하된다",
+                    bound.def.name, sql, parsed.reason,
+                )
+                Predicate.Raw(sql)
+            }
+        }
 
     private fun unverifiable(bound: ConstraintBinding) =
         RequiredPredicate("${bound.def.name} (검증 불가)", Predicate.Raw(bound.def.expression ?: ""))
@@ -62,7 +87,8 @@ class DbTableCatalog(
         } ?: return null
         val params = Expressions.parseParams(objectMapper, mapping.paramsJson) ?: return null
         val sql = Expressions.substitute(expression, columnName, params) ?: return null
-        val predicate = parser.parsePredicate(sql) ?: return null
+        // 여기서는 이유가 정책을 바꾸지 않는다 — 판정 불가면 평가기가 fail-closed로 차단한다(§4.2).
+        val predicate = parser.parsePredicate(sql).predicateOrNull ?: return null
         return requiredForm(predicate)
     }
 }

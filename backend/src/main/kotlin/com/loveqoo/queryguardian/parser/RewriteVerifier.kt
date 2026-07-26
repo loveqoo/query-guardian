@@ -102,7 +102,8 @@ class RewriteVerifier(private val parser: DialectParser) {
         //     whereConjuncts 자체가 "최상위 AND만" 담는 축이므로, 여기 있다는 것이 곧 최상위라는 뜻이다.)
         for (injection in plan.injections) {
             if (injection.alreadySatisfied) continue // 주입하지 않았으므로 검증 대상이 아니다
-            val expected = parser.parsePredicate(injection.predicateSql)
+            // 이유가 정책을 바꾸지 않는다 — 파싱 실패면 아래 `matches`가 원문 텍스트 비교로 확인한다.
+            val expected = parser.parsePredicate(injection.predicateSql).predicateOrNull
             val found = scopes.any { scope ->
                 scope.whereConjuncts.any { matches(it, expected, injection.predicateSql) }
             }

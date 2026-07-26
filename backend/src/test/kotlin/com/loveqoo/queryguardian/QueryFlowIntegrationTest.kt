@@ -157,8 +157,16 @@ class QueryFlowIntegrationTest {
         assertEquals(HttpStatus.BAD_REQUEST, post("/api/catalog/defs", mapOf(
             "cls" to "KEY", "kind" to "FILTER", "name" to "서브쿼리",
             "expression" to "{col} IN (SELECT id FROM x)")).statusCode)
-        assertEquals(HttpStatus.BAD_REQUEST, post("/api/catalog/defs", mapOf(
-            "cls" to "STRING", "kind" to "FILTER", "name" to "파싱 불가", "expression" to "{col} === !!")).statusCode)
+        // 거절만으로는 부족하다 — **왜** 거절인지 맞아야 등록자가 고칠 곳을 안다.
+        // 예전에는 문법이 깨진 식도 "서브쿼리를 포함할 수 없습니다"라는 답을 받았다:
+        // `predicateContainsSubquery`가 파싱 실패 시 fail-closed로 true를 내고 그 검사가 먼저였다.
+        val unparsable = post("/api/catalog/defs", mapOf(
+            "cls" to "STRING", "kind" to "FILTER", "name" to "파싱 불가", "expression" to "{col} === !!"))
+        assertEquals(HttpStatus.BAD_REQUEST, unparsable.statusCode)
+        assertTrue(
+            unparsable.body.toString().contains("파싱할 수 없습니다"),
+            "문법 오류를 다른 이유로 거절했다 — 등록자가 엉뚱한 곳을 고치러 간다: " + unparsable.body,
+        )
     }
 
     @Test

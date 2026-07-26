@@ -35,7 +35,8 @@ class QueryController(
     fun update(@PathVariable id: Long, http: HttpServletRequest, @RequestBody request: SaveQueryRequest): QueryDto {
         validation.validateDialect(request.dialect)
         validation.validateSql(request.sql)
-        // 대행 수정 불허 — privileged를 넘기지 않는다(결정 14의 대칭, 적대 검토 D7)
+        // 대행 수정 불허 — 능력(Viewer)을 넘기지 않는다(결정 14의 대칭, 적대 검토 D7).
+        // `update`의 시그니처가 Viewer를 받지 않으므로 여기서 넘길 방법 자체가 없다.
         return queryService.update(id, auth.currentUser(http).id, request)
     }
 
@@ -48,20 +49,11 @@ class QueryController(
     ): QueryDto = queryService.review(id, auth.requireRole(http, Role.STEWARD, Role.ADMIN).id, request)
 
     @GetMapping
-    fun list(http: HttpServletRequest): List<QuerySummaryDto> {
-        val me = auth.currentUser(http)
-        return queryService.list(me.id, privileged(me))
-    }
+    fun list(http: HttpServletRequest): List<QuerySummaryDto> = queryService.list(auth.currentViewer(http))
 
     @GetMapping("/{id}")
-    fun get(@PathVariable id: Long, http: HttpServletRequest): QueryDto {
-        val me = auth.currentUser(http)
-        return queryService.get(id, me.id, privileged(me))
-    }
-
-    /** STEWARD·ADMIN은 검토가 업무이므로 전체를 본다. 그 외는 본인 것만 (spec 008 결정 15). */
-    private fun privileged(user: com.loveqoo.queryguardian.auth.AppUser): Boolean =
-        user.role == Role.STEWARD || user.role == Role.ADMIN
+    fun get(@PathVariable id: Long, http: HttpServletRequest): QueryDto =
+        queryService.get(id, auth.currentViewer(http))
 
     /**
      * 저장·검토 승인된 쿼리 실행 (spec 008 §7). **요청자 본인만**(결정 14 — 대행 실행 불허).
@@ -69,8 +61,7 @@ class QueryController(
      */
     @PostMapping("/{id}/execute")
     fun execute(@PathVariable id: Long, http: HttpServletRequest): ExecutionResultDto {
-        val me = auth.currentUser(http)
-        val executed = executionService.execute(id, me.id, privileged(me))
+        val executed = executionService.execute(id, auth.currentViewer(http))
         return ExecutionResultDto(
             columns = executed.result.columns.map { ExecutionColumnDto(it.name, it.type) },
             rows = executed.result.rows,
@@ -87,14 +78,14 @@ class QueryController(
     /** 실행 이력. 오류 **원문**은 STEWARD/ADMIN에게만 — 일반 사용자에게는 분류 코드까지만(§6). */
     @GetMapping("/{id}/executions")
     fun executions(@PathVariable id: Long, http: HttpServletRequest): List<ExecutionEventDto> {
-        val me = auth.currentUser(http)
-        val canSeeRawErrors = privileged(me)
-        return executionService.history(id, me.id, canSeeRawErrors).map {
+        // 능력이 **두 질문에 각각** 답한다 — 예전엔 boolean 하나가 두 정책을 겸직했다(행 스코프 + 원문 노출).
+        val viewer = auth.currentViewer(http)
+        return executionService.history(id, viewer).map {
             ExecutionEventDto(
                 id = it.id!!, actor = it.actor, outcome = it.outcome,
                 rowCount = it.rowCount, elapsedMs = it.elapsedMs, effectiveLimit = it.effectiveLimit, configuredCap = it.configuredCap, moreRowsExist = it.moreRowsExist,
                 errorCode = it.errorCode,
-                errorDetail = if (canSeeRawErrors) it.errorDetail else null,
+                errorDetail = if (viewer.seesRawErrors) it.errorDetail else null,
                 rewrittenSql = it.rewrittenSql, at = it.at,
             )
         }
@@ -103,7 +94,6 @@ class QueryController(
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     fun delete(@PathVariable id: Long, http: HttpServletRequest) {
-        val me = auth.currentUser(http)
-        queryService.delete(id, me.id, privileged(me))
+        queryService.delete(id, auth.currentViewer(http))
     }
 }

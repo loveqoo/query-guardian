@@ -20,6 +20,7 @@ import com.loveqoo.queryguardian.approval.ApprovalGate
 import com.loveqoo.queryguardian.approval.Directory
 import com.loveqoo.queryguardian.approval.QueryReviewEvent
 import com.loveqoo.queryguardian.approval.QueryReviewEventRepository
+import com.loveqoo.queryguardian.auth.Viewer
 import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.rules.RuleService
 import com.loveqoo.queryguardian.rules.Severity
@@ -67,13 +68,16 @@ class QueryService(
      * 그래서 두 겹으로 막는다: ⑴ 소유자만 수정할 수 있다 ⑵ **`request_id`는 바꿀 수 없다** —
      * 소유자 정의가 그 컬럼에 걸려 있으므로 갱신을 허용하는 것 자체가 소유권 이전이다.
      *
-     * **`privileged`를 받지 않는다.** 처음엔 조회와 대칭으로 STEWARD/ADMIN에게 열었는데, 실제로 탈취가
+     * **[Viewer]를 받지 않는다.** 처음엔 조회와 대칭으로 STEWARD/ADMIN에게 열었는데, 실제로 탈취가
      * 막힌 이유는 게이트가 `REQUESTER_MISMATCH`에 걸리는 **우연**이었다 — 나중에 게이트가 특권 역할을
      * 면제하면 탈취가 되살아난다(적대 검토 D7). 결정 14가 대행 *실행*을 불허하는데 대행 *수정*을 허용할
      * 이유는 없다. 검토는 읽기로 하고, 고치는 것은 소유자가 한다.
+     *
+     * 그 결정이 **시그니처에 있다** — 능력을 받지 않으므로 능력으로 넓힐 수 없다. 예전에는 같은 뜻이
+     * 본문의 `privileged = false` 인자였고, 그것은 지우면 조용히 사라진다.
      */
     fun update(id: Long, actor: String, request: SaveQueryRequest): QueryDto {
-        val existing = visible(id, actor, privileged = false)
+        val existing = ownedBy(id, actor)
         if (request.requestId != null && request.requestId != existing.requestId) {
             throw ForbiddenException(
                 "저장된 쿼리의 근거 승인 요청은 바꿀 수 없습니다 — 다른 요청으로 저장하려면 새 쿼리로 저장하세요",
@@ -102,7 +106,7 @@ class QueryService(
      */
     fun review(id: Long, actor: String, request: ReviewRequest): QueryDto {
         requireNotNull(Directory.findAnyone(actor)) { "등록되지 않은 행위자: $actor" }
-        val existing = repository.findById(id).orElseThrow { NotFoundException("쿼리 $id 없음") }
+        val existing = load(id)
         // 경계에서만 문자열이다(I13) — 여기가 그 경계이고, **결정 가능한 값만** 통과시킨다.
         val decision = ReviewStatus.entries
             .firstOrNull { it.name == request.decision.uppercase() && it != ReviewStatus.PENDING_REVIEW }
@@ -140,18 +144,34 @@ class QueryService(
      * 조건에 쓴 상수가 담기므로 **열람 자체가 유출**이고, 실행을 막아도 그것은 막히지 않는다
      * (spec 005 §5가 M2 선행 조건으로 예고한 지점, 결정 15).
      */
-    fun list(actor: String, privileged: Boolean): List<QuerySummaryDto> =
+    fun list(viewer: Viewer): List<QuerySummaryDto> =
         repository.findAll()
-            .filter { privileged || ownerOf(it) == actor }
+            .filter { viewer.seesEveryone || ownerOf(it) == viewer.actor }
             .map {
                 QuerySummaryDto(it.id!!, it.name, it.dialect, it.purposeCode, it.requestId, it.reviewStatus,
                     it.reviewer, it.createdAt, it.updatedAt)
             }
 
-    fun get(id: Long, actor: String, privileged: Boolean): QueryDto = toDto(visible(id, actor, privileged))
+    fun get(id: Long, viewer: Viewer): QueryDto = toDto(visible(id, viewer))
 
-    fun delete(id: Long, actor: String, privileged: Boolean) {
-        visible(id, actor, privileged) // 남의 쿼리를 지울 수도 없다
+    /**
+     * ⚠️ **미결 정책** — 삭제는 파괴적 쓰기인데 *열람* 능력으로 통과한다.
+     *
+     * 예전 주석은 "남의 쿼리를 지울 수도 없다"였고 그것은 **거짓이다**: [visible]은 `seesEveryone`이면
+     * 소유권을 묻지 않으므로 STEWARD/ADMIN은 남의 저장 쿼리를 지운다(실측, 회귀 아님 — 옛
+     * `delete(id, actor, privileged)`도 같았다). C3가 능력에 이름을 주면서 그 모순이 드러났다:
+     *
+     * - `Viewer`는 "열람 스코프"라고 선언했는데 삭제가 그것을 타고 있다
+     * - [update]는 대행 수정을 시그니처로 거부하는데(결정 14의 대칭) 같은 파괴성의 삭제는 열려 있다
+     * - 쿼리 행이 사라지면 `GET /api/queries/{id}/executions`가 404가 되어 **소유자가 자기 실행 이력에
+     *   도달할 수 없다**. 전역 감사(`/api/executions`)는 STEWARD 전용이므로 소유자 쪽 창구만 닫힌다
+     *
+     * 스펙에 삭제 스코프의 근거가 없어(008·010 전문에 언급 0건) **정책을 바꾸지 않고 현행을 고정**했다
+     * (`ExecutionFlowIntegrationTest`의 STEWARD 삭제 테스트). 결정이 나면 [ownedBy]로 돌리는 것이
+     * 위 세 논거와 일관된다.
+     */
+    fun delete(id: Long, viewer: Viewer) {
+        visible(id, viewer)
         repository.deleteById(id)
     }
 
@@ -162,14 +182,27 @@ class QueryService(
      */
     private fun ownerOf(query: SavedQuery): String? = approvalGate.findRequest(query.requestId)?.requester
 
-    /** 없으면 404, 남의 것이면 403. 존재 여부를 숨기지 않는다 — id는 순번이므로 숨겨도 의미가 없다. */
-    internal fun visible(id: Long, actor: String, privileged: Boolean): SavedQuery {
-        val query = repository.findById(id).orElseThrow { NotFoundException("쿼리 $id 없음") }
-        if (!privileged && ownerOf(query) != actor) {
-            throw ForbiddenException("본인이 저장한 쿼리만 조회할 수 있습니다")
+    /** 열람 스코프대로 — 전건을 보는 능력이면 소유권을 묻지 않는다. */
+    internal fun visible(id: Long, viewer: Viewer): SavedQuery =
+        if (viewer.seesEveryone) load(id) else ownedBy(id, viewer.actor)
+
+    /**
+     * **소유자만.** 없으면 404, 남의 것이면 403 — 존재 여부를 숨기지 않는다(id는 순번이므로 숨겨도 의미가 없다).
+     *
+     * [Viewer]를 받지 않는 것이 이 함수의 요점이다: 능력으로 넓힐 수 없는 경로가 하나 있어야
+     * [update]가 대행 수정을 허용하지 않는다는 것을 **타입으로** 말할 수 있다.
+     */
+    private fun ownedBy(id: Long, actor: String): SavedQuery {
+        val query = load(id)
+        if (ownerOf(query) != actor) {
+            // "조회"라고 쓰지 않는다 — 이 문장은 수정(update) 경로에도 그대로 나간다.
+            throw ForbiddenException("본인이 저장한 쿼리만 다룰 수 있습니다")
         }
         return query
     }
+
+    private fun load(id: Long): SavedQuery =
+        repository.findById(id).orElseThrow { NotFoundException("쿼리 $id 없음") }
 
     // ---- 게이트 (spec 005 §4 — 실행 순서: 룰 422 → 승인 403) ----
 

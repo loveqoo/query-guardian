@@ -38,9 +38,15 @@ class ExceptionBoundaryTest {
      * 나머지 — `fold`·`getOrElse`는 `Result`에 쓰이면 예외 취급이지만 컬렉션에도 있다 —
      * 오탐 가능성을 알면서 넣는다. `query` 패키지에서 컬렉션 fold가 필요하면 그때 이 결정을 다시 본다
      * (오탐은 눈에 띄고, 누락은 안 띈다).
+     *
+     * **`orElseThrow`는 나중에 추가했다.** `\bthrow\b`는 대소문자를 구분하므로 `orElseThrow`의 `Throw`를
+     * 놓쳤다. 그동안 발화한 이유는 그 표현이 있던 함수들에 *명시적* `throw`가 따로 있었던 **우연**이었고,
+     * P3에서 404 계약을 `QueryService.load`로 뽑아내자 그 우연이 걷히며 사각지대가 드러났다 —
+     * 게이트 패키지에서 예외를 **만드는** 문법 하나가 검사 밖에 있었다는 뜻이다(실측: 이 패키지에 1곳).
      */
     private val exceptionSyntax = Regex(
-        """\btry\s*\{|\bcatch\s*\(|\bthrow\b|\brunCatching\b|\brecoverCatching\b|\bgetOrElse\b|\.fold\(""",
+        """\btry\s*\{|\bcatch\s*\(|\bthrow\b|\borElseThrow\b|\brunCatching\b|""" +
+            """\brecoverCatching\b|\bgetOrElse\b|\.fold\(""",
     )
 
     private val functionDecl = Regex(
@@ -54,7 +60,9 @@ class ExceptionBoundaryTest {
      */
     private val allowedBoundaries = mapOf(
         "GateStop.raise" to "GateStop → 예외로의 유일한 번역점. 경계(orRaise/orThrowWithoutAudit)에서만 불린다",
-        "QueryService.visible" to "열람 스코프 — 게이트 진입 전 조회 계약(ForbiddenException)",
+        "QueryService.ownedBy" to "소유자만 — 게이트 진입 전 조회 계약(ForbiddenException). " +
+            "`visible`이 능력에 따라 여기로 갈라진다(P3: privileged → Viewer)",
+        "QueryService.load" to "404 계약 — 없는 id 하나를 모든 조회가 같은 문장으로 거절한다",
         "QueryService.update" to "소유권·request_id 교체 거부 — 저장 계약(게이트 아님)",
         "QueryService.review" to "검토 결정의 사전조건 — 저장 계약(게이트 아님)",
         "GateSteps.checkAccess" to "AccessControl이 던지는 권한 차단을 값으로",

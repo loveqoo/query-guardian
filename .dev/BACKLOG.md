@@ -56,6 +56,27 @@ craft 검토가 "발급 권한 폐쇄를 **방해**한다"고 지목한 순서�
 - **CI가 없다**(`.github/workflows` 부재). ArchUnit·리플렉션 감시자는 누군가 테스트를 돌릴 때만 발화한다.
   P2에서 컴파일러로 올릴 수 있는 것은 전부 올렸으나, 남은 감시자들은 이 사실 위에서 읽어야 한다.
 
+## spec 010 P3 C3 검토가 남긴 것 (2026-07-26)
+
+- **⚠️ 사람의 결정이 필요: STEWARD/ADMIN이 남의 저장 쿼리를 지울 수 있다.** 삭제는 파괴적 쓰기인데
+  *열람* 능력(`Viewer.seesEveryone`)으로 통과한다. C3 전에도 같았으므로 회귀는 아니고, 스펙 008·010에
+  삭제 스코프 근거는 **0건**이다. 모순 셋: `Viewer`는 "열람 스코프"라 선언했고, `update`는 대행 수정을
+  시그니처로 거부하는데(결정 14의 대칭) 같은 파괴성의 삭제는 열려 있고, 행이 사라지면 소유자가
+  `GET /api/queries/{id}/executions`에서 404를 받아 **자기 실행 이력 창구를 잃는다**(전역 감사는 STEWARD
+  전용). 현행을 `ExecutionFlowIntegrationTest @Order(22)`로 고정해 두었다 — "소유자만"으로 정하면
+  그 테스트가 먼저 실패하고, `delete`를 `ownedBy`로 돌리는 것이 한 단위다.
+- **오류 원문 노출 정책의 판정지가 둘이다.** 쿼리별 이력은 `viewer.seesRawErrors`(`QueryController`),
+  전역 감사는 `requireRole(STEWARD, ADMIN)` 후 무조건 원문(`ExecutionAuditController`). 느슨해지는
+  방향은 아니지만 **조여도 절반만 적용된다** — "원문은 ADMIN에게만"으로 바꾸면 `/api/executions`가
+  그대로 남고 발화하는 감시자가 없다.
+- **`ExecutionEventDto` 매핑이 두 컨트롤러에 12필드씩 복제**되어 있다(`QueryController.executions`,
+  `ExecutionAuditController.recent`). 원문 마스킹 정책이 그 사본 하나에만 있다. 뷰어를 받는 매퍼 하나로
+  합치면 위 항목도 같이 닫힌다.
+- **감시자의 *서술된 범위*를 시험하는 습관이 없다.** C3에서 발급 경로 검사를 리플렉션으로 만들었고
+  KDoc은 "파일 전수"를 주장했는데 실제는 클래스 스코프였다 — companion 함수 한 줄로 뚫렸다(실측).
+  retrospect 017의 처방("감시자마다 되돌려 실패")을 **"각 감시자의 KDoc이 약속한 범위 밖에 심어 시험"**
+  으로 한 칸 넓힐 것. 이번 건은 정확히 그 시험에서 걸린다.
+
 ## 범위 밖 — 이번에 도입된 것이 아니나 적대 검토가 발견 (spec 005 H4 재검토 대상)
 
 **저장 게이트의 purpose 오라클.** `QueryService.gate`가 `approvalGate.findRequest(requestId)?.purposeCode`로

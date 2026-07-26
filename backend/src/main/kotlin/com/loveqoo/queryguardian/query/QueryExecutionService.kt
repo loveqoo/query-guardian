@@ -15,6 +15,7 @@ import com.loveqoo.queryguardian.approval.ApprovalBlockedException
 import com.loveqoo.queryguardian.approval.ApprovalGate
 import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.audit.ExecutionOutcome
+import com.loveqoo.queryguardian.auth.Viewer
 import com.loveqoo.queryguardian.exec.ExecutionAudit
 import com.loveqoo.queryguardian.exec.ExecutionEvent
 import com.loveqoo.queryguardian.exec.ExecutionFailure
@@ -65,9 +66,10 @@ class QueryExecutionService(
 
     // ---- 진입점 ----------------------------------------------------------
 
-    fun execute(queryId: Long, actor: String, privileged: Boolean): ExecutedQuery {
-        val query = visibleOrRecord(queryId, actor, privileged)
-        val request = GateRequest(queryId, query.requestId, query.purposeCode, query.sqlText, actor)
+    fun execute(queryId: Long, viewer: Viewer): ExecutedQuery {
+        val query = visibleOrRecord(queryId, viewer)
+        // 실행 주체는 **열람 능력이 나른 행위자**다 — 결정 14(대행 실행 불허)가 아래 requireOwnExecution에 있다.
+        val request = GateRequest(queryId, query.requestId, query.purposeCode, query.sqlText, viewer.actor)
 
         val executed = requireOwnExecution(query, request)
             .then { runGate(it) }
@@ -77,7 +79,7 @@ class QueryExecutionService(
 
         return exportOnlyIfRecorded(executed) {
             audit.record(
-                queryId, actor, ExecutionOutcome.SUCCESS, request.sql,
+                queryId, request.actor, ExecutionOutcome.SUCCESS, request.sql,
                 rewrittenSql = executed.rewrittenSql, applied = executed.applied, result = executed.result,
             )
         }
@@ -227,20 +229,20 @@ class QueryExecutionService(
      * 열람 권한. 차단도 **기록한다** — 남의 쿼리 id로 실행을 시도한 것 자체가 감사 대상이다
      * (열거 시도를 사후에 볼 수 있어야 한다). 본문은 남기지 않는다: 읽을 권한이 없는 SQL이다.
      */
-    private fun visibleOrRecord(queryId: Long, actor: String, privileged: Boolean): SavedQuery = try {
-        queries.visible(queryId, actor, privileged)
+    private fun visibleOrRecord(queryId: Long, viewer: Viewer): SavedQuery = try {
+        queries.visible(queryId, viewer)
     } catch (e: ForbiddenException) {
         // 게이트의 결말이므로 게이트의 값으로 바꿔 든다 — 그래야 분류 코드가 응답에도 실린다.
         val stop = GateStop.Denied(AuditCode.FORBIDDEN_READ, e.message ?: "열람 권한이 없습니다")
-        recordStop(GateRequest(queryId, null, null, REDACTED_SQL, actor), stop)
+        recordStop(GateRequest(queryId, null, null, REDACTED_SQL, viewer.actor), stop)
         stop.raise()
     }
 
     // ---- 부속 ------------------------------------------------------------
 
     /** 실행 이력 — 본인 또는 STEWARD/ADMIN만(열람 스코프와 같은 기준). */
-    fun history(queryId: Long, actor: String, privileged: Boolean): List<ExecutionEvent> {
-        queries.visible(queryId, actor, privileged)
+    fun history(queryId: Long, viewer: Viewer): List<ExecutionEvent> {
+        queries.visible(queryId, viewer)
         return audit.historyOf(queryId)
     }
 }

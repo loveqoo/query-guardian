@@ -6,6 +6,16 @@ import jakarta.servlet.http.HttpServletRequest
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.stereotype.Service
 
+/** 거버넌스 역할(STEWARD·ADMIN) — 심사·감독이 직무이므로 전건을 본다. */
+private data class GovernanceViewer(override val actor: String) : Viewer {
+    override val seesEveryone = true
+}
+
+/** ANALYST — 자기 것만. */
+private data class SelfViewer(override val actor: String) : Viewer {
+    override val seesEveryone = false
+}
+
 /**
  * 세션 인증 (spec 007 §4). 주체는 세션 principal뿐 — `X-QG-Actor` 헤더는 인터셉터가 400으로 거부한다.
  * 매 요청 principal의 enabled·role을 **DB에서 재조회**한다(세션에 role 캐싱 금지) → 비활성화·역할 변경 즉시 반영.
@@ -53,7 +63,19 @@ class AuthService(private val users: AppUserRepository) {
         return user
     }
 
-    fun isSteward(user: AppUser) = user.role == Role.STEWARD || user.role == Role.ADMIN
+    /**
+     * **열람 능력의 유일한 발급 경로** ([Viewer]). 역할 → 능력 변환이 여기 한 번만 적혀 있다.
+     *
+     * `currentUser`를 지나므로 매 요청 DB 재조회다 — 역할 강등이 즉시 반영된다.
+     * `when`에 `else`를 두지 않는다: 역할이 늘면 컴파일러가 여기서 결정을 요구한다.
+     */
+    fun currentViewer(request: HttpServletRequest): Viewer {
+        val user = currentUser(request)
+        return when (user.role) {
+            Role.STEWARD, Role.ADMIN -> GovernanceViewer(user.id)
+            Role.ANALYST -> SelfViewer(user.id)
+        }
+    }
 
     fun hash(rawPassword: String): String = encoder.encode(rawPassword)
 }

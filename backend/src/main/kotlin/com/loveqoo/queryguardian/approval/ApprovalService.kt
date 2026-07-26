@@ -11,6 +11,7 @@ import com.loveqoo.queryguardian.api.SaveApprovalRequest
 import com.loveqoo.queryguardian.auth.AccessControl
 import com.loveqoo.queryguardian.auth.AppUserRepository
 import com.loveqoo.queryguardian.auth.Role
+import com.loveqoo.queryguardian.auth.Viewer
 import com.loveqoo.queryguardian.catalog.CatalogPurposeRepository
 import com.loveqoo.queryguardian.catalog.CatalogTableRepository
 import com.loveqoo.queryguardian.rules.RuleRepository
@@ -39,19 +40,19 @@ class ApprovalService(
      * 요청에는 목적·대상 테이블·승인 라인이 들어 있어 조직 내부 정보다. 이제 비특권 사용자는
      * **자기 요청 + 자기가 승인선에 든 요청**만 본다(§5의 저장 쿼리 스코프와 같은 축).
      */
-    fun list(status: String?, requester: String?, actor: String, privileged: Boolean): List<ApprovalSummaryDto> =
+    fun list(status: String?, requester: String?, viewer: Viewer): List<ApprovalSummaryDto> =
         requests.findAll()
             .filter { status == null || it.status.name == status.uppercase() }
             .filter { requester == null || it.requester == requester }
-            .filter { privileged || involves(it, actor) }
+            .filter { viewer.seesEveryone || involves(it, viewer.actor) }
             .map { toSummary(it) }
 
     /** 열람 자격: 요청자 본인 또는 승인선에 편성된 사람. STEWARD/ADMIN은 호출 전에 통과한다. */
     private fun involves(r: ApprovalRequest, actor: String): Boolean =
         r.requester == actor || r.approvers.any { it.approverId == actor }
 
-    fun get(id: Long, actor: String, privileged: Boolean): ApprovalDetailDto {
-        if (!privileged && !involves(load(id), actor)) {
+    fun get(id: Long, viewer: Viewer): ApprovalDetailDto {
+        if (!viewer.seesEveryone && !involves(load(id), viewer.actor)) {
             // 존재 자체를 알려주지 않는다 — 403이면 "그 id는 있다"가 새어 나간다
             throw NotFoundException("승인 요청 $id 없음")
         }

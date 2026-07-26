@@ -624,4 +624,40 @@ class ExecutionFlowIntegrationTest {
             "차단이 기록되지 않았다",
         )
     }
+
+    /**
+     * ⚠️ **현행 고정 — 정책 미결** (spec 010 P3 검토, `QueryService.delete` KDoc).
+     *
+     * STEWARD는 **남의 저장 쿼리를 지운다.** 열람 능력([com.loveqoo.queryguardian.auth.Viewer])이
+     * `seesEveryone`이면 삭제 경로가 소유권을 묻지 않기 때문이다. 이것을 정책으로 승인한 문서는 없고
+     * (스펙 008·010에 삭제 스코프 언급 0건), C3 전에도 같았으므로 **회귀도 아니다**.
+     *
+     * 그래서 바꾸지 않고 **잰다**. 핀이 없던 동안 이 동작은 어느 방향으로도 단정되지 않았고, 그러면
+     * 다음 리팩터가 조용히 뒤집어도 아무도 모른다 — 대행 수정은 위 `@Order(18)`이 막고 있는데
+     * 같은 파괴성의 삭제는 열려 있다는 비대칭이 특히 그렇다.
+     *
+     * 정책이 "소유자만"으로 정해지면 이 테스트가 먼저 실패한다. 그때 `delete`를 `ownedBy`로 돌리고
+     * 이 테스트의 기대를 403으로 바꾸는 것이 한 단위다.
+     *
+     * 삭제가 실제로 일어나므로 **가장 마지막에 둔다** — 공유 픽스처(`queryId`)를 쓰지 않고 자기 쿼리를 만든다.
+     */
+    @Test
+    @Order(22)
+    fun `삭제 스코프 - STEWARD가 남의 쿼리를 지운다(현행)`() {
+        val victim = (client.postAs("/api/queries", "u1", mapOf(
+            "name" to "삭제 표본", "dialect" to "MYSQL", "requestId" to requestId,
+            "sql" to "SELECT id FROM users",
+        )).body!!["id"] as Number).toLong()
+
+        // u2(다른 ANALYST)는 막힌다 — 열람 스코프가 없으므로
+        assertEquals(HttpStatus.FORBIDDEN, client.deleteAs("/api/queries/$victim", "u2").statusCode)
+
+        // ap1(STEWARD)은 지운다. 소유자는 u1인데 아무 소유권 검사도 없다.
+        assertEquals(
+            HttpStatus.NO_CONTENT, client.deleteAs("/api/queries/$victim", "ap1").statusCode,
+            "현행 동작이 바뀌었다 — 정책을 정한 것이라면 이 테스트와 QueryService.delete의 KDoc을 같이 고쳐라",
+        )
+        // 그리고 소유자는 자기 실행 이력 창구를 잃는다(전역 감사는 STEWARD 전용이다)
+        assertEquals(HttpStatus.NOT_FOUND, client.getAs("/api/queries/$victim/executions", "u1").statusCode)
+    }
 }

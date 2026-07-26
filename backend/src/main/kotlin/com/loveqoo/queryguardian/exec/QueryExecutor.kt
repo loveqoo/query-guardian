@@ -69,6 +69,27 @@ private val REQUIRED_SQL_MODES = listOf("STRICT_TRANS_TABLES", "NO_ENGINE_SUBSTI
  * 물러나 주 DataSource(설정 DB)가 사라지고, Testcontainers의 접속 정보 주입도 어긋난다.
  * 그래서 풀을 이 클래스가 직접 소유하고 **처음 실행할 때 지연 생성**한다(실행하지 않는 환경은 접속조차 만들지 않는다).
  */
+/**
+ * **실행 지시** — 무엇을 몇 행까지 실행할지가 **한 값**으로 묶인다 (spec 010 I9).
+ *
+ * 예전에는 [QueryExecutor.execute]가 `(sql, maxRows, configuredCap)` 세 인자를 받았다. 그러면 A 쿼리의
+ * SQL에 B 쿼리의 상한을 붙여 부르는 것이 **문법적으로 가능**했다 — 게이트를 다 지나고도 마지막 한 줄에서
+ * 짝이 어긋날 수 있는 자리였다. 한 값으로 묶으면 그 자리가 사라진다.
+ *
+ * 이 인터페이스를 **밖에서 구현할 수 없게 막지는 않았다**(막으면 `exec → query` 순환이 생긴다).
+ * "게이트를 거치지 않은 실행"은 대신 `ArchGateAccessTest.onlyTheGateMayReachTheExecutor`가 막는다 —
+ * 실행기를 **의존할 수 있는 클래스 자체를 하나로** 묶는 규칙이다.
+ */
+interface ExecutionOrder {
+    val sql: String
+
+    /** 유효 상한. 재작성기가 SQL에 `LIMIT maxRows + 1`을 넣어 두었다. */
+    val maxRows: Long
+
+    /** 설정된 거버넌스 상한 — 사용자가 요청한 LIMIT과 구분해 응답에 그대로 보인다(retrospect 012). */
+    val governanceCap: Long
+}
+
 @Component
 class QueryExecutor(
     @Value("\${guardian.exec.url:jdbc:mysql://localhost:3307/queryguardian_demo}") private val url: String,
@@ -102,14 +123,14 @@ class QueryExecutor(
      * **`maxRows + 1`번째 행이 오는지**만 보고 `truncated`를 확정한 뒤 그 행을 버린다.
      * `setMaxRows`는 쓰지 않는다 — 상한 장치가 둘이면 서로 어긋난다(§3.0-2 단일 장치).
      */
-    fun execute(sql: String, maxRows: Long, configuredCap: Long = maxRows): ExecutionResult {
+    fun execute(order: ExecutionOrder): ExecutionResult {
         val started = System.nanoTime()
         try {
             connection().use { connection ->
                 connection.createStatement().use { statement ->
                     statement.queryTimeout = (timeoutMs / 1000).toInt().coerceAtLeast(1)
-                    statement.executeQuery(sql).use { rs ->
-                        return read(rs, maxRows, configuredCap, started)
+                    statement.executeQuery(order.sql).use { rs ->
+                        return read(rs, order.maxRows, order.governanceCap, started)
                     }
                 }
             }

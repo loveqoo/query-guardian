@@ -430,7 +430,7 @@ class AuditCodeCoverageTest {
 
     private fun forceExecutionFailure(kind: ExecutionFailure.Kind) {
         doThrow(ExecutionFailure(kind, "주입된 실패($kind)"))
-            .`when`(executor).execute(any(), any(), any())
+            .`when`(executor).execute(any())
     }
 
     // ---- 준비물 -----------------------------------------------------------

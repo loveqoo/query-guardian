@@ -438,7 +438,7 @@ class ExecutionFlowIntegrationTest {
     @Order(15)
     fun `실행 커넥션 - sql_mode는 합집합이고 스캐너 전제를 지킨다`() {
         ensureDemoSchema()
-        val mode = executor.execute("SELECT @@SESSION.sql_mode", 1).rows.single().single()!!
+        val mode = executor.execute(ProbeOrder("SELECT @@SESSION.sql_mode")).rows.single().single()!!
         assertTrue(mode.contains("ONLY_FULL_GROUP_BY"), "서버 기본 모드를 갈아써 버렸다: $mode")
         assertTrue(mode.contains("STRICT_TRANS_TABLES"), "고정 모드가 빠졌다: $mode")
         assertTrue(!mode.contains("NO_BACKSLASH_ESCAPES"), "접수 스캐너의 전제가 깨진다: $mode")

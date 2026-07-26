@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
  *
  * | 시나리오 | 왜 성립하지 않는가 |
  * |---|---|
- * | 재사용 | 증거가 어디에도 **저장되지 않는다** — `execute`의 스택에만 산다(`ArchIsolationTest`가 감시) |
+ * | 재사용 | 증거가 어디에도 **저장되지 않는다** — `execute`의 스택에만 산다(`ArchGateAccessTest`가 감시) |
  * | 다른 대상에 재결합 | 실행기가 SQL·상한을 **한 값**으로 받는다. A의 SQL에 B의 상한을 붙일 자리가 없다 |
  * | 승인 상태 변경 후 사용 | 캐시 경로가 없다. 매 호출이 승인 검사를 새로 탄다 |
  * | 다른 actor에게 전달 | `actor`는 증거 사슬 안에 있고 `copy()`가 닫혀 바꿀 수 없다 |
@@ -87,20 +87,6 @@ class GateEvidenceClosureTest {
         )
         assertTrue(impls.size >= stages.count { !it.isSealed || it.sealedSubclasses.isNotEmpty() },
             "구현체를 하나도 못 찾았다면 이 테스트는 공허하다: $impls")
-    }
-
-    /**
-     * **ArchUnit 규칙과의 연결.** `gateEvidenceStaysInTheGate`는 타입을 **문자열 이름**으로 가리킨다
-     * (클래스 리터럴을 쓰면 그 테스트 클래스가 스스로 규칙을 위반한다 — 실측). 문자열이라 이름을 바꾸면
-     * 규칙이 조용히 아무것도 안 잡는 상태가 되므로, **여기서 대조**해 그 침묵을 막는다.
-     */
-    @Test
-    fun `단계 목록이 ArchUnit 규칙과 같은 이름을 가리킨다`() {
-        assertEquals(
-            com.loveqoo.queryguardian.ArchIsolationTest.STAGE_TYPES.toSet(),
-            stages.mapNotNull { it.qualifiedName }.toSet(),
-            "단계 타입 이름이 바뀌었다 — ArchIsolationTest.STAGE_TYPES도 함께 고쳐야 규칙이 계속 작동한다",
-        )
     }
 
     /**

@@ -45,7 +45,7 @@ class SqlModeContractTest {
 
     @Test
     fun `위험 모드가 켜진 서버에서도 실행 세션은 판정과 같은 문법으로 읽는다`() {
-        val mode = executor.execute("SELECT @@SESSION.sql_mode", 1).rows.single().single()!!
+        val mode = executor.execute(ProbeOrder("SELECT @@SESSION.sql_mode")).rows.single().single()!!
         val modes = mode.split(',').map { it.trim().uppercase() }.toSet()
 
         // ⑴ 판정과 실행을 갈라놓는 모드는 전부 빠졌다
@@ -61,11 +61,11 @@ class SqlModeContractTest {
         assertTrue("STRICT_TRANS_TABLES" in modes, "고정 모드가 빠졌다: $mode")
 
         // ⑶ 결정적 증거: `"ssn"`이 컬럼이 아니라 **문자열**로 읽힌다(= 판정기와 같은 해석)
-        val quoted = executor.execute("""SELECT "ssn" AS probe""", 1).rows.single().single()
+        val quoted = executor.execute(ProbeOrder("""SELECT "ssn" AS probe""")).rows.single().single()
         assertEquals("ssn", quoted, "실행 세션이 큰따옴표를 컬럼 참조로 읽는다 — 마스킹 우회 경로다")
 
         // ⑷ `||`가 CONCAT이 아니라 OR로 읽힌다(PIPES_AS_CONCAT 제거 확인)
-        val pipes = executor.execute("SELECT 1 || 0 AS probe", 1).rows.single().single()
+        val pipes = executor.execute(ProbeOrder("SELECT 1 || 0 AS probe")).rows.single().single()
         assertEquals("1", pipes, "`||`가 CONCAT으로 읽힌다 — WHERE 의미가 판정과 달라진다")
     }
 }

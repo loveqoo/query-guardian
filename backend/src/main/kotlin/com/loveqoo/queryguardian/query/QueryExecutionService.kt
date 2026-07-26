@@ -155,7 +155,7 @@ class QueryExecutionService(
      */
     private fun runQuery(executable: Executable): GateOutcome<ExecutedQuery> = try {
         val rewritten = executable.rewritten
-        val result = executor.execute(rewritten.sql, executable.cap.maxRows, executable.cap.governanceCap)
+        val result = executor.execute(executable)
         cleared(ExecutedQuery(result, rewritten.sql, rewritten.applied))
     } catch (e: ExecutionFailure) {
         stopped(GateStop.Failed(e, executable.rewritten))

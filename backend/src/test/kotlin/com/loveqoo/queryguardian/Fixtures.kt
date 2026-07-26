@@ -74,3 +74,17 @@ object Fixtures {
         assertFalse(report.blocked, "통과해야 하는데 차단됨: $sql\n$report\n${irTree(sql)}")
     }
 }
+
+/**
+ * 게이트를 거치지 않는 **진단용 실행 지시** — 세션 계약(`sql_mode`) 확인처럼 결과 행이 아니라
+ * 접속의 성질을 보는 프로브에만 쓴다.
+ *
+ * 프로덕션에는 이런 구현체가 없다(`Executable`이 유일하고 발급자가 하나다). 테스트가 만들 수 있는 것은
+ * `ExecutionOrder`를 봉인하지 않았기 때문이고, 봉인하면 `exec → query` 순환이 생긴다 —
+ * 그 대신 `ArchGateAccessTest.onlyTheGateMayReachTheExecutor`가 **실행기에 닿을 수 있는 클래스 자체**를 묶는다.
+ */
+data class ProbeOrder(
+    override val sql: String,
+    override val maxRows: Long = 1,
+    override val governanceCap: Long = 1,
+) : com.loveqoo.queryguardian.exec.ExecutionOrder

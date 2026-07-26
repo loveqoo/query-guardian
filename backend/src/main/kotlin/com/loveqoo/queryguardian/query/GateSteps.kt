@@ -9,6 +9,7 @@ import com.loveqoo.queryguardian.auth.AccessBlockedException
 import com.loveqoo.queryguardian.auth.AccessControl
 import com.loveqoo.queryguardian.exec.DemoMapping
 import com.loveqoo.queryguardian.exec.DemoTableResolver
+import com.loveqoo.queryguardian.exec.ExecutionOrder
 import com.loveqoo.queryguardian.exec.PlanOutcome
 import com.loveqoo.queryguardian.exec.RewriteCatalog
 import com.loveqoo.queryguardian.exec.RewritePlanner
@@ -141,11 +142,16 @@ sealed interface Ready {
  * **이 값이 곧 실행 허가증이다**(I9). 참조가 `execute`의 스택 밖으로 나가지 않으므로 재사용·재결합·
  * 타인 전달이 성립하지 않는다 — 그 사실을 `GateEvidenceClosureTest`가 감시자로 고정한다.
  */
-sealed interface Executable {
+sealed interface Executable : ExecutionOrder {
     val ready: Ready
     val cap: LimitCap
 
     val rewritten: RewriteOutcome.Rewritten get() = ready.rewritten
+
+    /** 실행기가 받는 것은 이 셋뿐이다 — SQL과 상한이 **같은 증거에서** 나오므로 짝이 어긋날 수 없다. */
+    override val sql: String get() = rewritten.sql
+    override val maxRows: Long get() = cap.maxRows
+    override val governanceCap: Long get() = cap.governanceCap
 }
 
 // ---- 구현체 — 이 파일 밖에서는 만들 수 없다 ----------------------------------

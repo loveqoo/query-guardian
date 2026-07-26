@@ -29,14 +29,37 @@
 - **D-A 보강.** "프로브 값에서 출력 ≠ 입력"은 마스킹 증명이 아니다 — 프로브만 다르게 반환하는 `CASE`,
   가역 인코딩, 일부 값 항등 함수가 통과한다. → 허용 함수/템플릿 allowlist 또는 비가역성 계약.
 
-## spec 010 P1 작업 목록 — craft-reviewer 기준선 검토 (2026-07-26)
+## spec 010 P2 앞에 둘 것 — P1 검토 2채널이 넘긴 것 (2026-07-26)
+
+craft 검토가 "발급 권한 폐쇄를 **방해**한다"고 지목한 순서다.
+
+1. **`InspectResult`를 sealed로** (`parser/DialectParser.kt`) — 지금은 `parse` + `statement?`가 나란한
+   두 필드라 "Success면 핸들이 있다"가 KDoc 산문이다. `Parsed`가 그 원본을 계속 들고 다니므로,
+   생성자를 닫아도 "세 필드가 서로 모순되지 않는다"는 여전히 `parseOnce`의 규율이지 타입의 성질이 아니다.
+   **증거 타입이 증거가 되려면 이것부터.**
+2. **상태 타입과 발급자가 다른 파일에 있다** — 상태는 `GatePipeline.kt`, 발급은 `GateSteps.kt`.
+   `private constructor`를 쓰려면 같은 파일이어야 하고, `internal`은 `query` 패키지 전체
+   (즉 `QueryService`)에 열려 폐쇄가 처음부터 샌다.
+3. **`AccessDenied`·`ApprovalDenied` 쌍둥이** — 네 멤버 구현이 문자 그대로 같다. 두 DTO가
+   `code`+`message`를 공유하는데 공통 상위 타입이 없다.
+4. **저장 게이트 줄기가 반만 풀렸다** — `require`(IllegalArgument) · `orThrowWithoutAudit`(GateStop) ·
+   생짜 `approvalGate.check`(ApprovalBlocked)가 20줄 안에 나란히 있다. 승인 검사가 값을 돌려줘야 해서
+   체인에 못 들어갔는데, 그 값을 상태에 담으면 된다(`Judged → Approved`).
+
+## 범위 밖 — 이번에 도입된 것이 아니나 적대 검토가 발견 (spec 005 H4 재검토 대상)
+
+**저장 게이트의 purpose 오라클.** `QueryService.gate`가 `approvalGate.findRequest(requestId)?.purposeCode`로
+**요청자 확인 없이** purpose를 먼저 뽑고(H4에 따라 룰 422가 승인 403보다 앞선다), 그래서 남의
+`requestId`를 넣어 임의 SQL을 저장 시도하면 **그 사람의 purpose 기준으로 판정된 룰 보고서**를 받는다.
+purpose별 FILTER의 존재 유무를 캐는 오라클이다. 재작성 전에도 순서·획득 방식이 동일했음을 확인했다.
+
+## spec 010 P1 작업 목록 — craft-reviewer 기준선 검토 (2026-07-26) — **완료**
 
 `QueryExecutionService`를 표본으로 한 **설계 품질 전담** 검토(장인 축의 첫 실행, retrospect 014 교정).
 spec 010을 안 보고 독립적으로 도출했고, §1 진단(줄기가 주석에만·사본·문법 다양성·`statement!!`)에
 수렴했다. **아래 4건은 spec 010이 놓친 것**이다.
 
-**권장 순서 1 → 2 → 3.** 1이 사본을 없애야 2·3의 수정이 한 곳에서 끝난다. 3을 먼저 하면 같은
-sealed 분해를 두 벌 고치게 된다.
+8개 항목 전부 반영됐다(3번은 계획서에서 조용히 빠졌다가 검토가 잡아 뒤늦게 처리 — retrospect 015 반성 1).
 
 | # | 없앨 것 | 뽑아낼 이름 |
 |---|---|---|

@@ -76,4 +76,7 @@ enum class FailureKind {
     NOT_SELECT,
     INPUT_TOO_LARGE,
     TIMEOUT,
+
+    /** 파싱 풀이 포화됐다 — 입력의 문제가 아니라 서버 부하다. 재시도가 의미 있는 유일한 실패다. */
+    OVERLOADED,
 }

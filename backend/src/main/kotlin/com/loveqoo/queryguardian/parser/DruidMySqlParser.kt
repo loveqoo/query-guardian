@@ -48,8 +48,10 @@ import com.loveqoo.queryguardian.ir.ScopeKind
 import com.loveqoo.queryguardian.ir.SelectItem
 import com.loveqoo.queryguardian.ir.SelectScope
 import com.loveqoo.queryguardian.ir.TableRef
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import jakarta.annotation.PreDestroy
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -73,6 +75,11 @@ class DruidMySqlParser(
      * 무관하고 버전에 묶이지 않는다. 실측(64KB 기준): 8,000항까지 정상, 30,000항에서 터진다.
      */
     private val maxOperatorChain: Int = 1_000,
+    /**
+     * 동시 파싱 스레드 상한. 파싱은 요청과 1:1이므로 **동시 요청 수보다 넉넉해야** 한다 —
+     * 작게 잡으면 스택 격리 이득 없이 정상 요청만 거부된다. 톰캣 기본 최대 스레드(200)보다 크게 잡는다.
+     */
+    private val maxParseThreads: Int = 256,
 ) : DialectParser {
 
     override val dialect = Dialect.MYSQL
@@ -112,8 +119,35 @@ class DruidMySqlParser(
     /** 파싱마다 증가 — scopeId가 파싱 간에 충돌하지 않게 한다. */
     private val parseCounter = java.util.concurrent.atomic.AtomicLong()
 
-    private val executor: ExecutorService = Executors.newCachedThreadPool { r ->
-        Thread(r, "druid-parse").apply { isDaemon = true }
+    /**
+     * 파싱 전용 스레드 풀.
+     *
+     * **왜 별 스레드인가**: 시간 제한 때문이 아니다(실측상 64KB 안에서 파싱은 밀리초라 타임아웃은 사실상
+     * 발화하지 않는다). 진짜 이유는 **스택 격리**다 — 어댑터와 이진 연쇄 상한이 잡지 못한 재귀 폭주가
+     * 남아 있어도 그것이 요청 스레드가 아니라 이 스레드에서 나고, `future.get`이 `ExecutionException`으로
+     * 싸 주어 **값으로** 번역된다. 없애면 미파악 폭주가 무기록 500이 된다.
+     *
+     * **병렬성을 위한 것이 아니다.** 요청 스레드는 [java.util.concurrent.Future.get]에서 블록하므로
+     * 파싱 작업은 요청과 1:1이다. 그래서 풀을 작게 잡으면 이득 없이 정상 요청만 거부한다 —
+     * 상한은 "동시 요청보다 넉넉하게, 그러나 무한은 아니게"가 기준이다.
+     * 예전에는 `newCachedThreadPool`이라 **상한이 없었다**: 요청이 몰리면 스레드가 무한 생성됐다.
+     *
+     * `SynchronousQueue` + 상한 = 캐시드 풀과 같은 동작에 천장만 씌운 것이다. 포화는 예외가 아니라
+     * [FailureKind.OVERLOADED] **값**이 된다.
+     */
+    private val executor: ThreadPoolExecutor = ThreadPoolExecutor(
+        0, maxParseThreads, 60L, TimeUnit.SECONDS, SynchronousQueue(),
+        { r -> Thread(r, "druid-parse").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
+
+    /**
+     * 스프링이 빈을 내릴 때 풀을 닫는다. 예전에는 종료 경로가 없어 컨텍스트를 여러 번 띄우는 테스트에서
+     * 풀이 그대로 남았다. 데몬 스레드라 JVM은 끝나지만, **끝나야 할 것이 안 끝나는 상태**를 남기지 않는다.
+     */
+    @PreDestroy
+    fun shutdown() {
+        executor.shutdownNow()
     }
 
     /** 기존 호출자 유지 — 파싱과 접수 검사는 [inspect]에서 **한 번의 파싱으로** 함께 나온다. */
@@ -173,13 +207,25 @@ class DruidMySqlParser(
             )
         }
 
-        val future = executor.submit<List<com.alibaba.druid.sql.ast.SQLStatement>> {
-            BoundedMySqlParser(sql, maxParseDepth).parseAll()
+        val future = try {
+            executor.submit<List<com.alibaba.druid.sql.ast.SQLStatement>> {
+                BoundedMySqlParser(sql, maxParseDepth).parseAll()
+            }
+        } catch (e: RejectedExecutionException) {
+            // 포화도 값이다 — 예외로 나가면 무기록 500이 된다.
+            return InspectResult(
+                ParseResult.Failure(FailureKind.OVERLOADED, "파싱 요청이 몰려 처리할 수 없습니다"),
+                lexical,
+            )
         }
         val statements = try {
             future.get(parseTimeoutMillis, TimeUnit.MILLISECONDS)
         } catch (e: TimeoutException) {
-            future.cancel(true) // 방치하면 파싱 스레드가 계속 돌아 풀에 누적된다
+            // `cancel(true)`는 인터럽트 플래그만 세운다. Druid 파싱은 순수 CPU라 그 플래그를 보지 않으므로
+            // **이 호출이 스레드를 멈추지는 못한다** — 예전 주석("방치하면 누적된다")은 이것이 누적을
+            // 막아 준다는 뜻으로 읽혔는데 사실이 아니었다. 잔존 작업을 실제로 막는 것은 어댑터·연쇄 상한이
+            // 입력을 유계로 만든 것이고, 이 호출은 풀에 "이 작업은 버려졌다"를 알리는 것까지다.
+            future.cancel(true)
             return InspectResult(
                 ParseResult.Failure(FailureKind.TIMEOUT, "파싱이 ${parseTimeoutMillis}ms 안에 끝나지 않았습니다"),
                 lexical,

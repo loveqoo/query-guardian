@@ -142,6 +142,35 @@ class ParserResourceBoundTest {
         )
     }
 
+    // ---- 잔존 작업 ---------------------------------------------------------
+
+    /**
+     * **공격 뒤에 파서가 회복하는가** (spec 010 A7).
+     *
+     * 호출이 시간 안에 반환하는 것만으로는 이 축을 못 본다 — 취소 불가한 작업이 worker를 영구 점유하면
+     * 응답은 정상인데 **이후 정상 요청이 계속 거부된다**. 예전 구조가 정확히 그 모양이었다:
+     * 무제한 캐시드 풀 + `cancel(true)`가 순수 CPU 파싱을 멈추지 못함.
+     *
+     * 지금은 입력이 유계라(어댑터·연쇄 상한) 작업이 반드시 끝나고, 풀에도 천장이 있다.
+     */
+    @Test
+    fun `폭주 입력을 반복해도 파서가 회복한다`() {
+        val attacks = listOf(
+            "SELECT " + "(".repeat(3000) + "1" + ")".repeat(3000) + " FROM t",
+            "SELECT id FROM " + "(SELECT id FROM ".repeat(2000) + "t" + ") x".repeat(2000),
+            "SELECT id FROM t WHERE " + (1..5000).joinToString(" OR ") { "a=1" },
+        )
+        repeat(20) { round ->
+            for (sql in attacks) {
+                val result = runCatching { parser.inspect(sql) }
+                assertTrue(result.isSuccess, "${round}회차에서 던졌다: ${result.exceptionOrNull()}")
+            }
+        }
+        // 공격 **직후** 정상 요청이 통과해야 한다 — worker가 물려 있으면 여기서 드러난다.
+        val normal = parser.inspect("SELECT u.id FROM users u WHERE u.id > 1 LIMIT 10")
+        assertTrue(normal.parse is ParseResult.Success, "공격 뒤 정상 쿼리가 막혔다: ${normal.parse}")
+    }
+
     private fun failureOf(p: DialectParser, sql: String): ParseResult.Failure {
         val parsed = p.inspect(sql).parse
         assertTrue(parsed is ParseResult.Failure, "실패해야 하는데 통과했다: ${sql.take(60)}…")

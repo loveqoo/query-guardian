@@ -32,9 +32,8 @@ class QueryService(
     private val objectMapper: ObjectMapper,
     private val ruleService: RuleService,
     private val approvalGate: ApprovalGate,
-    private val parser: DialectParser,
+    private val steps: GateSteps,
     private val reviewEvents: QueryReviewEventRepository,
-    private val access: AccessControl,
 ) {
     /** 저장 게이트: 룰(422) 선행 → 승인 검사(403) (spec 005 §4, H4). */
     fun save(actor: String, request: SaveQueryRequest): QueryDto {
@@ -166,31 +165,48 @@ class QueryService(
 
     // ---- 게이트 (spec 005 §4 — 실행 순서: 룰 422 → 승인 403) ----
 
+    /**
+     * 저장 게이트 — **실행 게이트와 같은 단계 단위**([GateSteps])를 쓰되 **순서는 저장의 것**이다.
+     *
+     * 순서가 다른 것은 정책이다: 저장은 룰 422가 승인 403보다 앞서고(spec 005 H4), 실행은 신원 검사가
+     * 판정보다 앞선다(남의 쿼리 판정 결과를 흘리지 않기 위해). 그래서 [GateSteps]는 단계만 주고
+     * 조립은 각 게이트가 한다.
+     *
+     * 예전에는 이 절차가 손으로 한 번 더 적혀 있었고 **이미 갈라져 있었다** — 여기서만 파싱을 두 번 했다
+     * (`parser.parse()` 한 번, `lintService.lint(sql)` 안에서 또 한 번). 그래서 "판정과 재작성이 같은
+     * AST를 쓴다"(spec 008 결정 13)가 실행 게이트에서만 성립했다.
+     */
     private fun gate(actor: String, request: SaveQueryRequest): Pair<ApprovalRequest, LintReportDto> {
         require(request.name.isNotBlank() && request.name.length <= 100) { "이름은 1~100자여야 합니다" }
         // purposeCode는 클라이언트 입력이 아니라 승인 요청에서 주입한다 (C1). 요청이 없으면 null로 lint 후 403.
         val purposeCode = request.requestId?.let { approvalGate.findRequest(it)?.purposeCode }
+        val ctx = GateRequest(
+            queryId = null, requestId = request.requestId,
+            purposeCode = purposeCode, sql = request.sql, actor = actor,
+        )
 
-        // 1) 데이터 권한 검사 — 룰보다 **앞** (spec 007 §6.0). 권한 없는 사용자에게 위반 메시지를 주지 않는다.
-        val parsedIr = when (val r = parser.parse(request.sql)) {
-            is ParseResult.Success -> r.ir
-            is ParseResult.Failure -> null // 파싱 실패는 룰 게이트가 BLOCK으로 보고
-        }
-        parsedIr?.let { access.checkTables(actor, approvalGate.physicalTables(it)) }
+        // 데이터 권한이 룰보다 **앞**이다 (spec 007 §6.0) — 권한 없는 사용자에게 위반 메시지를 주지 않는다.
+        val outcome = steps.parseOnce(ctx)
+            .then(steps::checkAccess)
+            .then(steps::judgeRules)
 
-        // 2) 룰 게이트 — BLOCK이면 422. 규칙 hit 통계는 권한 통과 후에만 기록(spec 004 §7 개정).
-        val report = LintReportDto.from(lintService.lint(request.sql, purposeCode))
+        // 룰 hit 통계는 **차단된 쿼리도 포함**한다 — "무엇이 자주 걸리는가"가 통계의 목적이므로
+        // 걸린 것을 빼면 목적이 뒤집힌다. 그래서 통과·차단 양쪽에서 보고서를 꺼내 기록한다.
+        steps.reportOf(outcome)?.let { recordRuleHits(it) }
+
+        val judged = outcome.orThrow()
+        // 승인 검사 — 요청 존재·승인·요청자·테이블 커버
+        val approval = approvalGate.check(request.requestId, actor, judged.parsed.ir)
+        return approval to judged.report
+    }
+
+    /** 규칙 hit 통계 (spec 004 §7 개정 — 권한 통과 후에만 기록). */
+    private fun recordRuleHits(report: LintReportDto) {
         val ruleIds = report.violations
             .filter { it.ruleId.startsWith("rule/") }
             .mapNotNull { it.ruleId.removePrefix("rule/").toLongOrNull() }
             .toSet()
         if (ruleIds.isNotEmpty()) ruleService.recordHits(ruleIds)
-        if (report.blocked) throw BlockedException(report)
-
-        // 3) 승인 검사 — 요청 존재·승인·요청자·테이블 커버
-        val ir = parsedIr ?: throw BlockedException(report)
-        val approval = approvalGate.check(request.requestId, actor, ir)
-        return approval to report
     }
 
     private fun sha256(text: String): String =

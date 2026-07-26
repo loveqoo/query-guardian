@@ -35,6 +35,17 @@ fun <T> cleared(value: T): GateOutcome<T> = GateOutcome.Cleared(value)
 /** 단계가 멈출 때. */
 fun stopped(stop: GateStop): GateOutcome<Nothing> = GateOutcome.Stopped(stop)
 
+/**
+ * **감사 없이** 경계로 내보낸다 — 저장 게이트용.
+ *
+ * 저장은 실행이 아니라 `execution_event`를 남기지 않는다(감사의 대상은 실행 시도다). 실행 게이트는
+ * 대신 기록 후 내보내는 자기 경계를 쓴다.
+ */
+fun <T> GateOutcome<T>.orThrow(): T = when (this) {
+    is GateOutcome.Cleared -> value
+    is GateOutcome.Stopped -> stop.raise()
+}
+
 // ---- 게이트 상태 -----------------------------------------------------------
 
 /**

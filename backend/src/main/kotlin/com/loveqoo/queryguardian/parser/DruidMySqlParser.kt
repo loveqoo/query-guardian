@@ -62,10 +62,17 @@ class DruidMySqlParser(
      */
     private val maxParseDepth: Int = 100,
     /**
-     * 연속 덧셈·뺄셈 연산자 개수 상한. Druid의 `additiveRest`가 자기 재귀인데 `final`이라 어댑터를
-     * 끼울 수 없어, 그 고리만 파싱 **전에** 텍스트로 막는다. 실측: 5,000항은 통과하고 30,000항에서 터진다.
+     * **이진 연쇄 길이 상한** — `a OR b OR …`, `a + b + …`처럼 평면으로 이어지는 연산자의 개수.
+     *
+     * 이 축이 따로 필요한 이유: Druid는 평면 체인을 **반복으로 파싱**하므로(실측 깊이 2) 어댑터의 깊이
+     * 계수기가 잡지 못한다. 그런데 만들어진 AST는 좌편향 n단이라 그 위를 걷는 모든 코드가 n단 재귀가 된다
+     * — Druid 방문자(`SQLObjectImpl.accept`)도 포함이고, 그건 `final`도 아니지만 우리가 대체하면
+     * 노드 종류를 빠뜨려 fail-open할 위험이 있다(이 저장소의 "조용히 버림은 fail-closed 아님").
+     *
+     * 그래서 **텍스트 성질로 막는다**: 리터럴을 제거한 뒤 이진 연산자 수를 센다. Druid 내부 구현과
+     * 무관하고 버전에 묶이지 않는다. 실측(64KB 기준): 8,000항까지 정상, 30,000항에서 터진다.
      */
-    private val maxAdditiveRun: Int = 1_000,
+    private val maxOperatorChain: Int = 1_000,
 ) : DialectParser {
 
     override val dialect = Dialect.MYSQL
@@ -154,13 +161,13 @@ class DruidMySqlParser(
                 lexical,
             )
         }
-        // 봉인된 재귀 고리 하나(산술 좌결합)는 어댑터로 못 막으므로 여기서 텍스트로 막는다.
-        val additiveRun = scan.withoutLiterals.count { it == '+' || it == '-' }
-        if (additiveRun > maxAdditiveRun) {
+        // 평면 이진 연쇄는 어댑터의 깊이 계수기 밖이다(Druid가 반복으로 파싱한다). 텍스트로 막는다.
+        val chain = binaryOperatorCount(scan.withoutLiterals)
+        if (chain > maxOperatorChain) {
             return InspectResult(
                 ParseResult.Failure(
                     FailureKind.TOO_COMPLEX,
-                    "덧셈·뺄셈 연산자가 너무 많습니다 (${additiveRun}개, 상한 $maxAdditiveRun)",
+                    "이진 연산자가 너무 많습니다 (${chain}개, 상한 $maxOperatorChain)",
                 ),
                 lexical,
             )
@@ -346,6 +353,15 @@ class DruidMySqlParser(
     // ---- 스코프 구성 ----
 
     /** MySQL 식별자 정규화: 백틱 제거 등. 모든 식별자는 IR에 들어가기 전에 반드시 통과한다 (§6.5). */
+    /**
+     * 리터럴을 제거한 텍스트의 이진 연산자 수. 총합을 세는 **보수적** 계산이다 —
+     * 서로 다른 식에 흩어져 있어도 함께 세므로 과소평가하지 않는다.
+     * `BETWEEN x AND y`의 `AND`도 세지만, 상한이 1,000이라 정상 쿼리가 걸릴 여지는 없다.
+     */
+    private fun binaryOperatorCount(withoutLiterals: String): Int =
+        withoutLiterals.count { it == '+' || it == '-' } +
+            BINARY_KEYWORDS.findAll(withoutLiterals).count()
+
     private fun norm(identifier: String?): String? = identifier?.let { SQLUtils.normalize(it) }
 
     /**
@@ -688,6 +704,16 @@ class DruidMySqlParser(
      * [joinEqs]가 null이 아니면(=최상위 경로) 이 conjunct들에서 컬럼=컬럼 등식을 수집한다 (§5).
      * OR 하위의 중첩 AND(toPredicate 경유)는 joinEqs=null로 호출돼 수집되지 않는다 — OR-세탁 방지(C2).
      */
+    /**
+     * AND 체인을 conjunct 목록으로 편다. **재귀가 아니라 명시 스택**을 쓴다.
+     *
+     * `a AND b AND … AND z`는 Druid가 좌편향 이진 트리로 만들고 파싱 자체는 반복으로 하므로(깊이 2)
+     * 어댑터 상한이 잡지 못한다. 그래서 항이 3만 개면 여기서 3만 단 재귀가 되고 실측으로 터졌다 —
+     * `StackOverflowError`가 `inspect()` 밖으로 나가 무기록 500이 됐다.
+     *
+     * 스택은 **오른쪽을 먼저 넣어** 왼쪽부터 꺼낸다. 재귀판과 같은 왼→오 순서를 지켜야 conjunct 순서가
+     * 보존되고, 그 순서가 바뀌면 `scopeId` 발급 순서도 바뀐다(계획-재작성 짝이 깨진다).
+     */
     private fun flattenAnd(
         expr: SQLExpr,
         into: MutableList<Predicate>,
@@ -696,10 +722,28 @@ class DruidMySqlParser(
         registry: ScopeRegistry,
         joinEqs: MutableList<ColumnEquality>? = null,
     ) {
-        if (expr is SQLBinaryOpExpr && expr.operator == SQLBinaryOperator.BooleanAnd) {
-            flattenAnd(expr.left, into, resolver, children, registry, joinEqs)
-            flattenAnd(expr.right, into, resolver, children, registry, joinEqs)
-        } else {
+        val pending = ArrayDeque<SQLExpr>().apply { addLast(expr) }
+        while (pending.isNotEmpty()) {
+            val current = pending.removeLast()
+            if (current is SQLBinaryOpExpr && current.operator == SQLBinaryOperator.BooleanAnd) {
+                pending.addLast(current.right)
+                pending.addLast(current.left)
+                continue
+            }
+            flattenAndLeaf(current, into, resolver, children, registry, joinEqs)
+        }
+    }
+
+    /** AND 체인의 잎 하나 — 원래 `flattenAnd`의 else 가지 그대로다. */
+    private fun flattenAndLeaf(
+        expr: SQLExpr,
+        into: MutableList<Predicate>,
+        resolver: AliasResolver,
+        children: MutableList<SelectScope>,
+        registry: ScopeRegistry,
+        joinEqs: MutableList<ColumnEquality>? = null,
+    ) {
+        run {
             if (joinEqs != null) columnEqualityOf(expr, resolver)?.let { joinEqs += it }
             into += toPredicate(expr, resolver, children, registry)
         }
@@ -729,13 +773,19 @@ class DruidMySqlParser(
         registry: ScopeRegistry,
     ): Predicate = when {
         expr is SQLBinaryOpExpr && expr.operator == SQLBinaryOperator.BooleanOr -> {
+            // AND와 같은 이유로 명시 스택이다 — 평면 OR 체인은 어댑터 상한 밖이고 실측으로 터졌다.
+            // 오른쪽을 먼저 넣어 왼쪽부터 꺼낸다(재귀판의 왼→오 순서 보존).
             val branches = mutableListOf<Predicate>()
-            fun flattenOr(e: SQLExpr) {
-                if (e is SQLBinaryOpExpr && e.operator == SQLBinaryOperator.BooleanOr) {
-                    flattenOr(e.left); flattenOr(e.right)
-                } else branches += toPredicate(e, resolver, children, registry)
+            val pending = ArrayDeque<SQLExpr>().apply { addLast(expr) }
+            while (pending.isNotEmpty()) {
+                val current = pending.removeLast()
+                if (current is SQLBinaryOpExpr && current.operator == SQLBinaryOperator.BooleanOr) {
+                    pending.addLast(current.right)
+                    pending.addLast(current.left)
+                } else {
+                    branches += toPredicate(current, resolver, children, registry)
+                }
             }
-            flattenOr(expr)
             Predicate.Or(branches)
         }
         expr is SQLBinaryOpExpr && expr.operator == SQLBinaryOperator.BooleanAnd -> {
@@ -884,7 +934,10 @@ class DruidMySqlParser(
         )
 
         /** `FOR SHARE`는 Druid의 어떤 플래그에도 담기지 않으므로 어휘로 잡는다 (리터럴 제거 텍스트에만 적용). */
-        private val FOR_SHARE = Regex("(?i)\\bFOR\\s+SHARE\\b")
+        /** 평면 체인을 만드는 이진 키워드. 대소문자 무관, 단어 경계로만. */
+private val BINARY_KEYWORDS = Regex("""\b(?:OR|AND|XOR)\b""", RegexOption.IGNORE_CASE)
+
+private val FOR_SHARE = Regex("(?i)\\bFOR\\s+SHARE\\b")
 
         /** 테이블처럼 쓰이지만 데이터가 없는 이름 — 0-테이블 검사에서 물리 테이블로 세지 않는다. */
         private val PSEUDO_TABLES = setOf("dual")

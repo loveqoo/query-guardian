@@ -34,7 +34,7 @@ class ParserResourceBoundTest {
     private val parser = Fixtures.parser
 
     /** 상한을 낮춘 파서 — 상한이 **실제로 발화하는지** 보려면 64KB 안에서 넘길 수 있어야 한다. */
-    private val tight = DruidMySqlParser(maxParseDepth = 20, maxAdditiveRun = 50)
+    private val tight = DruidMySqlParser(maxParseDepth = 20, maxOperatorChain = 50)
 
     // ---- 던지지 않는다 -----------------------------------------------------
 
@@ -84,19 +84,27 @@ class ParserResourceBoundTest {
         assertEquals(FailureKind.TOO_COMPLEX, failureOf(tight, sql).kind)
     }
 
-    /** 어댑터를 못 끼운 고리 — 파싱 **전에** 텍스트로 막는다. */
+    /**
+     * 어댑터의 **깊이 계수기 밖**에 있는 축 — 평면 체인은 Druid가 반복으로 파싱해(깊이 2) 계수기를
+     * 지나가지만, 만들어진 AST는 좌편향 n단이라 그 위를 걷는 코드가 n단 재귀가 된다.
+     */
     @Test
-    fun `산술 연산자 상한은 파싱 전에 거부한다`() {
-        val sql = "SELECT " + (1..80).joinToString(" + ") { "$it" } + " FROM t"
-        val failure = failureOf(tight, sql)
-        assertEquals(FailureKind.TOO_COMPLEX, failure.kind)
-        assertTrue(failure.message.contains("덧셈"), "어느 상한인지 사후에 알 수 있어야 한다: ${failure.message}")
+    fun `이진 연쇄 상한은 파싱 전에 거부한다`() {
+        for ((label, sql) in mapOf(
+            "산술" to "SELECT " + (1..80).joinToString(" + ") { "$it" } + " FROM t",
+            "OR" to "SELECT id FROM t WHERE " + (1..80).joinToString(" OR ") { "a=1" },
+            "AND" to "SELECT id FROM t WHERE " + (1..80).joinToString(" AND ") { "a=1" },
+        )) {
+            val failure = failureOf(tight, sql)
+            assertEquals(FailureKind.TOO_COMPLEX, failure.kind, "[$label]")
+            assertTrue(failure.message.contains("이진 연산자"), "[$label] 어느 상한인지 알 수 있어야 한다: ${failure.message}")
+        }
     }
 
-    /** 리터럴 안의 연산자는 세지 않는다 — 세면 정상 쿼리가 오차단된다. */
+    /** 리터럴 안의 연산자·키워드는 세지 않는다 — 세면 정상 쿼리가 오차단된다. */
     @Test
     fun `리터럴 안의 연산자는 상한에 세지 않는다`() {
-        val sql = "SELECT id FROM t WHERE note = '" + "+".repeat(200) + "'"
+        val sql = "SELECT id FROM t WHERE note = '" + "+".repeat(200) + " AND ".repeat(200) + "'"
         val result = tight.inspect(sql)
         assertTrue(result.parse is ParseResult.Success, "리터럴을 세어 오차단했다: ${result.parse}")
     }

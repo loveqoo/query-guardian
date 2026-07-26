@@ -79,9 +79,7 @@ class RewritePlanner(
     private fun planMasks(scope: SelectScope, into: MutableList<MaskProjection>): PlanOutcome.Refused? {
         // 판정(rules의 must-be-masked)과 **같은 순회 축·같은 기준**을 쓴다 — 갈라지면
         // "저장은 통과, 실행은 마스킹 없이"가 생긴다.
-        val findings = maskFindings(scope) { table ->
-            catalog.maskExpressions(table).map { it.column.lowercase() }.toSet()
-        }
+        val findings = maskFindings(scope, catalog::maskedColumns)
         for (finding in findings) {
             if (finding.usage == MaskUsage.NOT_EXPRESSIBLE) {
                 return PlanOutcome.Refused(

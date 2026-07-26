@@ -2,6 +2,7 @@ package com.loveqoo.queryguardian.query
 
 import com.loveqoo.queryguardian.api.ForbiddenException
 import com.loveqoo.queryguardian.api.LintReportDto
+import com.loveqoo.queryguardian.approval.ApprovalBlockedException
 import com.loveqoo.queryguardian.approval.ApprovalGate
 import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.audit.ExecutionOutcome
@@ -123,10 +124,10 @@ class QueryExecutionService(
      * 감사 로그에서 "그 PII를 누가 봤는가"가 한 사람으로 남아야 한다.
      */
     private fun requireOwnExecution(query: SavedQuery, request: GateRequest): GateOutcome<GateRequest> {
-        val approval = approvalGate.findRequest(query.requestId)
-            ?: return stopped(GateStop.Denied(AuditCode.NO_REQUEST, "근거 승인 요청을 찾을 수 없어 실행할 수 없습니다"))
-        if (approval.requester != request.actor) {
-            return stopped(GateStop.Denied(AuditCode.REQUESTER_MISMATCH, "본인이 요청·작성한 쿼리만 실행할 수 있습니다"))
+        try {
+            approvalGate.requireOwned(query.requestId, request.actor)
+        } catch (e: ApprovalBlockedException) {
+            return stopped(GateStop.ApprovalDenied(e))
         }
         if (query.reviewStatus != ReviewStatus.APPROVED.name) {
             return stopped(GateStop.Denied(

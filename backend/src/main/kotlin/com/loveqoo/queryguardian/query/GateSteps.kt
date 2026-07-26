@@ -133,15 +133,12 @@ class GateSteps(
 
     /** 재작성 + 자체 검증(§3.0.3). 검증 기대치는 계획이 아니라 **카탈로그**에서 재도출한다. */
     fun rewriteAndVerify(planned: Planned): GateOutcome<Ready> =
-        when (val outcome = rewriter.rewrite(planned.statement, planned.plan, planned.ir, maskedColumnsOf())) {
+        when (val outcome = rewriter.rewrite(planned.statement, planned.plan, planned.ir, rewriteCatalog::maskedColumns)) {
             is RewriteOutcome.Rewritten -> cleared(Ready(planned, outcome))
             is RewriteOutcome.Refused -> stopped(GateStop.Unprocessable(auditCodeOf(outcome.refusal), outcome.message))
         }
 
-    /** 검증이 계획을 맹신하지 않도록, 기대 마스킹을 카탈로그에서 재도출하는 함수 (§3.0.3). */
-    private fun maskedColumnsOf(): (String) -> Set<String> = { table ->
-        rewriteCatalog.maskExpressions(table).map { it.column.lowercase() }.toSet()
-    }
+
 
     /**
      * 차단됐든 통과했든 **판정 보고서**를 꺼낸다.

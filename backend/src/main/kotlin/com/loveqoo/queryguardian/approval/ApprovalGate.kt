@@ -19,6 +19,29 @@ class ApprovalGate(private val approvals: ApprovalService) {
     /** 조회 전용 — purposeCode 주입(C1)에 사용. 없으면 null(게이트가 이후 403 처리). */
     fun findRequest(id: Long): ApprovalRequest? = approvals.findEntity(id)
 
+    /**
+     * **존재 + 요청자 본인** 확인 — 신원 게이트용.
+     *
+     * [check]가 하는 네 검사 중 앞의 둘만 떼어낸 것이다. 실행 게이트가 이것을 **판정보다 먼저** 부른다:
+     * 대행 실행 불허(spec 008 결정 14)는 신원 문제이고, 신원 검사가 판정 뒤에 오면 STEWARD가 남의 쿼리
+     * id를 넣어 보는 것만으로 그 쿼리의 판정 결과(어떤 컬럼이 PII·BLOCK인지)를 받아 간다.
+     *
+     * 그 뒤 [check]가 **같은 둘을 다시 본다.** 중복이 아니라 **완전 재판정**이다(spec 008 §5) —
+     * 앞선 검사와 실제 사용 사이에 상태가 뒤집힐 수 있고, 예전에 소유권 탈취로 `request_id`가 바뀔 수
+     * 있었던 적이 있다. 판정 로직은 여기 한 벌만 두되, 검사 시점은 둘로 남긴다.
+     */
+    fun requireOwned(requestId: Long?, actor: String): ApprovalRequest {
+        val request = requestId?.let { approvals.findEntity(it) }
+            ?: throw ApprovalBlockedException(ApprovalBlockedDto(
+                AuditCode.NO_REQUEST, "근거 승인 요청을 찾을 수 없습니다.", requestId))
+        if (request.requester != actor) {
+            // 열람 자격이 없으면 요청의 존재·상태를 확정해 주지 않는다([check]와 같은 기준).
+            throw ApprovalBlockedException(ApprovalBlockedDto(
+                AuditCode.REQUESTER_MISMATCH, "본인이 요청한 승인만 사용할 수 있습니다."))
+        }
+        return request
+    }
+
     fun check(requestId: Long?, actor: String, ir: QueryIR): ApprovalRequest {
         if (requestId == null) {
             throw ApprovalBlockedException(ApprovalBlockedDto(

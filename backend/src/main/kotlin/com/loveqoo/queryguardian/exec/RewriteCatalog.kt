@@ -23,6 +23,18 @@ data class ForcedExpression(val column: String, val template: String?, val label
  */
 interface RewriteCatalog {
     fun maskExpressions(tableName: String): List<ForcedExpression>
+
+    /**
+     * MASK 대상 컬럼 이름 집합 — **정규화까지 끝난 어휘**다.
+     *
+     * 예전에는 `maskExpressions(t).map { it.column.lowercase() }.toSet()`이 계획 수립기와 게이트에
+     * **각각** 적혀 있었다. §3.0.3이 요구하는 것은 검증기가 계획과 **독립적으로** 기대치를 얻는 것인데,
+     * 같은 식을 복사하는 것은 독립이 아니다 — 한쪽에서 `lowercase()`가 빠지면 두 축이 조용히 갈라진다
+     * (learning 011: "식별자 비교 한 곳의 `norm()` 누락이 금지 목록 전체를 무효화").
+     * 독립성은 "계획을 기대치로 쓰지 않는다"로 확보하고, **어휘는 여기 한 곳**에서 나온다.
+     */
+    fun maskedColumns(tableName: String): Set<String> =
+        maskExpressions(tableName).map { it.column.lowercase() }.toSet()
     fun filterExpressions(tableName: String, purposeCode: String?): List<ForcedExpression>
     fun integrityExpressions(tableName: String): List<ForcedExpression>
 }

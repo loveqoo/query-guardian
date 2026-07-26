@@ -1,10 +1,9 @@
 package com.loveqoo.queryguardian.query
 
+import com.loveqoo.queryguardian.api.BlockedDetail
 import com.loveqoo.queryguardian.api.LintReportDto
-import com.loveqoo.queryguardian.approval.ApprovalBlockedException
 import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.audit.ExecutionOutcome
-import com.loveqoo.queryguardian.auth.AccessBlockedException
 import com.loveqoo.queryguardian.exec.ExecutionFailure
 import com.loveqoo.queryguardian.ir.RewriteOutcome
 import com.loveqoo.queryguardian.rules.Severity
@@ -96,20 +95,20 @@ sealed interface GateStop {
         override val body: Any get() = report.copy(code = code)
     }
 
-    /** 데이터 권한 차단 — 거부된 테이블 목록을 담은 별도 계약(spec 007 §6.5). */
-    data class AccessDenied(val failure: AccessBlockedException) : GateStop {
-        override val code: AuditCode get() = failure.detail.code
-        override val detail: String get() = failure.detail.message
+    /**
+     * **자기 계약을 가진 차단** — 데이터 권한(spec 007 §6.5)과 승인 게이트(spec 005 §7).
+     *
+     * [Denied]와 갈라져 있는 이유는 상태 코드가 아니라 **바디**다: 이쪽은 거부된 테이블 목록·요청 상태
+     * 같은 자기 필드를 실어 프론트가 좁게 분기한다. 그래서 [body]는 원래 DTO를 **그대로** 내보낸다.
+     *
+     * 예전에는 이것이 `AccessDenied`·`ApprovalDenied` 두 변종이었고 **네 멤버 구현이 문자 그대로
+     * 같았다**. 같은 개념에 두 모양을 주면 나중에 한쪽만 고쳐진다 — 공통을 [BlockedDetail]로 올려 하나로 둔다.
+     */
+    data class Blocked(val denial: BlockedDetail) : GateStop {
+        override val code: AuditCode get() = denial.code
+        override val detail: String get() = denial.message
         override val status: HttpStatus get() = HttpStatus.FORBIDDEN
-        override val body: Any get() = failure.detail
-    }
-
-    /** 승인 게이트 차단 — 룰 차단과 구분되는 별도 계약(spec 005 §7). */
-    data class ApprovalDenied(val failure: ApprovalBlockedException) : GateStop {
-        override val code: AuditCode get() = failure.detail.code
-        override val detail: String get() = failure.detail.message
-        override val status: HttpStatus get() = HttpStatus.FORBIDDEN
-        override val body: Any get() = failure.detail
+        override val body: Any get() = denial
     }
 
     /**

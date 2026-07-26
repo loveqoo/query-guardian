@@ -62,7 +62,7 @@ class QueryExecutionService(
 
         val executed = requireOwnExecution(query, request)
             .then { runGate(it) }
-            .then(::requireRowCap)
+            .then(steps::requireRowCap)
             .then(::runQuery)
             .orRaise(request)
 
@@ -128,7 +128,7 @@ class QueryExecutionService(
         try {
             approvalGate.requireOwned(query.requestId, request.actor)
         } catch (e: ApprovalBlockedException) {
-            return stopped(GateStop.ApprovalDenied(e))
+            return stopped(GateStop.Blocked(e.detail))
         }
         if (query.reviewStatus != ReviewStatus.APPROVED.name) {
             return stopped(GateStop.Denied(
@@ -145,16 +145,6 @@ class QueryExecutionService(
         val approval = request.requestId?.let { approvalGate.findRequest(it) }
             ?: return stopped(GateStop.Denied(AuditCode.NO_REQUEST, "승인된 요청을 선택해야 재작성을 미리 볼 수 있습니다"))
         return cleared(request.copy(purposeCode = approval.purposeCode))
-    }
-
-    /**
-     * 계획에 상한이 없으면 재작성이 LIMIT을 넣지 않았다는 뜻이다 — **상한 없는 실행은 허용하지 않는다**
-     * (fail-closed). 미리보기에는 이 단계가 없으므로 공유 줄기가 아니라 실행 조립에 선다.
-     */
-    private fun requireRowCap(ready: Ready): GateOutcome<Executable> {
-        val cap = ready.plan.limitCap
-            ?: return stopped(GateStop.Unprocessable(AuditCode.REWRITE_NO_LIMIT, "행 상한을 적용하지 못했습니다 — 실행할 수 없습니다"))
-        return cleared(Executable(ready, cap))
     }
 
     /**

@@ -192,7 +192,7 @@ class QueryService(
 
         val judged = outcome.orThrowWithoutAudit()
         // 승인 검사 — 요청 존재·승인·요청자·테이블 커버
-        val approval = approvalGate.check(request.requestId, actor, judged.parsed.ir)
+        val approval = approvalGate.check(request.requestId, actor, judged.prior.ir)
         return approval to judged.report
     }
 

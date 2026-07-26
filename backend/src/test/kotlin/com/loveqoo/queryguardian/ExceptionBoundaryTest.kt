@@ -58,7 +58,8 @@ class ExceptionBoundaryTest {
         "QueryService.update" to "소유권·request_id 교체 거부 — 저장 계약(게이트 아님)",
         "QueryService.review" to "검토 결정의 사전조건 — 저장 계약(게이트 아님)",
         "GateSteps.checkAccess" to "AccessControl이 던지는 권한 차단을 값으로",
-        "GateSteps.checkApproval" to "ApprovalGate가 던지는 승인 차단을 값으로",
+        "GateSteps.approvalOf" to "ApprovalGate가 던지는 승인 차단을 값으로 — 두 게이트가 승인을 " +
+            "다른 위치에서 검사하므로(checkApproval/requireApproval) 번역점만 하나로 모았다",
         "QueryExecutionService.requireOwnExecution" to "ApprovalGate.requireOwned가 던지는 소유권 차단을 값으로",
         "QueryExecutionService.runQuery" to "JDBC 인프라 실패(ExecutionFailure)를 값으로 — 실행 경계",
         "QueryExecutionService.recordStop" to "감사 best-effort — 기록 실패가 원래 사유를 덮지 않게(I5)",

@@ -67,6 +67,18 @@ data class ApprovalEventDto(
     val at: Instant,
 )
 
+/**
+ * **"이 사람이 할 수 없다"의 공통 계약** — 데이터 권한 차단과 승인 차단이 공유하는 부분.
+ *
+ * 둘은 응답 바디가 다르다(거부된 테이블 목록 vs 요청 상태·미커버 테이블). 그래서 **바디는 각자 유지**하고,
+ * 게이트가 공통으로 쓰는 `code`·`message`만 여기로 올린다. 이것이 없던 동안 `GateStop`에는 네 멤버 구현이
+ * 문자 그대로 같은 쌍둥이 두 개가 있었다 — 같은 개념에 두 개의 모양을 주면 나중에 한쪽만 고쳐진다.
+ */
+sealed interface BlockedDetail {
+    val code: AuditCode
+    val message: String
+}
+
 /** 승인 차단 응답 (spec 005 §7 — 룰 차단 422와 구분되는 403). */
 data class ApprovalBlockedDto(
     /**
@@ -74,12 +86,12 @@ data class ApprovalBlockedDto(
      * 타입은 [AuditCode](21종)이지만 **이 DTO의 정의역은 그 부분집합**이다 — 프론트가 좁게 분기하는 근거이므로
      * 목록을 남긴다. JSON에서는 Jackson이 이름 문자열로 직렬화한다 — **경계에서만 문자열**(spec 010 I13).
      */
-    val code: AuditCode,
-    val message: String,
+    override val code: AuditCode,
+    override val message: String,
     val requestId: Long? = null,
     val requestStatus: String? = null,
     val uncoveredTables: List<String> = emptyList(),
-)
+) : BlockedDetail
 
 // ---- 검토 ----
 
@@ -97,10 +109,10 @@ data class AccessBlockedDto(
      * 실제로 나올 수 있는 값은 셋: `TABLES_NOT_PERMITTED` · `TABLES_UNKNOWN` · `REQUESTER_MISMATCH`.
      * 타입은 [AuditCode](21종)이지만 **이 DTO의 정의역은 그 부분집합**이다 — 프론트가 좁게 분기하는 근거다.
      */
-    val code: AuditCode,
-    val message: String,
+    override val code: AuditCode,
+    override val message: String,
     val deniedTables: List<String> = emptyList(),
-)
+) : BlockedDetail
 
 data class LoginRequest(val userId: String, val password: String)
 

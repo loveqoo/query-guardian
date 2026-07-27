@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
@@ -30,10 +30,12 @@ import type { Extension } from "@codemirror/state";
 import { MONO_FONT } from "../theme";
 import { mockSql } from "../mock/design";
 import { applyFix } from "../api/fix";
+import { limitStatus } from "../api/execution";
 import { useAuth } from "../auth/AuthContext";
 import {
   apiErrorMessage,
   createQuery,
+  executeQuery,
   getQuery,
   getSchemaDict,
   lint,
@@ -43,6 +45,8 @@ import {
   type ApprovalBlocked,
   type ApprovalSummary,
   type Id,
+  type ExecuteResult,
+  type ExecutionResult,
   type Fix,
   type LintReport,
   type ReviewStatus,
@@ -220,6 +224,19 @@ export default function EditorPage() {
    */
   const [reviewStatus, setReviewStatus] = useState<ReviewStatus | null>(null);
 
+  /**
+   * 실행 결과 — **화면 상태에만** 둔다(F1). 저장소에 넣지 않고, 라우트를 떠나면 함께 사라진다(F5).
+   * 결과와 오류를 따로 두는 이유: 다시 실행해 실패했을 때 옛 결과가 남아 있으면 그것을 새 결과로 읽는다.
+   */
+  /**
+   * 마지막으로 서버와 일치했던 SQL. 실행되는 것은 **저장본**이므로, 에디터가 그것과 다르면
+   * 사용자는 자기가 보는 것과 다른 쿼리의 결과를 보게 된다 — 그 사실을 결과 옆에 말해야 한다.
+   */
+  const [savedSql, setSavedSql] = useState<string | null>(null);
+  const [execResult, setExecResult] = useState<ExecutionResult | null>(null);
+  const [execError, setExecError] = useState<Exclude<ExecuteResult, { ok: true }> | null>(null);
+  const [running, setRunning] = useState(false);
+
   const [report, setReport] = useState<LintReport | null>(null);
   const [linting, setLinting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -237,6 +254,7 @@ export default function EditorPage() {
         if (!alive) return;
         setQueryName(q.name);
         setSql(q.sql);
+        setSavedSql(q.sql);
         setRequestId(q.requestId);
         setReviewStatus(q.reviewStatus);
         if (q.lintReport) setReport(q.lintReport);
@@ -463,10 +481,32 @@ export default function EditorPage() {
     return null;
   }, [editId, reviewStatus]);
 
-  const onRun = useCallback(() => {
+  /**
+   * 실행. **저장된 SQL이 실행된다** — 에디터에서 고친 내용은 저장하기 전까지 반영되지 않는다.
+   * 그 사실을 실행 전에 알린다: 결과를 보고 나서 "왜 내가 쓴 것과 다르지"를 묻게 두지 않는다.
+   */
+  const onRun = useCallback(async () => {
+    if (!editId) return;
     setBottomTab("result");
-    message.info("실행 기능은 다음 단계에서 구현됩니다");
-  }, [message]);
+    setRunning(true);
+    setExecResult(null);
+    setExecError(null);
+    try {
+      const r = await executeQuery(editId);
+      if (r.ok) setExecResult(r.result);
+      else setExecError(r);
+    } catch (err) {
+      setExecError({
+        ok: false,
+        kind: "FAILED",
+        status: 0,
+        code: null,
+        message: apiErrorMessage(err) ?? "실행 요청 자체가 실패했습니다",
+      });
+    } finally {
+      setRunning(false);
+    }
+  }, [editId]);
 
   const appendSuggestion = useCallback((text: string) => {
     setSql((p) => p.replace(/;?\s*$/, "") + " " + text);
@@ -553,7 +593,12 @@ export default function EditorPage() {
           <Tooltip title={runBlockedReason ?? ""}>
             {/* disabled 버튼은 마우스 이벤트를 안 받으므로 Tooltip이 붙을 래퍼가 필요하다 */}
             <span>
-              <Button icon={<ThunderboltOutlined />} onClick={onRun} disabled={runBlockedReason != null}>
+              <Button
+                icon={<ThunderboltOutlined />}
+                loading={running}
+                onClick={() => void onRun()}
+                disabled={runBlockedReason != null}
+              >
                 실행
               </Button>
             </span>
@@ -815,7 +860,14 @@ export default function EditorPage() {
                 onApplyFix={onApplyFix}
               />
             )}
-            {bottomTab === "result" && <ResultPanel />}
+            {bottomTab === "result" && (
+              <ResultPanel
+                result={execResult}
+                error={execError}
+                running={running}
+                staleEditor={savedSql != null && savedSql !== sql}
+              />
+            )}
             {bottomTab === "messages" && <MessagesPanel />}
           </div>
         </div>
@@ -1107,11 +1159,184 @@ function ViolationCard({ v, onApply }: { v: Violation; onApply?: (fix: Fix) => v
  * 예시 그리드를 지웠다: 남겨 두면 "데이터가 안 와서 빈 화면"과 "샘플이라 되는 것처럼 보임"이
  * 구분되지 않는다. 없는 것은 없다고 말한다.
  */
-function ResultPanel() {
+/**
+ * **상한을 세 값으로 보인다** (spec 013 F2 · retrospect 012가 M3에 넘긴 제약).
+ *
+ * 백엔드가 이 셋을 나눈 이유가 화면에서 사라지면 나눈 의미가 없다:
+ * - `configuredCap` 설정 상한 / `effectiveLimit` 실제 적용된 상한.
+ *   **둘이 같을 때만** 거버넌스가 자른 것이다 — 다르면 사용자가 스스로 좁힌 것이고 경고가 아니다.
+ * - `moreRowsExist`는 **세 상태**다. `null`을 "없음"으로 뭉치면 화면이 거짓말을 한다
+ *   (상한이 0이면 초과 탐지용 1행조차 조회하지 않아 확인 자체를 안 한 것이다).
+ *
+ * 판정은 전부 **서버 값으로만** 한다. 화면이 다시 계산하면 서버·감사와 갈린다.
+ */
+function ResultFooter({ result }: { result: ExecutionResult }) {
+  const { appliedLimit, configuredCap, truncatedByGovernance, moreRows } = limitStatus(result);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textTertiary }}>
-      <ExclamationCircleOutlined />
-      <span>아직 실행하지 않았습니다.</span>
+    <div style={{ fontSize: 12, color: C.textTertiary, marginTop: 10, lineHeight: 1.8 }}>
+      <div>
+        {result.rowCount} rows · {(result.elapsedMs / 1000).toFixed(2)}s
+        {appliedLimit != null && ` · LIMIT ${appliedLimit} 적용됨`}
+      </div>
+      {truncatedByGovernance && (
+        <div style={{ color: C.gold6 }}>
+          거버넌스 상한 {configuredCap}으로 잘렸습니다 · 더 있는지: {moreRows}
+        </div>
+      )}
+      {!truncatedByGovernance && result.moreRowsExist === true && (
+        <div style={{ color: C.gold6 }}>요청한 상한까지 채웠습니다 — 더 있는지: {moreRows}</div>
+      )}
+    </div>
+  );
+}
+
+/** 실행되지 못한 이유. **서버의 분류 코드를 그대로** 보인다(F3) — 화면이 번역하면 감사와 갈린다. */
+function ResultError({ error }: { error: Exclude<ExecuteResult, { ok: true }> }) {
+  const detail =
+    error.kind === "RULES"
+      ? error.report.violations.map((v) => v.message).join("\n")
+      : error.kind === "FAILED"
+        ? [error.code, error.message].filter(Boolean).join(" · ")
+        : error.error.message;
+  const code = error.kind === "FAILED" ? error.code : error.kind === "RULES" ? "RULE_BLOCKED" : error.error.code;
+  return (
+    <Alert
+      type="error"
+      showIcon
+      message={`실행이 차단되었습니다${code ? ` (${code})` : ""}`}
+      description={<span style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{detail}</span>}
+    />
+  );
+}
+
+/**
+ * 실행 결과 (spec 013 §3-2).
+ *
+ * 결과 행은 **이 컴포넌트의 props에만** 있다 — 브라우저 저장소에 넣지 않는다(F1).
+ * 라우트를 떠나면 상태와 함께 사라진다(F5).
+ */
+function ResultPanel({
+  result,
+  error,
+  running,
+  staleEditor,
+}: {
+  result: ExecutionResult | null;
+  error: Exclude<ExecuteResult, { ok: true }> | null;
+  running: boolean;
+  /** 에디터 내용이 저장본과 다른가 — 실행된 것은 저장본이다. */
+  staleEditor: boolean;
+}) {
+  const [showSql, setShowSql] = useState(false);
+  const cell: React.CSSProperties = { padding: "8px 10px", borderBottom: `1px solid ${C.split}` };
+  const head: React.CSSProperties = {
+    padding: "8px 10px",
+    background: C.gray2,
+    color: C.textTertiary,
+    borderBottom: `1px solid ${C.borderSecondary}`,
+  };
+
+  if (running) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textTertiary }}>
+        <Spin size="small" />
+        <span>실행 중입니다…</span>
+      </div>
+    );
+  }
+  if (error) return <ResultError error={error} />;
+  if (!result) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textTertiary }}>
+        <ExclamationCircleOutlined />
+        <span>아직 실행하지 않았습니다.</span>
+      </div>
+    );
+  }
+
+  return (
+    // data-scroll-x: 결과 표는 좁은 화면에서 **한 열로 접지 않고** 이 컨테이너 안에서 가로 스크롤한다
+    // (데이터 표를 세로로 접으면 어느 값이 어느 컬럼인지 알 수 없게 된다).
+    <div data-scroll-x style={{ overflowX: "auto" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${Math.max(result.columns.length, 1)}, minmax(120px, 1fr))`,
+          fontFamily: MONO_FONT,
+          fontSize: 12,
+          minWidth: Math.max(result.columns.length * 120, 320),
+        }}
+      >
+        {result.columns.map((c) => (
+          <div key={c.name} style={head} title={c.type}>
+            {c.name}
+          </div>
+        ))}
+        {result.rows.map((row, ri) => (
+          <Fragment key={ri}>
+            {row.map((v, ci) => (
+              // NULL과 빈 문자열은 다른 값이다 — 둘 다 빈 칸으로 그리면 데이터를 잘못 읽는다.
+              <div key={ci} style={cell}>
+                {v === null ? <span style={{ color: C.textQuaternary }}>NULL</span> : v}
+              </div>
+            ))}
+          </Fragment>
+        ))}
+      </div>
+      {result.rows.length === 0 && (
+        <div style={{ padding: "10px 0", fontSize: 12, color: C.textTertiary }}>조건에 맞는 행이 없습니다.</div>
+      )}
+
+      {staleEditor && (
+        <div style={{ marginTop: 10 }}>
+          <Alert
+            type="warning"
+            showIcon
+            message="저장본을 실행했습니다"
+            description={
+              <span style={{ fontSize: 12 }}>
+                에디터에서 고친 내용은 아직 저장되지 않아 이 결과에 반영되지 않았습니다.
+              </span>
+            }
+          />
+        </div>
+      )}
+
+      <ResultFooter result={result} />
+
+      {/* 실행된 SQL — **기본 접힘**. 펼쳐 두면 사용자가 원본과 혼동한다. */}
+      <div style={{ marginTop: 10 }}>
+        <Button size="small" type="text" onClick={() => setShowSql((v) => !v)} style={{ paddingLeft: 0 }}>
+          {showSql ? "실제 실행된 SQL 숨기기" : "실제 실행된 SQL 보기"}
+        </Button>
+        {showSql && (
+          <>
+            <pre
+              style={{
+                margin: "6px 0 0",
+                padding: 10,
+                background: C.gray2,
+                border: `1px solid ${C.borderSecondary}`,
+                borderRadius: 4,
+                fontFamily: MONO_FONT,
+                fontSize: 12,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {result.rewrittenSql}
+            </pre>
+            {result.applied.length > 0 && (
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12, color: C.textTertiary }}>
+                {result.applied.map((a, i) => (
+                  <li key={i}>
+                    {a.kind}: {a.detail}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

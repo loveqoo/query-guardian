@@ -12,8 +12,22 @@ import { defineConfig, devices } from "@playwright/test";
  */
 export default defineConfig({
   testDir: "./tests",
-  // 스냅샷 비교는 렌더링 편차를 약간 허용한다 — 폰트 앤티에일리어싱 차이로 실패하면 신호가 죽는다
-  expect: { toHaveScreenshot: { maxDiffPixelRatio: 0.01 } },
+  /**
+   * **허용 오차 0** — 짐작이 아니라 실측이다.
+   *
+   * 예전 값은 `maxDiffPixelRatio: 0.01`이었고 근거는 "폰트 앤티에일리어싱 차이로 실패하면 신호가
+   * 죽는다"였다. 그럴듯하지만 재 본 적이 없는 방어막이었고, **실제로 신호를 죽였다**:
+   * spec 013에서 내비게이션 항목 하나를 추가하자 사이드바가 모든 화면에서 한 칸씩 밀렸는데,
+   * 7개 중 1개(admin, 18659px = 0.02)만 실패하고 나머지는 조용히 통과했다
+   * (databases 7829px · approvals 4054px — 전부 1% 아래). 1280×900에서 1%는 **약 11,500픽셀**이고,
+   * 그 정도면 레이아웃이 통째로 움직여도 통과한다.
+   *
+   * 실측(2026-07-27, 이 기계): 기준선 재생성 후 오차 0으로 **4회 연속 40/40 통과**. 잡음 바닥이 0이다.
+   *
+   * 나중에 이것이 흔들리면(OS·폰트 갱신 등) **넓히기 전에 다시 재라.** 폭을 짐작으로 늘리면
+   * 그 순간 이 하네스는 다시 "통과하지만 아무것도 지키지 않는" 상태로 돌아간다.
+   */
+  expect: { toHaveScreenshot: { maxDiffPixelRatio: 0 } },
   reporter: [["list"]],
   use: {
     baseURL: "http://127.0.0.1:5180",

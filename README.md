@@ -22,6 +22,11 @@ cd backend && ./gradlew bootRun
 cd frontend && npm install && npm run dev
 ```
 
+```bash
+# 4) 감사 append-only 트리거 (백엔드를 한 번 기동한 뒤 · 멱등)
+docker/apply-audit-append-only.sh
+```
+
 http://localhost:5180 접속 → 카탈로그에서 테이블·제약·purpose 등록 → 에디터에서 쿼리 작성.
 (5173은 로컬의 다른 프로젝트가 사용하므로 비워 둔다. strictPort라 점유 시 조용히 이동하지 않고 실패한다.)
 

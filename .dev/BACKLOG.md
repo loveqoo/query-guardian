@@ -20,7 +20,14 @@
 
 ### codex 검토가 추가로 찾은 현행 결함 (실측 확인함)
 
-- **D-D. 감사 append-only가 애플리케이션 관례일 뿐이다.** `ExecutionEventRepository : CrudRepository<…>`
+- ~~**D-D. 감사 append-only가 애플리케이션 관례일 뿐이다.**~~ **해결**(spec 014 L7) — 방어 두 겹.
+  ⑴ 리포지토리를 `CrudRepository` → `Repository`로 좁혀 `delete*`가 **상속으로 딸려오지 않게** 했다.
+  ⑵ DB 트리거가 UPDATE·DELETE를 거절한다(`docker/audit-append-only.sql`).
+  ⚠️ 트리거는 **root가 건다** — binlog 켜진 MySQL에서 트리거 생성은 SUPER를 요구하고 앱 계정엔 없다.
+  줘서도 안 된다(감사를 지키려고 앱 권한을 키우는 건 방향이 거꾸로다). `initdb`도 아니다 —
+  거기는 앱이 테이블을 만들기 **전에** 돈다. `apply-exec-isolation.sh`와 같은 관용구로 기동 후 적용한다.
+  `AuditAppendOnlyTest`가 **배포되는 그 DDL 파일을 읽어** 검증한다(사본을 두면 배포 안 되는 걸 검증하게 된다).
+  원래 서술: `ExecutionEventRepository : CrudRepository<…>`
   (`exec/ExecutionAudit.kt:42`)가 `delete`·`deleteById`·`deleteAll`을 상속한다. DB 권한·트리거로 막지 않아
   코드 한 줄로 감사 수정·삭제가 가능하다. → 읽기 전용 상위 인터페이스 + DB 권한(UPDATE/DELETE 회수).
 - ~~**D-E. `QueryExecutor`를 게이트 밖에서 주입할 수 있다.**~~ **해결(P2 C4, `75e7acd`)** —

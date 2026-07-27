@@ -7,7 +7,7 @@ import com.loveqoo.queryguardian.ir.AppliedRewrite
 import org.slf4j.LoggerFactory
 import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
-import org.springframework.data.repository.CrudRepository
+import org.springframework.data.repository.Repository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
@@ -44,7 +44,22 @@ data class ExecutionEvent(
     val at: Instant,
 )
 
-interface ExecutionEventRepository : CrudRepository<ExecutionEvent, Long> {
+/**
+ * **감사 이력은 쓰고 읽기만 한다** (spec 014 L7 · 백로그 `D-D`).
+ *
+ * 예전에는 `CrudRepository`를 상속해 `delete`·`deleteById`·`deleteAll`을 그대로 갖고 있었다.
+ * 부르는 곳은 없었지만 **그것은 규약이지 보장이 아니다** — `AuditVocabulary`가 그 한계를 스스로
+ * 적어 두었던 자리다. 감사를 지울 수 있으면 감사가 아니다.
+ *
+ * 그래서 **필요한 것만 선언한다.** 상속으로 딸려 오는 능력은 아무도 의도하지 않은 능력이다.
+ * DB 쪽 트리거(`schema.sql`)와 **겹치는 방어**다 — 이쪽만 있으면 JDBC 직접 호출로 도달하고,
+ * 저쪽만 있으면 코드가 시도했다가 런타임에 터진다. 둘 다 있어야 "할 수 없다"가 참이 된다.
+ */
+interface ExecutionEventRepository : Repository<ExecutionEvent, Long> {
+    fun save(event: ExecutionEvent): ExecutionEvent
+    fun findAll(): List<ExecutionEvent>
+    fun count(): Long
+
     fun findByQueryIdOrderByIdDesc(queryId: Long): List<ExecutionEvent>
 
     // 커서 페이징(`id < before`) — 상한만 있고 커서가 없으면 새 기록을 쌓아 **옛 기록을 조회 범위 밖으로

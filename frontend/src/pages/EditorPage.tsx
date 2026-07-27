@@ -240,6 +240,17 @@ export default function EditorPage() {
   const [running, setRunning] = useState(false);
 
   const [report, setReport] = useState<LintReport | null>(null);
+  /**
+   * [report]가 **어느 SQL을 보고 나온 것인가.**
+   *
+   * 제안 조각은 판정한 그 쿼리의 인스턴스·별칭으로 계산된다(`mc.consent_yn = 'Y'`). 사용자가 SQL을
+   * 고친 뒤 재판정이 끝나기 전에 `[적용]`을 누르면 **그 쿼리를 위해 계산되지 않은 조각**이 들어간다 —
+   * E2E가 실제로 그렇게 만들었다: `SELECT email FROM users`에 직전 판정의 `m.consent_yn = 'Y'`가
+   * 붙어 존재하지 않는 별칭을 참조하는 쿼리가 됐다.
+   *
+   * 조각을 다시 계산해 주는 것은 답이 아니다(그건 서버의 일이다). **적용할 수 없는 동안 막는다.**
+   */
+  const [reportSql, setReportSql] = useState<string | null>(null);
   const [linting, setLinting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadingQuery, setLoadingQuery] = useState(false);
@@ -336,11 +347,13 @@ export default function EditorPage() {
         if (r.ok) {
           // 권한 통과 → 룰 결과 표시. 이전 권한 차단은 해소된 것으로 본다.
           setReport(r.report);
+          setReportSql(body); // 이 판정이 본 SQL을 함께 고정한다 — 조각의 유효 범위다
           setAccessBlock(null);
         } else {
           // 403 — 데이터 권한 차단이 룰보다 앞선다 (§6.0). 위반 리포트는 주지 않는다.
           setAccessBlock(r.error);
           setReport(null);
+          setReportSql(null);
         }
       } catch {
         if (seq === lintSeq.current && immediate) message.error("규칙 검사에 실패했습니다");
@@ -873,6 +886,7 @@ export default function EditorPage() {
                 linting={linting}
                 accessBlocked={!!accessBlock}
                 onApplyFix={onApplyFix}
+                stale={reportSql !== sql.trim()}
               />
             )}
             {bottomTab === "result" && (
@@ -1029,11 +1043,14 @@ function RuleCheckPanel({
   linting,
   accessBlocked,
   onApplyFix,
+  stale,
 }: {
   report: LintReport | null;
   linting: boolean;
   accessBlocked: boolean;
   onApplyFix: (fix: Fix) => void;
+  /** 이 리포트가 지금 에디터의 SQL이 아닌 것을 보고 나왔는가 — 그러면 조각을 적용할 수 없다. */
+  stale: boolean;
 }) {
   // 권한 게이트가 룰보다 앞이므로(§6.0) 권한 차단 시 위반 목록 자체가 존재하지 않는다.
   if (accessBlocked && !report) {
@@ -1077,8 +1094,14 @@ function RuleCheckPanel({
     // 위반 카드 (real)
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {stale && (
+          <div style={{ fontSize: 12, color: C.textTertiary, display: "flex", alignItems: "center", gap: 6 }}>
+            <Spin size="small" />
+            <span>쿼리가 바뀌었습니다 — 다시 검사하는 중입니다. 검사가 끝나야 제안을 적용할 수 있습니다.</span>
+          </div>
+        )}
         {report.violations.map((v, i) => (
-          <ViolationCard key={`${v.ruleId}-${i}`} v={v} onApply={onApplyFix} />
+          <ViolationCard key={`${v.ruleId}-${i}`} v={v} onApply={stale ? undefined : onApplyFix} />
         ))}
       </div>
     );
@@ -1130,11 +1153,14 @@ function FixChip({ fix, onApply }: { fix: Fix; onApply?: (fix: Fix) => void }) {
         </>
       )}
       <span style={{ color: C.text }}>{fix.to}</span>
-      {onApply && (
-        <Button size="small" style={{ marginLeft: "auto" }} onClick={() => onApply(fix)}>
-          적용
-        </Button>
-      )}
+      <Button
+        size="small"
+        style={{ marginLeft: "auto" }}
+        disabled={!onApply}
+        onClick={() => onApply?.(fix)}
+      >
+        적용
+      </Button>
     </div>
   );
 }

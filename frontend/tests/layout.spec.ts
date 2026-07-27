@@ -6,14 +6,28 @@ import { test, expect, type Page } from "@playwright/test";
  * 이 목록은 **손으로 유지된다.** 손으로 나열한 목록은 빠뜨리는 쪽으로 조용히 실패하므로
  * (learning 020), 아래 `내비게이션의 모든 화면이 검사 대상이다`가 nav.tsx와 대조해 누락을 깨운다.
  */
-const SCREENS = [
+const SCREENS: { path: string; name: string; snapshot?: false }[] = [
   { path: "/databases", name: "databases" },
   { path: "/editor", name: "editor" },
   { path: "/queries", name: "queries" },
   { path: "/approvals", name: "approvals" },
   { path: "/rules", name: "rules" },
   { path: "/catalog", name: "catalog" },
-  { path: "/audit", name: "audit" },
+  /**
+   * **픽셀 스냅샷을 찍지 않는다** — 넘침·눌림 검사만 받는다.
+   *
+   * 실행 감사는 살아 있는 기록을 보여준다. 실행이 한 번 일어날 때마다 행이 늘고 **페이지 높이가
+   * 바뀐다.** 그대로 두면 이 스위트가 자기 스냅샷을 깨뜨린다 — `execution.spec.ts`가 실행하면
+   * 다음 레이아웃 검사가 빨간불이 되고, 그건 시각 회귀 신호가 아니라 데이터 잡음이다.
+   *
+   * 표 본문을 마스킹해 봤지만 부족했다(실측): 마스킹은 **내용**을 가릴 뿐 행 수에 따라 달라지는
+   * **높이**를 못 가린다.
+   *
+   * **무엇을 잃는지 정확히**: 이 화면은 여백·색·정렬의 시각 회귀를 못 잡는다. 뷰포트 넘침과
+   * 패널 눌림은 그대로 잰다(둘 다 실제 DOM을 보므로 데이터와 무관하다). 감사 화면이 기존 표
+   * 화면의 관용구를 답습하도록 만든 것이 이 구멍을 좁히는 쪽이지, 메우는 것은 아니다.
+   */
+  { path: "/audit", name: "audit", snapshot: false },
   { path: "/admin", name: "admin" },
 ];
 
@@ -119,7 +133,9 @@ test.describe("레이아웃", () => {
       if (testInfo.project.name !== "desktop") {
         await expectNoSqueezedPanels(page, `${screen.name}@${testInfo.project.name}`);
       }
-      await expect(page).toHaveScreenshot(`${screen.name}.png`, { fullPage: true });
+      if (screen.snapshot !== false) {
+        await expect(page).toHaveScreenshot(`${screen.name}.png`, { fullPage: true });
+      }
     });
   }
 });

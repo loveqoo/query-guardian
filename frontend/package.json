@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "dev:tailnet": "VITE_ALLOWED_HOSTS=true vite"
+    "dev:tailnet": "VITE_ALLOWED_HOSTS=true vite",
+    "typecheck": "tsc -b",
+    "test:logic": "playwright test --project=logic",
+    "test:visual": "playwright test --project=desktop --project=mobile --project=tablet --project=mobile-tall"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",

@@ -41,12 +41,31 @@ export default defineConfig({
     timeout: 60_000,
   },
   projects: [
+    /**
+     * **폭과 무관한 계약 테스트** — 브라우저는 실행기일 뿐 뷰포트가 축이 아니다.
+     *
+     * 뷰포트 프로젝트에서 떼어 낸 이유 둘:
+     * 1. 같은 단정이 **4번 돌고 있었다**(폭이 답을 바꾸지 않는데).
+     * 2. **CI에서 이것만 돌릴 수 있어야 한다.** 시각 회귀 기준선은 이 기계(macOS)에서 만들어져
+     *    폰트 렌더링이 다른 리눅스 러너에서는 전부 실패하고, E2E는 백엔드·DB가 떠 있어야 한다.
+     *    섞어 두면 CI에 넣을 수 있는 부분까지 못 넣는다.
+     */
+    { name: "logic", testMatch: /(apply-fix|limit-status|runnable)\.spec\.ts$/ },
+
     // 폭이 정책의 축이다: 390(휴대폰) / 768(경계) / 1280(데스크톱 — 원본 디자인의 기준)
-    { name: "mobile", use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 844 } } },
-    { name: "tablet", use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } } },
-    { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 900 } } },
-    // 긴 뷰포트: 앱이 main 안에서 스크롤하므로 `fullPage`가 첫 화면만 담는다.
-    // 이 프로젝트가 화면 **아래쪽**(표·이력 등)까지 스냅샷에 넣는다 — 그 사각에서 실제로 결함을 놓쳤다.
-    { name: "mobile-tall", use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 2000 } } },
+    ...(
+      [
+        { name: "mobile", width: 390, height: 844 },
+        { name: "tablet", width: 768, height: 1024 },
+        { name: "desktop", width: 1280, height: 900 },
+        // 긴 뷰포트: 앱이 main 안에서 스크롤하므로 `fullPage`가 첫 화면만 담는다.
+        // 이 프로젝트가 화면 **아래쪽**(표·이력 등)까지 담는다 — 그 사각에서 실제로 결함을 놓쳤다.
+        { name: "mobile-tall", width: 390, height: 2000 },
+      ] as const
+    ).map(({ name, width, height }) => ({
+      name,
+      testIgnore: /(apply-fix|limit-status|runnable)\.spec\.ts$/,
+      use: { ...devices["Desktop Chrome"], viewport: { width, height } },
+    })),
   ],
 });

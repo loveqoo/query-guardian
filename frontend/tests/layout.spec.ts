@@ -1,7 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
 
 /**
- * 화면 7종 (src/nav.tsx의 SCREENS와 같은 순서). 로그인 화면은 셸 밖이라 따로 다룬다.
+ * 검사할 화면 (src/nav.tsx의 SCREENS와 같은 순서). 로그인 화면은 셸 밖이라 따로 다룬다.
+ *
+ * 이 목록은 **손으로 유지된다.** 손으로 나열한 목록은 빠뜨리는 쪽으로 조용히 실패하므로
+ * (learning 020), 아래 `내비게이션의 모든 화면이 검사 대상이다`가 nav.tsx와 대조해 누락을 깨운다.
  */
 const SCREENS = [
   { path: "/databases", name: "databases" },
@@ -10,8 +13,20 @@ const SCREENS = [
   { path: "/approvals", name: "approvals" },
   { path: "/rules", name: "rules" },
   { path: "/catalog", name: "catalog" },
+  { path: "/audit", name: "audit" },
   { path: "/admin", name: "admin" },
 ];
+
+test("내비게이션의 모든 화면이 검사 대상이다", async () => {
+  // 화면을 추가하고 이 파일을 안 고치면, 그 화면은 **시각 회귀 검사를 한 번도 받지 않은 채**
+  // 통과한다. 검사기가 "없다"고 정직하게 답하는 종류의 실패다 — 그래서 정의를 직접 읽는다.
+  const { readFileSync } = await import("node:fs");
+  const nav = readFileSync(new URL("../src/nav.tsx", import.meta.url), "utf8");
+  const declared = [...nav.matchAll(/path:\s*"(\/[a-z-]+)"/g)].map((m) => m[1]);
+  const covered = new Set(SCREENS.map((s) => s.path));
+  const missing = declared.filter((p) => !covered.has(p));
+  expect(missing, `내비게이션에 있는데 레이아웃 검사가 안 하는 화면: ${missing.join(", ")}`).toEqual([]);
+});
 
 /** 세션 로그인 — 폼을 조작하지 않고 API로 쿠키를 얻는다(화면 변경에 영향받지 않는 경로). */
 async function login(page: Page) {

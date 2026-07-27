@@ -8,6 +8,7 @@ import QueriesPage from "./pages/QueriesPage";
 import ApprovalsPage from "./pages/ApprovalsPage";
 import RulesPage from "./pages/RulesPage";
 import CatalogPage from "./pages/CatalogPage";
+import AuditPage from "./pages/AuditPage";
 import AdminPage from "./pages/AdminPage";
 import LoginPage from "./pages/LoginPage";
 
@@ -59,6 +60,7 @@ export default function App() {
             <Route path="/approvals" element={<ApprovalsPage />} />
             <Route path="/rules" element={<RulesPage />} />
             <Route path="/catalog" element={<CatalogPage />} />
+            <Route path="/audit" element={<AuditPage />} />
             <Route path="/admin" element={<AdminPage />} />
             <Route path="*" element={<Navigate to="/editor" replace />} />
           </Route>

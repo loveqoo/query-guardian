@@ -7,6 +7,7 @@ import {
   FileOutlined,
   KeyOutlined,
   ThunderboltOutlined,
+  AuditOutlined,
 } from "@ant-design/icons";
 
 /** A single navigable screen. */
@@ -44,6 +45,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { key: "approvals", path: "/approvals", group: "거버넌스", title: "승인 요청", icon: <CheckCircleOutlined /> },
       { key: "rules", path: "/rules", group: "거버넌스", title: "규칙 관리", icon: <ThunderboltOutlined /> },
       { key: "catalog", path: "/catalog", group: "거버넌스", title: "제약 카탈로그", icon: <BulbOutlined /> },
+      { key: "audit", path: "/audit", group: "거버넌스", title: "실행 감사", icon: <AuditOutlined /> },
     ],
   },
   {

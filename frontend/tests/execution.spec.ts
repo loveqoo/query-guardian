@@ -158,6 +158,30 @@ test("U6 — 실행 감사가 차단·미리보기까지 보인다 (스튜어드
   await expect(page.locator(".ant-table-row").first()).toBeVisible();
 });
 
+/**
+ * **에디터에서도** 대행 실행이 막히는가 (설계 검토가 잡은 구멍).
+ *
+ * 목록 화면만 막고 에디터를 안 막으면 `에디터에서 열기`로 들어가 실행할 수 있다 —
+ * 서버는 403을 주지만 화면이 그때까지 거짓 기대를 준다. 두 진입점이 **같은 판정 함수**를
+ * 쓰는지 여기서 잰다.
+ */
+test("대행 실행 금지 — 에디터로 열어도 막힌다", async ({ page }) => {
+  await loginAs(page, "u1");
+  const id = await approvedQueryId(page); // u1 소유의 승인된 쿼리
+
+  await loginAs(page, "u4"); // 스튜어드로 갈아탄다 — 볼 수는 있다
+  await page.goto(`/editor?id=${id}`);
+  await page.waitForLoadState("networkidle");
+
+  const run = page.getByRole("button", { name: "실행" });
+  await expect(
+    run,
+    "스튜어드가 남의 쿼리를 에디터로 열었는데 실행이 활성이다 — 목록만 막고 에디터를 안 막았다",
+  ).toBeDisabled();
+  await run.locator("xpath=..").hover();
+  await expect(page.getByText(/대행 실행 불허/)).toBeVisible({ timeout: 5_000 });
+});
+
 test("대행 실행 금지 — 스튜어드는 남의 쿼리를 보되 실행하지 못한다", async ({ page }) => {
   await loginAs(page, "u4");
   await page.goto("/queries");

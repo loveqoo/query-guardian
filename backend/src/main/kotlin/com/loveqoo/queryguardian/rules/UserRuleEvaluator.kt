@@ -119,7 +119,8 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
      * `blocks`·`joins`에는 조각이 없다: 차단된 컬럼은 **빼는** 것이지 무엇으로 바꾸는 것이 아니고,
      * 조인 요건은 FROM 절 구조를 바꾸는 일이라 한 조각으로 표현되지 않는다. 없는 것을 지어내지 않는다.
      */
-    private fun conditionFix(cond: RuleCondition, scope: SelectScope, catalog: TableCatalog): Fix? = when (cond.op) {
+    private fun conditionFix(cond: RuleCondition, scope: SelectScope, catalog: TableCatalog): Fix? =
+        if (!scope.fixable()) null else when (cond.op) {
         RuleOp.REQUIRES -> {
             val table = cond.targetTable
             val column = cond.targetColumn

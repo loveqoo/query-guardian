@@ -117,7 +117,7 @@ class MustBeMaskedRule : Rule {
                             ?: "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 하는데 " +
                             "등록된 강제식을 읽을 수 없습니다 — 카탈로그의 MASK 제약을 확인하세요.",
                         // 문장과 조각이 **같은 값**에서 나온다 — 갈라질 자리를 만들지 않는다(spec 012 I3).
-                        fix = fixed?.let {
+                        fix = fixed?.takeIf { scope.fixable() }?.let {
                             Fix.ReplaceProjection(finding.logicalTable, finding.column, from = finding.column, to = it)
                         },
                     )
@@ -217,13 +217,31 @@ class RequirePredicateRule : Rule {
                         Violation(
                             id, severity,
                             "테이블 ${table.name}(${table.instanceKey})은(는) 필수 조건 `${required.label}` 이 WHERE에 필요합니다.",
-                            fix = qualified?.let { Fix.AddPredicate(table.name, required.column, it) },
+                            fix = qualified?.takeIf { scope.fixable() }
+                                ?.let { Fix.AddPredicate(table.name, required.column, it) },
                         )
                     }
                 }
             }
         }
 }
+
+
+/**
+ * **조각은 최상위 스코프의 위반에만 붙인다** (spec 013 · 적대 검토 반영).
+ *
+ * 조각은 자기 스코프를 말하지 않는다 — `table`·`column`·고칠 문자열뿐이다. 그런데 화면의 적용기는
+ * 텍스트 조작이라 **스코프를 찾을 수 없다.** CTE·파생·UNION 팔 안의 위반에 조각을 주면, 적용기는
+ * 그것을 최상위에 넣고 그 결과는 ⑴ 그 스코프의 위반은 그대로 남고 ⑵ 엉뚱한 자리에 조건이 생긴다
+ * (실측: CTE 안 위반의 조각이 바깥 WHERE로 들어갔다).
+ *
+ * **없는 것을 지어내지 않는다** — 안전하게 적용할 수 없는 조각은 주지 않고 문장만 준다.
+ * 사용자는 그 자리를 직접 고치게 되지만, 눌렀는데 안 풀리는 것보다 낫다.
+ *
+ * 이 제약을 없애려면 조각이 스코프를 나르고 적용기가 그 스코프를 짚을 수 있어야 한다 —
+ * 그것은 적용기가 파서가 된다는 뜻이고, 별도 결정이 필요하다(`.dev/BACKLOG.md`).
+ */
+internal fun SelectScope.fixable(): Boolean = kind == ScopeKind.ROOT
 
 /** 카탈로그 미등록 물리 테이블 경고 — 자동완성·의미 룰이 적용되지 않음을 사용자에게 알린다. CTE/파생 alias는 제외. */
 class UnknownTableRule : Rule {

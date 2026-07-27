@@ -81,27 +81,148 @@ class FixRoundTripTest {
     /**
      * 화면의 `[적용]`이 하는 일. **서버를 부르지 않는다** — 에디터 텍스트만 고친다(spec 013 F4).
      *
-     * 단순한 텍스트 조작인 이유: 제안은 조각이고, 조각을 어디에 넣을지는 문법이 이미 정해 준다.
-     * 여기서 SQL을 다시 조립하면 그것이 재작성이다.
+     * **`frontend/src/api/fix.ts`와 같은 규칙이어야 한다.** 예전에는 그 약속을 주석으로만 적어 뒀고
+     * 실제로 갈라져 있었다: 여기서는 `" WHERE "`를 리터럴 공백으로 찾고 저쪽은 `\s`로 찾아서,
+     * 줄바꿈 SQL에서 여기만 WHERE를 하나 더 만들었다. 이제 [applyFixCases]가 양쪽을 같은 표로 묶는다.
+     *
+     * **확신할 수 없으면 고치지 않는다.** 텍스트 조작이므로 괄호 깊이와 문자열 리터럴을 보고,
+     * 판단할 수 없으면(최상위 WHERE가 여럿 = UNION) 원본을 그대로 돌려준다.
      */
-    private fun applyFix(sql: String, fix: Fix): String = when (fix) {
-        // 투영 자리의 컬럼 참조 하나를 강제식으로 바꾼다. 경계 셋이 모두 필요하다 —
-        // 앞이 식별자/점/**여는 괄호**면 안 되고(마지막 것이 이미 감싼 것을 또 감싸는 걸 막는다),
-        // 뒤가 식별자/여는 괄호여도 안 된다. 화면의 `src/api/fix.ts`와 **같은 규칙**이다.
-        is Fix.ReplaceProjection ->
-            sql.replaceFirst(Regex("(?<![\\w.(])${Regex.escape(fix.from)}(?![\\w(])"), fix.to)
-        // 최상위 WHERE에 AND로 잇는다. WHERE가 없으면 FROM 뒤(다음 절 앞)에 새로 만든다.
-        is Fix.AddPredicate ->
-            if (sql.contains(" WHERE ", ignoreCase = true)) {
-                sql.replaceFirst(Regex(" WHERE ", RegexOption.IGNORE_CASE), " WHERE ${fix.predicate} AND ")
-            } else {
-                val tail = Regex(" (LIMIT|GROUP BY|ORDER BY|HAVING) ", RegexOption.IGNORE_CASE).find(sql)
-                if (tail == null) "$sql WHERE ${fix.predicate}"
-                else sql.substring(0, tail.range.first) + " WHERE ${fix.predicate}" + sql.substring(tail.range.first)
+    private fun applyFix(sql: String, fix: Fix): String {
+        val shape = scan(sql)
+        return when (fix) {
+            is Fix.ReplaceProjection -> {
+                // 경계 셋: 앞이 식별자/점/여는 괄호면 안 되고(마지막이 이중 마스킹을 막는다),
+                // 뒤가 식별자/여는 괄호여도 안 된다. 문자열 리터럴 안도 건드리지 않는다.
+                val hit = Regex("(?<![\\w.(])${Regex.escape(fix.from)}(?![\\w(])")
+                    .findAll(sql).firstOrNull { !shape.inLiteral[it.range.first] }
+                if (hit == null) sql
+                else sql.substring(0, hit.range.first) + fix.to + sql.substring(hit.range.last + 1)
             }
+            is Fix.AddPredicate -> {
+                val wheres = topLevel(sql, Regex("\\sWHERE\\s", RegexOption.IGNORE_CASE), shape)
+                when {
+                    // 최상위 WHERE가 둘 이상 = 여러 갈래(UNION). 어느 갈래인지 조각이 말해 주지 않는다.
+                    wheres.size > 1 -> sql
+                    wheres.size == 1 -> wheres[0].let { w ->
+                        // 매치한 공백을 그대로 되돌려 사용자의 줄바꿈·들여쓰기를 보존한다.
+                        sql.substring(0, w.range.first) + w.value + "${fix.predicate} AND " +
+                            sql.substring(w.range.last + 1)
+                    }
+                    else -> {
+                        val tails = topLevel(
+                            sql,
+                            Regex("\\s(LIMIT|GROUP\\s+BY|ORDER\\s+BY|HAVING)\\s", RegexOption.IGNORE_CASE),
+                            shape,
+                        )
+                        if (tails.isEmpty()) "$sql WHERE ${fix.predicate}"
+                        else sql.substring(0, tails[0].range.first) + " WHERE ${fix.predicate}" +
+                            sql.substring(tails[0].range.first)
+                    }
+                }
+            }
+        }
     }
 
-    private data class Scenario(val name: String, val sql: String, val rules: List<UserRule> = emptyList())
+    /** 인덱스별 괄호 깊이와 "문자열 리터럴 안인가" — 파서가 아니라 **물러날 자리를 알기 위한** 최소 정보. */
+    private class Shape(val depth: IntArray, val inLiteral: BooleanArray)
+
+    private fun scan(sql: String): Shape {
+        val depth = IntArray(sql.length)
+        val inLiteral = BooleanArray(sql.length)
+        var level = 0
+        var quote: Char? = null
+        var i = 0
+        while (i < sql.length) {
+            val ch = sql[i]
+            if (quote != null) {
+                inLiteral[i] = true
+                depth[i] = level
+                if (ch == quote) {
+                    if (i + 1 < sql.length && sql[i + 1] == quote) {
+                        // `''` — 리터럴 안의 이스케이프다. 닫는 것이 아니다.
+                        inLiteral[i + 1] = true
+                        depth[i + 1] = level
+                        i++
+                    } else {
+                        quote = null
+                    }
+                }
+                i++
+                continue
+            }
+            if (ch == '\'' || ch == '"' || ch == '`') {
+                quote = ch
+                inLiteral[i] = true
+                depth[i] = level
+                i++
+                continue
+            }
+            if (ch == '(') level++
+            depth[i] = level
+            if (ch == ')') level = maxOf(0, level - 1)
+            i++
+        }
+        return Shape(depth, inLiteral)
+    }
+
+    /** 괄호 밖(깊이 0)이고 리터럴이 아닌 매치만. **키워드 위치**로 판단한다 — 앞 공백은 깊이가 다를 수 있다. */
+    private fun topLevel(sql: String, regex: Regex, shape: Shape): List<MatchResult> =
+        regex.findAll(sql).filter { m ->
+            val keywordAt = m.range.first + (m.value.length - m.value.trimStart().length)
+            shape.depth[keywordAt] == 0 && !shape.inLiteral[keywordAt]
+        }.toList()
+
+    /**
+     * **적용기 계약 표** — `tests/apply-fix-cases.json`(저장소 루트)을 화면 쪽과 함께 읽는다.
+     *
+     * 구현이 두 벌인 것은 불가피하다(브라우저에서 Kotlin을 못 돌린다). 케이스까지 두 벌이면
+     * 갈라져도 아무도 모른다 — 이 표가 그 자리를 빨간불로 만든다.
+     */
+    private data class ApplyCase(val name: String, val why: String?, val sql: String, val fix: Fix, val expected: String)
+
+    private fun applyFixCases(): List<ApplyCase> {
+        val path = java.nio.file.Path.of("..", "tests", "apply-fix-cases.json")
+        val root = com.fasterxml.jackson.databind.ObjectMapper().readTree(java.nio.file.Files.readString(path))
+        return root["cases"].map { node ->
+            val f = node["fix"]
+            val fix = when (val kind = f["kind"].asText()) {
+                "REPLACE_PROJECTION" -> Fix.ReplaceProjection(
+                    f["table"].asText(), f["column"].asText(), f["from"].asText(), f["to"].asText())
+                "ADD_PREDICATE" -> Fix.AddPredicate(f["table"].asText(), f["column"].asText(), f["to"].asText())
+                else -> error("표에 모르는 조각 종류가 있다: $kind")
+            }
+            ApplyCase(
+                node["name"].asText(), node["why"]?.asText(),
+                node["sql"].asText(), fix, node["expected"].asText(),
+            )
+        }
+    }
+
+    @Test
+    fun `적용기가 화면과 같은 규칙을 지킨다`() {
+        val cases = applyFixCases()
+        // 경로가 틀리거나 표가 비면 아래 루프가 0회 돌고 **전부 통과**한다 — 그 착시를 먼저 막는다.
+        assertTrue(cases.size > 5, "케이스 표를 못 읽었다(${cases.size}건) — tests/apply-fix-cases.json 경로를 확인하라")
+        for (case in cases) {
+            assertEquals(
+                case.expected, applyFix(case.sql, case.fix),
+                "${case.name}${case.why?.let { " — $it" } ?: ""}\n  화면(frontend/src/api/fix.ts)과 갈라졌다",
+            )
+        }
+    }
+
+    /**
+     * [noFixExpected]는 **"조각을 못 준다는 것이 정답"**인 형태다. 그런 형태를 시나리오에서 빼면
+     * 표본이 통과하기 쉬운 것만 남는다 — 여기 넣어 두면 나중에 조각을 줄 수 있게 됐을 때
+     * 이 자리가 빨간불로 알려 준다(현행 고정의 반대 방향).
+     */
+    private data class Scenario(
+        val name: String,
+        val sql: String,
+        val rules: List<UserRule> = emptyList(),
+        val noFixExpected: String? = null,
+    )
 
     private val scenarios = listOf(
         Scenario("시스템 룰 — 맨몸 마스킹 컬럼", "SELECT email FROM users LIMIT 10"),
@@ -120,6 +241,22 @@ class FixRoundTripTest {
             "필수 조건 — 이미 다른 WHERE가 있을 때",
             "SELECT id FROM marketing_consents WHERE id > 0 LIMIT 10",
         ),
+        // ── 여기부터는 적대 검토가 반례로 제시한 형태다. 단정을 "그 위반만"으로 바꾼 덕에 들어올 수 있다.
+        Scenario(
+            "CTE — 조각이 겨눈 곳은 바깥인데 첫 WHERE는 CTE 안에 있다",
+            "WITH recent AS (SELECT user_id FROM marketing_consents WHERE consent_yn IS NOT NULL) " +
+                "SELECT c.id FROM marketing_consents c JOIN recent r ON r.user_id = c.id LIMIT 10",
+        ),
+        Scenario(
+            "UNION — 두 팔이 각각 조건을 요구한다",
+            "SELECT id FROM marketing_consents a WHERE a.id > 0 " +
+                "UNION ALL SELECT id FROM marketing_consents b WHERE b.id < 0",
+            noFixExpected = "두 팔은 UNION_ARM 스코프라 조각을 주지 않는다 — 적용기가 어느 팔인지 알 수 없다",
+        ),
+        Scenario(
+            "문자열 리터럴 안에 컬럼 이름과 같은 글자가 있다",
+            "SELECT 'email' AS tag, email FROM users LIMIT 10",
+        ),
     )
 
     /**
@@ -136,11 +273,19 @@ class FixRoundTripTest {
         assertEquals(sql, applyFix(sql, fix), "이미 가려진 것을 또 감쌌다 — 이중 마스킹은 사용자 의도를 바꾼다")
     }
 
-    /** 이 시나리오에서 나온 조각들 — 없으면 그 자체가 실패다(막혔는데 고칠 방법을 안 줬다). */
+    /** 이 시나리오에서 나온 조각들. [Scenario.noFixExpected]가 없는데 조각도 없으면 실패다(막혔는데 고칠 방법을 안 줬다). */
     private fun fixesOf(scenario: Scenario): List<Fix> {
         val report = lint(scenario.sql, *scenario.rules.toTypedArray())
         assertTrue(report.blocked, "${scenario.name}: 막히지 않았다 — 시나리오가 더 이상 위반이 아니다: ${report.violations}")
         val withFix = report.violations.filter { it.fix != null }
+        if (scenario.noFixExpected != null) {
+            assertTrue(
+                withFix.isEmpty(),
+                "${scenario.name}: 조각을 안 줄 자리인데 줬다(${scenario.noFixExpected}) — " +
+                    "적용기가 안전하게 넣을 수 있게 됐다면 이 시나리오의 기대를 바꿔라: ${withFix.map { it.fix }}",
+            )
+            return emptyList()
+        }
         assertTrue(
             withFix.isNotEmpty(),
             "${scenario.name}: 막았는데 고칠 방법이 없다 — 사용자는 여기서 멈춘다: ${report.violations.map(Violation::message)}",
@@ -148,17 +293,30 @@ class FixRoundTripTest {
         return withFix.mapNotNull { it.fix }
     }
 
+    /**
+     * **단정은 "그 조각이 겨눈 위반이 사라졌는가"다** — "위반이 전부 사라졌는가"가 아니다.
+     *
+     * 처음에는 `!after.blocked`로 썼는데, 그 기준은 **어려운 형태를 구조적으로 배제**했다(적대 검토가
+     * 지적): 셀프 조인·UNION·제약 둘인 테이블처럼 위반이 여럿 나오는 쿼리는 조각 하나로 전부 없앨 수
+     * 없으므로, 시나리오로 추가하는 순간 빨간불이 되고 그래서 아무도 추가하지 않는다. 통과하기 쉬운
+     * 형태만 남아 "왕복을 잰다"는 말이 표본 안에서만 참이 된다(retrospect 019: 분모를 밝혀라).
+     *
+     * 그래서 조각마다 **자기 위반**만 본다. 남은 위반은 남은 조각이 각각 담당한다.
+     */
     @Test
     fun `제안을 적용하면 그 위반이 사라진다`() {
         for (scenario in scenarios) {
-            for (fix in fixesOf(scenario)) {
+            val before = lint(scenario.sql, *scenario.rules.toTypedArray())
+            for (violation in before.violations.filter { it.fix != null }) {
+                val fix = violation.fix!!
                 val fixed = applyFix(scenario.sql, fix)
                 assertTrue(fixed != scenario.sql, "${scenario.name}: 적용해도 SQL이 그대로다 — $fix")
                 val after = lint(fixed, *scenario.rules.toTypedArray())
                 assertTrue(
-                    !after.blocked,
-                    "${scenario.name}: 제안대로 고쳤는데 여전히 막힌다\n  before: ${scenario.sql}\n  fix: $fix" +
-                        "\n  after:  $fixed\n  위반: ${after.violations.map(Violation::message)}",
+                    after.violations.none { it.ruleId == violation.ruleId && it.message == violation.message },
+                    "${scenario.name}: 제안대로 고쳤는데 **그 위반이** 그대로다" +
+                        "\n  before: ${scenario.sql}\n  위반: ${violation.message}\n  fix: $fix" +
+                        "\n  after:  $fixed\n  남은 위반: ${after.violations.map(Violation::message)}",
                 )
             }
         }

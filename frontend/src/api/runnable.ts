@@ -21,7 +21,11 @@ export interface Runnable {
 
 export function runDeniedReason(row: Runnable, viewerId: string | undefined): string | null {
   if (row.isSample) return "예시 행입니다";
-  if (row.review !== "APPROVED") return "검토 승인된 쿼리만 실행할 수 있습니다";
+  // 검토 상태는 **왜 안 되는지**를 갈라 말한다 — "승인된 것만"이라고만 하면 사용자가 다음에 무엇을
+  // 해야 하는지 모른다(대기 중이면 기다리는 것이고, 반려면 고쳐서 다시 올리는 것이다).
+  if (row.review === "PENDING_REVIEW") return "검토 대기 중입니다 — 승인 후 실행할 수 있습니다";
+  if (row.review === "REJECTED") return "반려된 쿼리는 실행할 수 없습니다";
+  if (row.review !== "APPROVED") return "검토 상태를 확인하는 중입니다";
   // 근거 요청이 사라지면 **아무도** 소유자가 아니다. 스튜어드라고 예외가 아니다.
   if (!row.owner) return "근거 승인 요청이 없어 실행할 수 없습니다";
   // 스튜어드에게도 남의 쿼리는 막힌다 — 보는 능력과 실행하는 능력은 다르다(결정 14).

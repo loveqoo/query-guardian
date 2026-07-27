@@ -1,0 +1,209 @@
+{
+  "_doc": [
+    "제안 조각을 SQL에 적용하는 규칙의 **케이스 표** (spec 013 §3-1).",
+    "",
+    "구현은 두 벌일 수밖에 없다 — 브라우저에서 Kotlin을 못 돌린다:",
+    "  frontend/src/api/fix.ts            (사용자가 실제로 누르는 것)",
+    "  backend .../FixRoundTripTest.kt    (적용 결과가 판정을 통과하는지 재는 것)",
+    "",
+    "정당하지 않은 것은 **케이스까지 두 벌인 것**이었다. 실제로 두 구현이 갈라져 있었다:",
+    "코틀린은 ' WHERE '를 리터럴 공백으로 찾고 TS는 \\s로 찾아서, 줄바꿈이 있는 SQL에서",
+    "코틀린만 WHERE를 하나 더 만들었다. 왕복 시나리오가 전부 한 줄이라 못 봤다.",
+    "",
+    "그래서 표는 여기 한 벌만 두고 양쪽이 읽는다. 갈라지면 한쪽이 빨간불이 된다.",
+    "이 파일이 루트 tests/에 있는 이유: 두 모듈 어느 쪽에도 속하지 않는다."
+  ],
+  "cases": [
+    {
+      "name": "맨몸 컬럼을 강제식으로 바꾼다",
+      "sql": "SELECT email FROM users LIMIT 10",
+      "fix": {
+        "kind": "REPLACE_PROJECTION",
+        "table": "users",
+        "column": "email",
+        "from": "email",
+        "to": "mask_email(email)"
+      },
+      "expected": "SELECT mask_email(email) FROM users LIMIT 10"
+    },
+    {
+      "name": "이름이 겹치는 다른 컬럼은 건드리지 않는다",
+      "why": "email_verified가 먼저 나와도 그것을 바꾸면 안 된다 — 단어 경계가 없으면 여기서 깨진다",
+      "sql": "SELECT email_verified, email FROM users LIMIT 10",
+      "fix": {
+        "kind": "REPLACE_PROJECTION",
+        "table": "users",
+        "column": "email",
+        "from": "email",
+        "to": "mask_email(email)"
+      },
+      "expected": "SELECT email_verified, mask_email(email) FROM users LIMIT 10"
+    },
+    {
+      "name": "이미 감싼 것을 다시 감싸지 않는다",
+      "why": "이중 마스킹은 사용자 의도를 바꾼다. 앞이 여는 괄호인 자리를 제외해야 막힌다",
+      "sql": "SELECT mask_email(email) FROM users LIMIT 10",
+      "fix": {
+        "kind": "REPLACE_PROJECTION",
+        "table": "users",
+        "column": "email",
+        "from": "email",
+        "to": "mask_email(email)"
+      },
+      "expected": "SELECT mask_email(email) FROM users LIMIT 10"
+    },
+    {
+      "name": "한정된 참조는 대상이 아니다",
+      "why": "서버는 한정자 없는 형태를 제안한다. u.email까지 바꾸면 u.mask_email(email)이 되어 문법이 깨진다",
+      "sql": "SELECT u.email FROM users u LIMIT 10",
+      "fix": {
+        "kind": "REPLACE_PROJECTION",
+        "table": "users",
+        "column": "email",
+        "from": "email",
+        "to": "mask_email(email)"
+      },
+      "expected": "SELECT u.email FROM users u LIMIT 10"
+    },
+    {
+      "name": "자리를 못 찾으면 원본 그대로",
+      "why": "부분 적용된 SQL을 만들지 않는다. 호출부가 next === prev로 알아채고 사용자에게 직접 고치라고 말한다",
+      "sql": "SELECT id FROM users LIMIT 10",
+      "fix": {
+        "kind": "REPLACE_PROJECTION",
+        "table": "users",
+        "column": "email",
+        "from": "email",
+        "to": "mask_email(email)"
+      },
+      "expected": "SELECT id FROM users LIMIT 10"
+    },
+    {
+      "name": "WHERE가 없으면 다음 절 앞에 만든다",
+      "sql": "SELECT id FROM marketing_consents LIMIT 10",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "marketing_consents",
+        "column": "consent_yn",
+        "to": "mc.consent_yn = 'Y'"
+      },
+      "expected": "SELECT id FROM marketing_consents WHERE mc.consent_yn = 'Y' LIMIT 10"
+    },
+    {
+      "name": "절이 하나도 없으면 끝에 붙인다",
+      "sql": "SELECT id FROM marketing_consents",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "marketing_consents",
+        "column": "consent_yn",
+        "to": "mc.consent_yn = 'Y'"
+      },
+      "expected": "SELECT id FROM marketing_consents WHERE mc.consent_yn = 'Y'"
+    },
+    {
+      "name": "WHERE가 있으면 기존 조건 앞에 AND로 잇는다",
+      "sql": "SELECT id FROM marketing_consents WHERE id > 0 LIMIT 10",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "marketing_consents",
+        "column": "consent_yn",
+        "to": "mc.consent_yn = 'Y'"
+      },
+      "expected": "SELECT id FROM marketing_consents WHERE mc.consent_yn = 'Y' AND id > 0 LIMIT 10"
+    },
+    {
+      "name": "줄바꿈이 있는 WHERE도 찾는다",
+      "why": "**이 케이스가 두 구현의 갈라짐을 잡았다.** 에디터 기본 SQL이 바로 이 모양이고, 리터럴 공백으로 찾던 쪽은 WHERE를 하나 더 만들었다. 원문의 줄바꿈도 보존해야 한다",
+      "sql": "SELECT u.id\nFROM users AS u\nWHERE u.id > 0\nLIMIT 100",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "users",
+        "column": "consent_yn",
+        "to": "u.consent_yn = 'Y'"
+      },
+      "expected": "SELECT u.id\nFROM users AS u\nWHERE u.consent_yn = 'Y' AND u.id > 0\nLIMIT 100"
+    },
+    {
+      "name": "줄바꿈이 있고 WHERE가 없으면 다음 절 앞에",
+      "sql": "SELECT u.id\nFROM users AS u\nLIMIT 100",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "users",
+        "column": "consent_yn",
+        "to": "u.consent_yn = 'Y'"
+      },
+      "expected": "SELECT u.id\nFROM users AS u WHERE u.consent_yn = 'Y'\nLIMIT 100"
+    },
+    {
+      "name": "GROUP BY의 공백이 둘이어도 절로 알아본다",
+      "sql": "SELECT dt, COUNT(*) FROM t\nGROUP  BY dt",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "t",
+        "column": "deleted_yn",
+        "to": "t.deleted_yn = 'N'"
+      },
+      "expected": "SELECT dt, COUNT(*) FROM t WHERE t.deleted_yn = 'N'\nGROUP  BY dt"
+    },
+    {
+      "name": "최상위 OR에서는 우선순위가 보장되지 않는다 — 현행 동작 고정",
+      "why": "(c AND a) OR b로 해석된다. 판정이 이것을 미충족으로 보므로 사용자가 직접 괄호를 넣게 된다 — 조용히 통과시키는 것보다 안전한 방향이라 지금은 이대로 둔다",
+      "sql": "SELECT id FROM t WHERE a = 1 OR b = 2 LIMIT 10",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "t",
+        "column": "c",
+        "to": "c = 'Y'"
+      },
+      "expected": "SELECT id FROM t WHERE c = 'Y' AND a = 1 OR b = 2 LIMIT 10"
+    },
+    {
+      "name": "CTE 안의 WHERE에 끼어들지 않는다",
+      "why": "적대 검토 반례. 첫 WHERE가 CTE 안이면 바깥 별칭을 참조하는 깨진 SQL이 되고 원래 위반은 그대로 남아 아무리 눌러도 안 풀린다 — 최상위 절 앞에 새로 만들어야 한다",
+      "sql": "WITH recent AS (SELECT user_id FROM mc WHERE consent_yn IS NOT NULL) SELECT c.id FROM mc c LIMIT 10",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "mc",
+        "column": "consent_yn",
+        "to": "c.consent_yn = 'Y'"
+      },
+      "expected": "WITH recent AS (SELECT user_id FROM mc WHERE consent_yn IS NOT NULL) SELECT c.id FROM mc c WHERE c.consent_yn = 'Y' LIMIT 10"
+    },
+    {
+      "name": "최상위 WHERE가 둘이면(UNION) 물러난다",
+      "why": "어느 갈래의 위반인지 조각이 말해 주지 않는다. 찍어 넣으면 그 갈래가 깨지고 원래 갈래는 그대로 막힌다 — 원본을 돌려주고 사용자가 직접 고치게 한다",
+      "sql": "SELECT id FROM mc a WHERE a.id > 0 UNION ALL SELECT id FROM mc b WHERE b.id < 0",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "mc",
+        "column": "consent_yn",
+        "to": "a.consent_yn = 'Y'"
+      },
+      "expected": "SELECT id FROM mc a WHERE a.id > 0 UNION ALL SELECT id FROM mc b WHERE b.id < 0"
+    },
+    {
+      "name": "문자열 리터럴 안의 같은 글자는 바꾸지 않는다",
+      "why": "적대 검토 반례. 'email' 리터럴을 바꾸면 뜻이 달라지는데 맨몸 투영은 그대로라 위반도 안 사라진다",
+      "sql": "SELECT 'email' AS tag, email FROM users LIMIT 10",
+      "fix": {
+        "kind": "REPLACE_PROJECTION",
+        "table": "users",
+        "column": "email",
+        "from": "email",
+        "to": "mask_email(email)"
+      },
+      "expected": "SELECT 'email' AS tag, mask_email(email) FROM users LIMIT 10"
+    },
+    {
+      "name": "괄호 안의 LIMIT을 최상위 절로 오인하지 않는다",
+      "sql": "SELECT id FROM t WHERE id IN (SELECT id FROM u LIMIT 5)",
+      "fix": {
+        "kind": "ADD_PREDICATE",
+        "table": "t",
+        "column": "deleted_yn",
+        "to": "t.deleted_yn = 'N'"
+      },
+      "expected": "SELECT id FROM t WHERE t.deleted_yn = 'N' AND id IN (SELECT id FROM u LIMIT 5)"
+    }
+  ]
+}

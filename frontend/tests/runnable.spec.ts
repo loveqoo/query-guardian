@@ -14,9 +14,15 @@ test("본인의 승인된 쿼리는 실행할 수 있다", () => {
   expect(runDeniedReason(approved("u1"), "u1")).toBeNull();
 });
 
-test("검토가 안 끝났으면 막힌다", () => {
-  expect(runDeniedReason({ review: "PENDING_REVIEW", owner: "u1" }, "u1")).toContain("검토 승인");
-  expect(runDeniedReason({ review: "REJECTED", owner: "u1" }, "u1")).toContain("검토 승인");
+/**
+ * 검토 상태마다 **다음에 할 일이 다르다** — 대기 중이면 기다리는 것이고, 반려면 고쳐서 다시 올리는 것이다.
+ * 한 문장으로 뭉치면 사용자가 그 차이를 화면에서 알 수 없다.
+ */
+test("검토가 안 끝났으면 막히고, 이유가 상태마다 다르다", () => {
+  expect(runDeniedReason({ review: "PENDING_REVIEW", owner: "u1" }, "u1")).toContain("검토 대기");
+  expect(runDeniedReason({ review: "REJECTED", owner: "u1" }, "u1")).toContain("반려");
+  // 아직 못 읽어 온 상태(빈 문자열)도 **막는** 쪽이다 — 모를 때 여는 것은 fail-open이다
+  expect(runDeniedReason({ review: "", owner: "u1" }, "u1")).toContain("확인하는 중");
 });
 
 /** 이 프로젝트에서 화면에 단서가 하나도 없는 규칙 — 스튜어드는 **보되 실행하지 못한다**. */

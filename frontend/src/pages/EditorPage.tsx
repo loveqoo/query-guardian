@@ -31,6 +31,7 @@ import { MONO_FONT } from "../theme";
 import { mockSql } from "../mock/design";
 import { applyFix } from "../api/fix";
 import { limitStatus } from "../api/execution";
+import { runDeniedReason } from "../api/runnable";
 import { useAuth } from "../auth/AuthContext";
 import {
   apiErrorMessage,
@@ -225,6 +226,8 @@ export default function EditorPage() {
    * 미저장(null)·검토 대기·반려에서는 실행할 수 없고, 화면은 그 이유를 서버 어휘로 말한다(F3).
    */
   const [reviewStatus, setReviewStatus] = useState<ReviewStatus | null>(null);
+  /** 소유자 — 실행은 본인만(결정 14). 목록 화면과 **같은 판정 함수**를 쓰려면 여기도 들고 있어야 한다. */
+  const [owner, setOwner] = useState<string | null>(null);
 
   /**
    * 실행 결과 — **화면 상태에만** 둔다(F1). 저장소에 넣지 않고, 라우트를 떠나면 함께 사라진다(F5).
@@ -270,6 +273,7 @@ export default function EditorPage() {
         setSavedSql(q.sql);
         setRequestId(q.requestId);
         setReviewStatus(q.reviewStatus);
+        setOwner(q.owner ?? null);
         if (q.lintReport) setReport(q.lintReport);
       })
       .catch(() => {
@@ -486,15 +490,20 @@ export default function EditorPage() {
 
   /**
    * 실행 자격과 **그 이유**. 서버가 막을 것을 화면이 미리 말한다 — 활성으로 보였다가 403이 나면
-   * 사용자는 자기가 뭘 잘못했는지 모른다. 이유는 **서버 어휘 그대로**다(F3): 미저장 / 검토 대기 / 반려.
+   * 사용자는 자기가 뭘 잘못했는지 모른다.
+   *
+   * **판정은 목록 화면과 같은 함수**(`runDeniedReason`)를 쓴다. 예전에는 여기에 따로 적었고,
+   * 그 사본이 **소유자 검사를 통째로 빠뜨리고 있었다**(설계 검토가 잡았다): 목록에서는 남의 쿼리
+   * 실행이 비활성인데 `에디터에서 열기`로 들어오면 활성이었다. 진입점 차이는 **입력 차이**로만 남긴다 —
+   * 저장 전에는 판정할 대상 자체가 없으므로 그것만 여기서 가른다.
    */
-  const runBlockedReason = useMemo((): string | null => {
-    if (!editId) return "저장한 뒤에 실행할 수 있습니다";
-    if (reviewStatus === "PENDING_REVIEW") return "검토 대기 중입니다 — 승인 후 실행할 수 있습니다";
-    if (reviewStatus === "REJECTED") return "반려된 쿼리는 실행할 수 없습니다";
-    if (reviewStatus !== "APPROVED") return "검토 상태를 확인하는 중입니다";
-    return null;
-  }, [editId, reviewStatus]);
+  const runBlockedReason = useMemo(
+    (): string | null =>
+      editId
+        ? runDeniedReason({ review: reviewStatus ?? "", owner }, user?.id)
+        : "저장한 뒤에 실행할 수 있습니다",
+    [editId, reviewStatus, owner, user?.id],
+  );
 
   /**
    * 실행. **저장된 SQL이 실행된다** — 에디터에서 고친 내용은 저장하기 전까지 반영되지 않는다.

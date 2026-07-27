@@ -277,3 +277,65 @@ PostgreSQL·Trino 방언 + 에이전트. M3 이후.
 
 - 백엔드 **266건 통과**(P0 반영 후 실측), 실패 0.
 - **푸시·머지 안 됨** — 사용자 명시 없이는 금지.
+
+## spec 013 적대 검토가 남긴 것 (2026-07-27)
+
+두 채널(보안·정합성 / 설계 품질) 결과 중 **이번에 안 고친 것**. 고친 것은 커밋에 있다.
+
+**Q1은 통과했다** — S2(주입 제거)가 fail-open을 만들지 않았음을 순회 축·카탈로그 출처·타입 사슬로
+대조 확인했고, 반대 가설 다섯이 기각됐다. 아래는 그와 별개의 발견들이다.
+
+### D-F. 사용자 규칙 채널이 purpose 스코프 밖에서도 강제식 값을 말한다 (MEDIUM)
+
+`DbTableCatalog.resolveConditionPredicate`에 **purpose 필터가 없다**(실측 확인). 그래서:
+- 시스템 룰(`requiredPredicates`)은 purpose가 다르면 침묵하는데,
+- 사용자 규칙 `requires`의 조각은 그 purpose에서도 `mc.consent_yn = 'Y'`를 실어 보낸다.
+
+커밋의 "새 노출이 아니다"는 **시스템 룰 채널에서만 참**이었다(그쪽은 메시지가 이미 값을 담았다).
+
+**주의**: 그 필터를 `resolveConditionPredicate`에 넣으면 **판정도 좁아져 fail-open**이 된다.
+유출만 막으려면 **조각에만** 적용해야 하고, 그러려면 `UserRuleEvaluator.evaluate`가 `LintContext`를
+받아야 한다(현재 시그니처에 없다). 착수 시 순서: ⑴ 평가기에 purpose를 넘긴다 ⑵ 조각 생성에만 건다
+⑶ 되돌려 실패 — purpose 불일치에서 조각이 사라지고 **판정은 그대로**인지 둘 다 확인.
+
+### D-G. 조각이 스코프를 나르지 않는다 — 지금은 최상위 위반에만 조각을 준다
+
+CTE·파생·UNION 팔 안의 위반은 **조각 없이 문장만** 나간다(`SelectScope.fixable()`).
+적용기가 텍스트 조작이라 스코프를 짚을 수 없기 때문이다. 없애려면 조각이 스코프를 나르고
+적용기가 그 스코프를 찾아야 하는데, 그것은 **적용기가 파서가 된다**는 뜻이라 별도 결정이 필요하다.
+`FixRoundTripTest`의 UNION 시나리오가 `noFixExpected`로 이 현행을 고정하고 있으므로,
+조각을 줄 수 있게 되면 그 자리가 빨간불로 알려 준다.
+
+### D-H. `updateDef`가 C2 가드를 지나간다 (LOW→MEDIUM)
+
+C2(판정 불가 형태의 요건 술어 매핑 거부)는 `createMapping`에만 있다. `updateDef`는 파싱·`{col}`만 보고
+`requiredForm`도, **기존 매핑 재검증도** 하지 않는다. 대조: `deleteDef`는 매핑이 있으면 거부한다.
+- 강제식을 판정 불가 형태로 바꾸면 → 그 테이블 전 쿼리가 "검증할 수 없습니다"(fail-closed DoS)
+- **kind를 INTEGRITY → MASK로 바꾸면 요건이 조용히 사라진다**(fail-open)
+
+스튜어드 권한 안이고(어차피 매핑을 지울 수 있다) S1이 만든 구멍도 아니다(FILTER에도 원래 있었다).
+다만 커밋의 "등록 검증 C2도 같이 넓혔다"는 **생성 경로에만** 참이다.
+
+### D-I. `GET /api/catalog/purposes`만 steward 게이트가 없다 (LOW)
+
+같은 컨트롤러의 다른 조회는 전부 `steward(http)`를 먼저 부른다. 인증은 필요하지만 역할은 안 본다.
+spec 013과 무관한 선행 결함.
+
+### D-J. 화면 층의 사본들 (설계 채널)
+
+- 실행 이벤트 표가 2벌(`QueriesPage` / `AuditPage`) — 이미 갈라졌다: 시각 포맷이 한쪽은 날짜만이라
+  하루 세 번 실행하면 같은 줄로 보인다. 상한 3값·결말 툴팁은 감사 화면에만 있다.
+  → 컬럼 집합을 설정으로 받는 컴포넌트 하나로.
+- `FixDto.kind: String` — 같은 파일의 `severity`·`outcome`은 enum이다. `FixKind` enum +
+  zod `discriminatedUnion`으로 바꾸면 `fix.ts`의 죽은 가드(`if (!fix.from)`)가 사라지고
+  와이어 대조가 이 어휘도 덮는다.
+- `src/api/`에 전송(`client.ts`)과 판단(`fix`·`execution`·`runnable`)이 섞였다 → `src/policy/`로.
+- `MoreRows`가 한국어 표시 문구를 타입으로 굳혔다 → 코드 + 라벨 맵으로.
+- `EditorPage.tsx` 1400줄 중 ~300줄이 AI 패널·추천 팝업 **고정 스텁**이다 → 컴포넌트로 분리하면
+  진입 파일에 게이트 줄기만 남는다.
+
+### D-K. 마일스톤을 언급한 주석을 회수하는 절차가 없다
+
+"C3에서 붙인다" 같은 주석이 그 단계가 끝난 뒤에도 남는다(실제로 `ResultFooter` 머리에 유물 KDoc이
+얹혀 있었다). 이 저장소는 주석에 결정을 남기는 것이 자산이라 **거짓말하는 주석이 그 자산을 깎는다.**
+회고 단계에 한 줄: `grep -rn "에서 붙인다\|아직 .*않았다\|예정" frontend/src backend/src`

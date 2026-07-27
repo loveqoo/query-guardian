@@ -6,10 +6,28 @@ import { z } from "zod";
 export const idSchema = z.union([z.number(), z.string()]);
 export type Id = z.infer<typeof idSchema>;
 
+/**
+ * **고칠 방법 한 조각** (spec 012 §7-3 · spec 013 S3).
+ *
+ * `REPLACE_PROJECTION`은 `from` → `to`, `ADD_PREDICATE`는 `to`를 WHERE에 **더한다**.
+ * 후자에 `from`이 없는 것은 "못 찾았다"가 아니라 바꾸는 게 아니라는 뜻이다 — 서버가 종류로 갈라 준다.
+ *
+ * 조각이 없는 위반도 있다(차단 컬럼·조인 요건). 없으면 문장만 보여준다 — 지어내지 않는다.
+ */
+export const fixSchema = z.object({
+  kind: z.enum(["REPLACE_PROJECTION", "ADD_PREDICATE"]),
+  table: z.string(),
+  column: z.string(),
+  from: z.string().nullish(),
+  to: z.string(),
+});
+export type Fix = z.infer<typeof fixSchema>;
+
 export const violationSchema = z.object({
   ruleId: z.string(),
   severity: z.enum(["BLOCK", "WARN"]),
   message: z.string(),
+  fix: fixSchema.nullish(),
 });
 export type Violation = z.infer<typeof violationSchema>;
 
@@ -44,6 +62,63 @@ export const savedQuerySchema = queryListItemSchema.extend({
   lintReport: lintReportSchema.nullish(),
 });
 export type SavedQuery = z.infer<typeof savedQuerySchema>;
+
+// ---------- 실행 · 감사 (spec 008 §7 · spec 013) ----------
+
+export const executionColumnSchema = z.object({ name: z.string(), type: z.string() });
+export type ExecutionColumn = z.infer<typeof executionColumnSchema>;
+
+/** 무엇이 자동 적용됐는지. spec 013 S2 이후 남은 것은 **양**(LIMIT)과 **이름**(TABLE_MAP)뿐이다. */
+export const appliedRewriteSchema = z.object({
+  kind: z.string(),
+  table: z.string(),
+  column: z.string().nullish(),
+  detail: z.string(),
+});
+export type AppliedRewrite = z.infer<typeof appliedRewriteSchema>;
+
+/**
+ * 실행 결과. **행은 화면 상태에만 있고 어디에도 저장하지 않는다**(spec 013 F1).
+ *
+ * 상한 세 값을 그대로 나른다 — `moreRowsExist`를 `boolean`으로 좁히면 안 된다.
+ * `null`은 **"확인하지 않음"**이고, `false`("없음")와 다른 사실이다(spec 013 F2).
+ */
+export const executionResultSchema = z.object({
+  columns: z.array(executionColumnSchema),
+  rows: z.array(z.array(z.string().nullable())),
+  rowCount: z.number(),
+  elapsedMs: z.number(),
+  effectiveLimit: z.number().nullish(),
+  configuredCap: z.number().nullish(),
+  moreRowsExist: z.boolean().nullish(),
+  rewrittenSql: z.string(),
+  applied: z.array(appliedRewriteSchema),
+});
+export type ExecutionResult = z.infer<typeof executionResultSchema>;
+
+/**
+ * 서버 `ExecutionOutcome`와 **이름까지 같아야** 한다 — Jackson이 상수 이름으로 직렬화한다.
+ * `PREVIEW`는 실행 없이 미리보기만 한 기록이다(데이터는 안 나가지만 어떤 강제식이 적용되는지가 보인다).
+ */
+export const executionOutcomeSchema = z.enum(["SUCCESS", "BLOCKED", "ERROR", "PREVIEW"]);
+export type ExecutionOutcome = z.infer<typeof executionOutcomeSchema>;
+
+/** [errorDetail]은 STEWARD/ADMIN에게만 채워진다 — 그 외에는 분류 코드까지만(§6). */
+export const executionEventSchema = z.object({
+  id: idSchema,
+  actor: z.string(),
+  outcome: executionOutcomeSchema,
+  rowCount: z.number().nullish(),
+  elapsedMs: z.number().nullish(),
+  effectiveLimit: z.number().nullish(),
+  configuredCap: z.number().nullish(),
+  moreRowsExist: z.boolean().nullish(),
+  errorCode: z.string().nullish(),
+  errorDetail: z.string().nullish(),
+  rewrittenSql: z.string().nullish(),
+  at: z.string(),
+});
+export type ExecutionEvent = z.infer<typeof executionEventSchema>;
 
 // ---------- 승인 요청 (spec 005 §3.1 · §7) ----------
 
@@ -704,6 +779,94 @@ export function getQuery(id: Id): Promise<SavedQuery> {
 
 export function deleteQuery(id: Id): Promise<void> {
   return requestVoid(`/queries/${id}`, { method: "DELETE" });
+}
+
+// ---------- 실행 (spec 008 §7 · spec 013) ----------
+
+/**
+ * 실행 결과 (spec 013 §3-2). 차단·오류를 **분류 코드 그대로** 나른다 —
+ * 화면이 사람 말로 번역하면 감사에 남은 것과 화면이 다른 말을 하게 된다(F3).
+ */
+export type ExecuteResult =
+  | { ok: true; result: ExecutionResult }
+  | { ok: false; kind: "RULES"; report: LintReport }
+  | { ok: false; kind: "ACCESS"; error: AccessBlocked }
+  | { ok: false; kind: "APPROVAL"; error: ApprovalBlocked }
+  | { ok: false; kind: "FAILED"; status: number; code: string | null; message: string | null };
+
+function blockedCode(body: unknown): string | null {
+  if (body == null || typeof body !== "object") return null;
+  const code = (body as { code?: unknown }).code;
+  return typeof code === "string" ? code : null;
+}
+
+/**
+ * 저장·검토 승인된 쿼리 실행. **요청자 본인만** — 스튜어드도 대행 실행할 수 없다(결정 14).
+ * 결과 행은 응답에만 있고 서버 어디에도 저장되지 않는다(spec 008 §6).
+ */
+export async function executeQuery(id: Id): Promise<ExecuteResult> {
+  const res = await rawRequest(`/queries/${id}/execute`, { method: "POST" });
+  const body = await readBody(res);
+  if (res.status === 401) return handleUnauthorized<ExecuteResult>();
+  if (res.ok) return { ok: true, result: executionResultSchema.parse(body) };
+  if (res.status === 422) {
+    const report = lintReportSchema.safeParse(body);
+    if (report.success) return { ok: false, kind: "RULES", report: report.data };
+  }
+  if (res.status === 403) {
+    if (isAccessBlockedBody(body)) {
+      return { ok: false, kind: "ACCESS", error: accessBlockedSchema.parse(body) };
+    }
+    const approval = approvalBlockedSchema.safeParse(body);
+    if (approval.success) return { ok: false, kind: "APPROVAL", error: approval.data };
+  }
+  // 나머지(타임아웃·SQL 오류·상한 없음 등)는 **분류 코드를 그대로** 넘긴다.
+  return {
+    ok: false,
+    kind: "FAILED",
+    status: res.status,
+    code: blockedCode(body),
+    message: apiErrorMessage(new ApiError(res.status, body)),
+  };
+}
+
+/** 그 쿼리의 실행 이력. 오류 원문은 서버가 권한에 따라 채우거나 비운다 — 화면은 받은 대로 보인다. */
+export function listQueryExecutions(id: Id): Promise<ExecutionEvent[]> {
+  return request(z.array(executionEventSchema), `/queries/${id}/executions`);
+}
+
+export interface AuditFilter {
+  actor?: string;
+  outcome?: ExecutionOutcome;
+  /** 커서 — 이 id보다 **오래된** 기록. 새 기록이 쌓여도 옛 기록에 닿을 수 있게 한다. */
+  before?: Id;
+}
+
+/**
+ * 전체 실행 감사 (STEWARD/ADMIN). **저장 쿼리와 분리된 경로**다 —
+ * 쿼리별 이력만 쓰면 삭제된 쿼리와 미리보기 기록이 어떤 API로도 안 보인다.
+ *
+ * `total`은 본문이 아니라 **응답 헤더**에 온다. 그래서 `request` 헬퍼를 쓰지 못한다 —
+ * 본문만 반환하는 경로로 가져오면 전체 건수를 잃고, 화면은 "200건이 전부"로 읽는다.
+ */
+export async function listExecutionAudit(
+  filter: AuditFilter = {},
+): Promise<{ events: ExecutionEvent[]; total: number | null }> {
+  const params = new URLSearchParams();
+  if (filter.actor) params.set("actor", filter.actor);
+  if (filter.outcome) params.set("outcome", filter.outcome);
+  if (filter.before != null) params.set("before", String(filter.before));
+  const qs = params.toString();
+  const res = await rawRequest(`/executions${qs ? `?${qs}` : ""}`);
+  const body = await readBody(res);
+  if (res.status === 401) return handleUnauthorized<{ events: ExecutionEvent[]; total: number | null }>();
+  if (!res.ok) throw new ApiError(res.status, body);
+  const raw = res.headers.get("X-QG-Audit-Total");
+  const total = raw == null || raw === "" ? null : Number(raw);
+  return {
+    events: z.array(executionEventSchema).parse(body),
+    total: total != null && Number.isFinite(total) ? total : null,
+  };
 }
 
 // ---------- 승인 요청 (spec 005 §7) ----------

@@ -86,6 +86,21 @@ data class QuerySummaryDto(
     val dialect: String,
     val purposeCode: String?,
     val requestId: Long,
+    /**
+     * 이 쿼리의 **소유자**(= 근거 승인 요청의 요청자). 별도 컬럼이 아니라 요청을 타고 얻는다 —
+     * 두 값이 어긋날 여지를 만들지 않기 위해서다(`QueryService.ownerOf`).
+     *
+     * 화면이 이것을 필요로 하는 이유: 실행은 **요청자 본인만** 가능한데(결정 14 — 대행 실행 불허),
+     * 소유자를 모르면 스튜어드 화면에서 남의 쿼리에도 실행 버튼이 활성으로 보인다. 눌러 보면 403이고
+     * 사용자는 자기가 뭘 잘못했는지 모른다 — 서버가 막을 것은 화면이 미리 말해야 한다(spec 013 F3).
+     *
+     * 새 노출이 아니다: 목록은 이미 열람 스코프로 걸러져 있고(본인 것만 / 스튜어드는 전건),
+     * 스튜어드가 누구의 쿼리인지 아는 것은 검토 업무 그 자체다.
+     *
+     * null이면 근거 요청이 사라진 것이다(dangling). 그때는 **아무도 소유자가 아니므로** 실행할 수 없다.
+     */
+    val owner: String?,
+
     val reviewStatus: ReviewStatus,
     val reviewer: String?,
     val createdAt: Instant,
@@ -99,6 +114,8 @@ data class QueryDto(
     val sql: String,
     val purposeCode: String?,
     val requestId: Long,
+    /** 소유자 — [QuerySummaryDto.owner]와 같은 정의. */
+    val owner: String?,
     val reviewStatus: ReviewStatus,
     val reviewer: String?,
     val reviewedAt: Instant?,

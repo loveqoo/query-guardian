@@ -148,8 +148,8 @@ class QueryService(
         repository.findAll()
             .filter { viewer.seesEveryone || ownerOf(it) == viewer.actor }
             .map {
-                QuerySummaryDto(it.id!!, it.name, it.dialect, it.purposeCode, it.requestId, it.reviewStatus,
-                    it.reviewer, it.createdAt, it.updatedAt)
+                QuerySummaryDto(it.id!!, it.name, it.dialect, it.purposeCode, it.requestId, ownerOf(it),
+                    it.reviewStatus, it.reviewer, it.createdAt, it.updatedAt)
             }
 
     fun get(id: Long, viewer: Viewer): QueryDto = toDto(visible(id, viewer))
@@ -280,7 +280,7 @@ class QueryService(
 
     private fun toDto(saved: SavedQuery): QueryDto = QueryDto(
         id = saved.id!!, name = saved.name, dialect = saved.dialect, sql = saved.sqlText,
-        purposeCode = saved.purposeCode, requestId = saved.requestId,
+        purposeCode = saved.purposeCode, requestId = saved.requestId, owner = ownerOf(saved),
         reviewStatus = saved.reviewStatus, reviewer = saved.reviewer, reviewedAt = saved.reviewedAt,
         reviewNote = saved.reviewNote,
         lintReport = objectMapper.readValue(saved.lintReportJson),

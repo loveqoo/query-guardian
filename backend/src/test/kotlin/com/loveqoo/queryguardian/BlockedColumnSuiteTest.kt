@@ -86,10 +86,11 @@ class BlockedColumnSuiteTest {
             tables = setOf("hive_events"),
         )
         val service = LintService(Fixtures.parser, RuleEngine.withDefaultRules(), catalog)
-        val partial = service.lint("SELECT id FROM hive_events WHERE event_date = '2026-01-01' LIMIT 10")
+        val partial = service.lint("SELECT id FROM hive_events WHERE event_date = '2026-01-01' LIMIT 10", purposeCode = null)
         assertTrue(partial.blocked, "파티션 키 한 축만으로 통과함: $partial")
         val full = service.lint(
-            "SELECT id FROM hive_events WHERE event_date = '2026-01-01' AND region = 'KR' LIMIT 10"
+            "SELECT id FROM hive_events WHERE event_date = '2026-01-01' AND region = 'KR' LIMIT 10",
+            purposeCode = null,
         )
         assertFalse(full.blocked, "두 축 모두 충족했는데 차단됨: $full")
     }

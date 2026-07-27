@@ -104,7 +104,7 @@ class GateSteps(
         val inspected = parser.inspect(request.sql)
         if (inspected !is InspectResult.Parsed) {
             return stopped(
-                GateStop.Violated(AuditCode.PARSE_FAILED, LintReportDto.from(lintService.judge(inspected))),
+                GateStop.Violated(AuditCode.PARSE_FAILED, LintReportDto.from(lintService.judge(inspected, request.purposeCode))),
             )
         }
         return cleared(ParsedEvidence(request, inspected, approvalGate.physicalTables(inspected.ir)))

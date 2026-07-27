@@ -76,9 +76,77 @@ class CatalogService(
 
     fun createDef(request: SaveDefRequest): DefDto = toDto(defs.save(validatedDef(null, request)))
 
+    /**
+     * **수정도 등록과 같은 검사를 지난다** (spec 014 L5).
+     *
+     * 예전에는 [validatedDef]만 돌고 **기존 매핑을 다시 보지 않았다.** 구멍이 둘이었다:
+     *
+     * - 강제식을 판정 미지원 형태로 바꾸면 → 그 정의를 쓰는 **모든 매핑이 판정 불가**가 되고,
+     *   해당 테이블을 조회하는 쿼리가 전부 "검증할 수 없습니다"로 막힌다(fail-closed DoS).
+     *   등록자는 자기가 방금 한 일과 연결짓지 못한다.
+     * - **kind를 요건(INTEGRITY·FILTER)에서 MASK로 바꾸면 요건이 조용히 사라진다**(fail-open).
+     *   이쪽이 더 나쁘다 — 아무 오류도 안 나고 그냥 안 막게 된다.
+     *
+     * kind·클래스 변경은 **매핑이 있으면 거부한다.** [deleteDef]가 이미 같은 규칙을 쓴다
+     * (매핑이 있으면 못 지운다). 요건을 없애려면 매핑을 먼저 풀게 해서 **그 행위가 보이게** 만든다.
+     */
     fun updateDef(id: Long, request: SaveDefRequest): DefDto {
-        if (!defs.existsById(id)) throw NotFoundException("제약 정의 $id 없음")
-        return toDto(defs.save(validatedDef(id, request)))
+        val existing = defs.findById(id).orElseThrow { NotFoundException("제약 정의 $id 없음") }
+        val updated = validatedDef(id, request)
+        val mapped = mappings.findByDefId(id)
+
+        if (mapped.isNotEmpty()) {
+            require(updated.kind == existing.kind) {
+                "매핑이 ${mapped.size}건 있는 정의의 강제 방식(kind)은 바꿀 수 없습니다 " +
+                    "(${existing.kind} → ${updated.kind}). 먼저 매핑을 해제하세요."
+            }
+            require(updated.cls == existing.cls) {
+                "매핑이 ${mapped.size}건 있는 정의의 컬럼 클래스는 바꿀 수 없습니다 " +
+                    "(${existing.cls} → ${updated.cls}). 먼저 매핑을 해제하세요."
+            }
+            // 강제식이 바뀌었을 수 있다 — 기존 매핑을 **전수** 다시 검증한다.
+            val columnsById = tables.findAll().flatMap { it.columns }.associateBy { it.id }
+            mapped.forEach { m ->
+                val col = columnsById[m.columnId]
+                    ?: throw ConflictException("매핑 ${m.id}이 없는 컬럼 ${m.columnId}을 가리킵니다")
+                val params = Expressions.parseParams(objectMapper, m.paramsJson)
+                    ?: throw ConflictException("매핑 ${m.id}의 params_json이 깨졌습니다")
+                requireJudgeable(updated, col.name, params)
+            }
+        }
+        return toDto(defs.save(updated))
+    }
+
+    /**
+     * **C2 — 판정 미지원 형태의 요건 술어를 거부한다.** 생성(매핑)과 수정(정의) **양쪽**이 부른다.
+     *
+     * 예전에는 이 검사가 `createMapping` 안에만 있었다. 그래서 "등록 시 막은 것"을
+     * **수정으로 우회**할 수 있었다 — 검사가 한 경로에만 있으면 다른 경로가 그 검사를 무효로 만든다.
+     *
+     * 조건이 `kind == FILTER`가 아니라 [isRequiredPredicate]인 이유: 판정이 요구하는 종류가
+     * 늘면 이 가드도 같이 늘어야 한다. 안 늘리면 등록은 조용히 성공하고 **그 테이블을 조회하는
+     * 모든 쿼리가** 나중에 "검증할 수 없습니다"로 차단된다 — 등록자는 원인을 알 길이 없다.
+     *
+     * **세 실패를 갈라 말한다.** 예전에는 단정 하나가 치환 실패·파싱 실패·판정 미지원을 전부 덮고
+     * **마지막 하나의 이름만** 댔다. 그래서 파싱이 안 된 강제식을 매핑하면 "판정 미지원 형태"라는
+     * 답이 돌아왔고, 등록자는 엉뚱한 곳을 고치러 갔다.
+     */
+    private fun requireJudgeable(def: ConstraintDef, columnName: String, params: Map<String, String>) {
+        if (!def.kind.isRequiredPredicate) return
+        // 요건 술어는 강제식이 필수다(validatedDef가 등록 시 강제) — 없으면 저장된 정의가 깨진 것이다.
+        val forced = requireNotNull(def.expression) { "${def.kind} 제약에 강제식이 없습니다 (정의 ${def.id})" }
+        val substituted = Expressions.substitute(forced, columnName, params)
+            ?: throw IllegalArgumentException("강제식 파라미터 치환에 실패했습니다: $forced")
+        val predicate = when (val parsed = parser.parsePredicate(substituted)) {
+            is PredicateParse.Unparsed -> throw IllegalArgumentException(
+                "강제식을 파싱할 수 없습니다: $substituted — ${parsed.reason}",
+            )
+            is PredicateParse.Parsed -> parsed.predicate
+        }
+        requireNotNull(requiredForm(predicate)) {
+            "판정 미지원 형태의 ${def.kind}는 아직 매핑할 수 없습니다 " +
+                "(컬럼 = 리터럴 / IN 단일값만 지원, spec 003에서 확장)"
+        }
     }
 
     fun deleteDef(id: Long) {
@@ -183,22 +251,7 @@ class CatalogService(
         // 조건이 `kind == FILTER`가 아니라 [isRequiredPredicate]인 이유: 판정이 요구하는 종류가
         // 늘면 이 가드도 같이 늘어야 한다. 안 늘리면 등록은 조용히 성공하고 **그 테이블을 조회하는
         // 모든 쿼리가** 나중에 "검증할 수 없습니다"로 차단된다 — 등록자는 원인을 알 길이 없다.
-        if (def.kind.isRequiredPredicate) {
-            // 요건 술어는 강제식이 필수다(validatedDef가 등록 시 강제) — 없으면 저장된 정의가 깨진 것이다.
-            val forced = requireNotNull(expression) { "${def.kind} 제약에 강제식이 없습니다 (정의 ${def.id})" }
-            val substituted = Expressions.substitute(forced, column.name, params)
-                ?: throw IllegalArgumentException("강제식 파라미터 치환에 실패했습니다: $forced")
-            val predicate = when (val parsed = parser.parsePredicate(substituted)) {
-                is PredicateParse.Unparsed -> throw IllegalArgumentException(
-                    "강제식을 파싱할 수 없습니다: $substituted — ${parsed.reason}",
-                )
-                is PredicateParse.Parsed -> parsed.predicate
-            }
-            requireNotNull(requiredForm(predicate)) {
-                "판정 미지원 형태의 ${def.kind}는 아직 매핑할 수 없습니다 " +
-                    "(컬럼 = 리터럴 / IN 단일값만 지원, spec 003에서 확장)"
-            }
-        }
+        requireJudgeable(def, column.name, params)
 
         // MySQL UNIQUE는 NULL purpose를 중복으로 안 잡는다 — 애플리케이션 레벨에서 먼저 검사 (H5)
         val duplicate = mappings.findByColumnId(request.columnId)

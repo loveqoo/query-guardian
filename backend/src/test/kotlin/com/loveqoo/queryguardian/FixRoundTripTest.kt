@@ -68,7 +68,7 @@ class FixRoundTripTest {
             Fixtures.parser,
             RuleEngine.withDefaultRules(userRuleEvaluator = UserRuleEvaluator { rules.toList() }),
             catalog,
-        ).lint(sql)
+        ).lint(sql, purposeCode = null)
 
     private fun userRule(op: RuleOp, table: String, column: String) = UserRule(
         1, "테스트 규칙", RuleScope.SINGLE, true,

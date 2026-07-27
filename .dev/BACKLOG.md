@@ -11,7 +11,8 @@
 - **D-A. 마스킹 강제식에 항등식 등록 가능.** 등록 검증이 `{col}` 포함·파싱 가능성만 본다
   (`CatalogService.kt:102,108`). `CONCAT({col}, '')`을 등록하면 계획·재작성·`RewriteVerifier` ⑷가 전부
   통과하고 **평문 반환 + 감사엔 "MASK 적용"**. 실시간 통제 0. → 등록 시 프로브 값으로 평가해 출력≠입력 확인.
-- **D-B. `LintService.judge(..., purposeCode: String? = null)` 기본값 null.** 호출부가 purpose를 빠뜨리면
+- ~~**D-B. `LintService.judge(..., purposeCode: String? = null)` 기본값 null.**~~ **해결**(spec 014 L1) — 기본값 제거. 지우자 **호출부 넷이 컴파일 실패**했다(테스트 셋 + 게이트의 파싱 실패 경로). 그 넷이 목적을 조용히 빠뜨리고 있었다는 증거다. 값 타입(`Purpose`)까지는 안 갔다 — 기본값 제거가 구멍의 본체다.
+  원래 서술: 호출부가 purpose를 빠뜨리면
   컴파일 통과 + purpose별 FILTER·BLOCK이 **0건 발화**. `plan()`도 같은 값을 받아 재작성 검증도 못 잡는다.
   → 기본값 제거 + `Purpose` non-null 값 타입.
 - ~~**D-C. spec 008 §5의 게이트 순서가 코드와 다르다.**~~ **해결(P0)** — §5를 코드 기준으로 정정하고
@@ -196,7 +197,13 @@ P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝�
   `AuditCodeCoverageTest`에서 `bodyCode = null`인 시나리오 **9개**가
   "감사에는 남는데 응답에는 코드가 없는" 경로다. 그 `null`이 코드로 바뀌는 것이 A2의 통과 조건.
   재작성 실패 6종의 **403 → 422** 변경도 같은 파일에서 드러난다.
-- **실제 실행 실패 분류 경로가 무검증** (codex 검토 #3). `SQLTimeoutException → TIMEOUT`,
+- ~~**실제 실행 실패 분류 경로가 무검증**~~ **해결**(spec 014 L13) — `ExecutionFailureClassifierTest`가
+  **진짜 JDBC 예외**로 세 갈래를 태운다. 그리고 **결함 하나를 찾았다**: 커넥션 풀은 지연 생성인데
+  초기화 실패가 `SQLException`이 아니라 `HikariPool.PoolInitializationException`(RuntimeException 계열)이라
+  분류 사슬을 통째로 지나쳤다 → 감사에 `CONNECTION`이 안 남고 정체불명 오류가 나갔다. 원인을 벗겨 분류한다.
+  ⚠️ 이 항목이 *"spec 010 P1(A7)로 넘긴다"*고 적혀 있었는데 **A7은 파서 유계로 소진돼 위임처가 사라져 있었다.**
+  두 문서가 서로 "저쪽이 한다"고 적으면 아무도 안 한다. 원래 서술:
+  (codex 검토 #3). `SQLTimeoutException → TIMEOUT`,
   `SQLException → SQL_ERROR`를 실제로 타는 테스트가 없다 — spy가 `ExecutionFailure`를 직접 던진다.
   짝(enum ↔ enum)만 이름 집합으로 고정했다. → spec 010 A7.
 - **감사 코드 6종은 정상 입력으로 도달 불가**(2선 방어). 판정이 재작성과 **같은 기준**을 쓰는 한
@@ -349,7 +356,14 @@ CTE·파생·UNION 팔 안의 위반은 **조각 없이 문장만** 나간다(`S
 `FixRoundTripTest`의 UNION 시나리오가 `noFixExpected`로 이 현행을 고정하고 있으므로,
 조각을 줄 수 있게 되면 그 자리가 빨간불로 알려 준다.
 
-### D-H. `updateDef`가 C2 가드를 지나간다 (LOW→MEDIUM)
+### ~~D-H. `updateDef`가 C2 가드를 지나간다 (LOW→MEDIUM)~~ **해결**(spec 014 L5)
+
+C2를 함수로 뽑아 생성·수정 **양쪽**이 부르게 했다. kind·클래스 변경은 매핑이 있으면 거부한다(`deleteDef`의 대칭 — 요건을 없애려면 매핑을 먼저 풀게 해서 **그 행위가 보이게** 만든다).
+`DefUpdateGuardTest` 5건이 고정: 막는 축 둘(유출·과차단) + **과차단하지 않는 축 둘**.
+되돌려 실패로 정확히 막는 축 둘만 빨간불임을 확인했다 — 전부 거절해도 첫 축은 만족하므로
+**무엇을 통과시켜야 하는지**까지 재야 가드가 가드다.
+
+원래 서술:
 
 C2(판정 불가 형태의 요건 술어 매핑 거부)는 `createMapping`에만 있다. `updateDef`는 파싱·`{col}`만 보고
 `requiredForm`도, **기존 매핑 재검증도** 하지 않는다. 대조: `deleteDef`는 매핑이 있으면 거부한다.

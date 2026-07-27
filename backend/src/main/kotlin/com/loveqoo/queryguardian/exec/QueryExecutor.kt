@@ -3,6 +3,7 @@ package com.loveqoo.queryguardian.exec
 import com.loveqoo.queryguardian.audit.AuditCode
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import com.zaxxer.hikari.pool.HikariPool
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.sql.Connection
@@ -167,6 +168,19 @@ class QueryExecutor(
             pool.connection
         } catch (e: SQLException) {
             throw ExecutionFailure(ExecutionFailure.Kind.CONNECTION, describe(e))
+        } catch (e: HikariPool.PoolInitializationException) {
+            // **풀은 지연 생성이라 첫 실행에서 초기화된다.** 그때 DB가 안 떠 있으면 Hikari는
+            // `SQLException`이 아니라 이 예외를 던진다(`RuntimeException` 계열) — 위 catch를 그냥
+            // 지나쳐 분류되지 않은 채 게이트 밖으로 나갔다. 결과: 사용자는 정체불명 오류를 받고
+            // **감사에는 CONNECTION이 남지 않는다.** 실측으로 걸렸다(spec 014 L13).
+            //
+            // 원인을 벗겨서 담는다 — 껍데기 메시지("Failed to initialize pool")만 남기면
+            // 감사 원문이 SQLState를 잃는다.
+            val cause = generateSequence(e.cause) { it.cause }.filterIsInstance<SQLException>().firstOrNull()
+            throw ExecutionFailure(
+                ExecutionFailure.Kind.CONNECTION,
+                cause?.let { describe(it) } ?: "풀 초기화 실패: ${e.message}",
+            )
         }
         try {
             connection.isReadOnly = true

@@ -39,7 +39,7 @@ class MaskJudgmentTest {
 
     private fun lint(sql: String, vararg rules: UserRule) =
         LintService(parser, RuleEngine.withDefaultRules(userRuleEvaluator = UserRuleEvaluator { rules.toList() }), catalog)
-            .lint(sql)
+            .lint(sql, purposeCode = null)
 
     private fun scope(sql: String) = ((parser.parse(sql)) as ParseResult.Success).ir.root
 

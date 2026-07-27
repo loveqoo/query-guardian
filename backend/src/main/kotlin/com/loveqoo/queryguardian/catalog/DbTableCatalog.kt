@@ -51,10 +51,21 @@ class DbTableCatalog(
     override fun blockedColumns(tableName: String): Set<String> =
         boundFor(tableName).filter { it.def.kind == DefKind.BLOCK }.map { it.column.name.lowercase() }.toSet()
 
+    /**
+     * `FILTER`뿐 아니라 **`INTEGRITY`도** 요구한다 (spec 012 §7-1). 예전에는 FILTER만 걸렀고,
+     * 그 결과 무결성 조건의 유일한 강제 수단이 **실행 시점 술어 주입**이었다 — 걷어낼 예정인 것이.
+     *
+     * purpose 스코프는 **FILTER에만** 적용한다. 등록 검증이 `purposeCode`를 FILTER에만 허용하므로
+     * 다른 종류의 매핑은 그 값이 없어야 하는데, "없을 것"에 판정을 맡기지 않는다 — 어쩌다 값이 있으면
+     * 이 필터가 요건을 **좁혀** 조용히 fail-open이 된다. 좁히지 않는 쪽을 택한다.
+     */
     override fun requiredPredicates(tableName: String, purposeCode: String?): List<RequiredPredicate> =
         boundFor(tableName)
-            .filter { it.def.kind == DefKind.FILTER }
-            .filter { it.mapping.purposeCode == null || it.mapping.purposeCode == purposeCode }
+            .filter { it.def.kind.isRequiredPredicate }
+            .filter {
+                it.def.kind != DefKind.FILTER ||
+                    it.mapping.purposeCode == null || it.mapping.purposeCode == purposeCode
+            }
             .map { bound ->
                 val expression = bound.def.expression ?: return@map unverifiable(bound)
                 val params = Expressions.parseParams(objectMapper, bound.mapping.paramsJson) ?: return@map unverifiable(bound)

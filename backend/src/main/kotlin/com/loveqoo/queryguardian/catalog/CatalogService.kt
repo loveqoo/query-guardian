@@ -174,16 +174,20 @@ class CatalogService(
             require(purposes.findByCode(request.purposeCode) != null) { "등록되지 않은 purpose: ${request.purposeCode}" }
         }
 
-        // C2: 판정 미지원 형태의 FILTER는 매핑 거부 — 매핑하면 spec 003 전까지 해당 테이블 전체가 차단되므로.
+        // C2: 판정 미지원 형태의 **요건 술어**는 매핑 거부 — 매핑하면 해당 테이블 전체가 차단되므로.
         //
         // **세 실패를 갈라 말한다.** 예전에는 단정 하나(`predicate != null && requiredForm(...) != null`)가
         // 치환 실패·파싱 실패·판정 미지원을 전부 덮고 **마지막 하나의 이름만** 댔다. 그래서 파싱이 안 된
         // 강제식을 매핑하면 "판정 미지원 형태"라는 답이 돌아왔고, 등록자는 엉뚱한 곳을 고치러 갔다.
-        if (def.kind == DefKind.FILTER) {
-            // FILTER는 강제식이 필수다(validatedDef가 등록 시 강제) — 없으면 저장된 정의가 깨진 것이다.
-            val filterExpression = requireNotNull(expression) { "FILTER 제약에 강제식이 없습니다 (정의 ${def.id})" }
-            val substituted = Expressions.substitute(filterExpression, column.name, params)
-                ?: throw IllegalArgumentException("강제식 파라미터 치환에 실패했습니다: $filterExpression")
+        //
+        // 조건이 `kind == FILTER`가 아니라 [isRequiredPredicate]인 이유: 판정이 요구하는 종류가
+        // 늘면 이 가드도 같이 늘어야 한다. 안 늘리면 등록은 조용히 성공하고 **그 테이블을 조회하는
+        // 모든 쿼리가** 나중에 "검증할 수 없습니다"로 차단된다 — 등록자는 원인을 알 길이 없다.
+        if (def.kind.isRequiredPredicate) {
+            // 요건 술어는 강제식이 필수다(validatedDef가 등록 시 강제) — 없으면 저장된 정의가 깨진 것이다.
+            val forced = requireNotNull(expression) { "${def.kind} 제약에 강제식이 없습니다 (정의 ${def.id})" }
+            val substituted = Expressions.substitute(forced, column.name, params)
+                ?: throw IllegalArgumentException("강제식 파라미터 치환에 실패했습니다: $forced")
             val predicate = when (val parsed = parser.parsePredicate(substituted)) {
                 is PredicateParse.Unparsed -> throw IllegalArgumentException(
                     "강제식을 파싱할 수 없습니다: $substituted — ${parsed.reason}",
@@ -191,7 +195,8 @@ class CatalogService(
                 is PredicateParse.Parsed -> parsed.predicate
             }
             requireNotNull(requiredForm(predicate)) {
-                "판정 미지원 형태의 FILTER는 아직 매핑할 수 없습니다 (컬럼 = 리터럴 / IN 단일값만 지원, spec 003에서 확장)"
+                "판정 미지원 형태의 ${def.kind}는 아직 매핑할 수 없습니다 " +
+                    "(컬럼 = 리터럴 / IN 단일값만 지원, spec 003에서 확장)"
             }
         }
 

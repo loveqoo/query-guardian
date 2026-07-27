@@ -9,7 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
  * (3) `:param` 값은 스칼라 리터럴로 검증된다. 임의 사용자 문자열은 이 경로로 들어오지 않는다.
  */
 object Expressions {
-    const val COL = "{col}"
+    const val COL = com.loveqoo.queryguardian.ir.COL_PLACEHOLDER
     private val PARAM = Regex(":([A-Za-z_][A-Za-z0-9_]*)")
     private val NUMERIC = Regex("^-?\\d+(\\.\\d+)?$")
 

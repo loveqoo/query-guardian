@@ -81,9 +81,15 @@ class MustBeMaskedRule : Rule {
     override val severity = Severity.BLOCK
 
     override fun check(scope: SelectScope, catalog: TableCatalog, context: LintContext): List<Violation> =
-        maskFindings(scope) { table -> catalog.maskedColumns(table) }.mapNotNull { finding ->
+        maskFindings(
+            scope,
+            { table -> catalog.maskedColumns(table) },
+            { table, instanceKey, column -> catalog.maskForms(table, instanceKey, column) },
+        ).mapNotNull { finding ->
             when (finding.usage) {
                 MaskUsage.ABSENT -> null
+                // 사용자가 등록된 형태 그대로 가려서 썼다 — 통과이고 재작성 대상도 아니다 (spec 012 P0)
+                MaskUsage.ALREADY_MASKED -> null
                 MaskUsage.PROJECTION_ONLY -> Violation(
                     id, Severity.WARN,
                     "컬럼 ${finding.logicalTable}.${finding.column}은(는) 실행 시 자동으로 마스킹됩니다.",

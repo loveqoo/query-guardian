@@ -70,6 +70,8 @@ class ShapeCoverageTest {
         blocked = mapOf("users" to setOf("ssn")),
         masked = mapOf("users" to setOf("email")),
         tables = setOf("user_events", "users"),
+        // spec 012 P0: 사용자가 직접 써도 되는 가려진 형태의 근거
+        maskTemplates = mapOf("users" to mapOf("email" to "mask_email({col})")),
         // requires 판정용 정규형: `users.created_at = '2026-01-01'`
         conditionPredicates = mapOf(901L to RequiredForm("created_at", "2026-01-01")),
     )
@@ -418,6 +420,30 @@ class ShapeCoverageTest {
         Shape("R9", "OR 분배", "사용자 규칙 requires — 분기마다 다른 값",
             "SELECT id FROM users WHERE created_at = '2026-01-01' OR created_at = '2026-02-01' LIMIT 10",
             Verdict.BLOCK, "R6과 같은 이유 — 사용자 규칙에서도 값이 달라지면 안 된다", rule = 2),
+
+        // ── M. 사용자가 직접 가려서 쓰기 (spec 012 P0) ────────────────────────────
+        //
+        // 판정·제안 모델에서는 사용자가 **정답을 쓸 수 있어야** 한다. 예전에는 등록된 형태 그대로 써도
+        // 막혔다 — 서버가 알아서 가리던 때는 무해했지만, "이렇게 고치세요"라고 알려주는 모델에서는
+        // **알려준 답을 막는** 꼴이다. 허용 목록은 새로 만들지 않는다: 등록된 MASK 강제식이 곧 근거다.
+        Shape("M1", "직접 가리기", "등록된 형태 그대로",
+            "SELECT mask_email(email) FROM users LIMIT 10",
+            Verdict.PASS, "등록된 강제식 `mask_email({col})`과 같다 — 정답을 쓸 수 있어야 한다"),
+        Shape("M2", "직접 가리기", "한정자를 붙여서",
+            "SELECT mask_email(u.email) FROM users u LIMIT 10",
+            Verdict.PASS, "한정자를 붙이는 것이 자연스럽다 — 표기 차이로 갈리면 안 된다"),
+        Shape("M3", "직접 가리기", "대소문자 다르게",
+            "SELECT MASK_EMAIL(email) FROM users LIMIT 10",
+            Verdict.PASS, "함수 이름 대소문자는 의미를 바꾸지 않는다"),
+        Shape("M4", "직접 가리기", "⚠ 가리는 척하는 함수",
+            "SELECT CONCAT(email, '') FROM users LIMIT 10",
+            Verdict.BLOCK, "**안전망** — 등록된 형태가 아니다. 평문이 그대로 나간다"),
+        Shape("M5", "직접 가리기", "⚠ 가려서 쓰면서 조건에도 씀",
+            "SELECT mask_email(email) FROM users WHERE email = 'a@b.c' LIMIT 10",
+            Verdict.BLOCK, "**안전망** — 투영은 가렸지만 조건에서 원본으로 걸렀다. 값을 캐낼 수 있다"),
+        Shape("M6", "직접 가리기", "⚠ 다른 컬럼에 그 함수를 씀",
+            "SELECT mask_email(phone) FROM users LIMIT 10",
+            Verdict.PASS, "`phone`은 마스킹 대상이 아니다 — 아무 함수나 써도 무방하다(대조군)"),
 
         // ── I. 귀속 — 한정자가 없을 때 ────────────────────────────────────────────
         Shape("I1", "귀속", "조인 쿼리에서 한정자 없이 차단 컬럼",

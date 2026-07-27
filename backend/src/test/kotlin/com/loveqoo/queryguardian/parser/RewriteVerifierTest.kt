@@ -159,7 +159,8 @@ class RewriteVerifierTest {
             "SELECT email FROM demo_users users LIMIT 1001",
             RewritePlan(limitCap = LimitCap("s0", 1000)), // 마스킹 계획이 없다
             judged,
-        ) { table -> if (table.equals("users", true)) setOf("email") else emptySet() }
+            maskedColumnsOf = { table -> if (table.equals("users", true)) setOf("email") else emptySet() },
+        )
         assertTrue(problems.any { it.contains("계획이 마스킹을 빠뜨렸습니다") }, "$problems")
     }
 
@@ -171,7 +172,8 @@ class RewriteVerifierTest {
             "SELECT CONCAT(email, '') AS e FROM demo_users users LIMIT 1001",
             RewritePlan(limitCap = LimitCap("s0", 1000)),
             judged,
-        ) { table -> if (table.equals("users", true)) setOf("email") else emptySet() }
+            maskedColumnsOf = { table -> if (table.equals("users", true)) setOf("email") else emptySet() },
+        )
         assertTrue(problems.any { it.contains("표현할 수 없는 마스킹 사용") }, "$problems")
     }
 }

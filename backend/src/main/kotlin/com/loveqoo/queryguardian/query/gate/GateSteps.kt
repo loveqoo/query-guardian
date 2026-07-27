@@ -13,6 +13,7 @@ import com.loveqoo.queryguardian.exec.PlanOutcome
 import com.loveqoo.queryguardian.exec.RewriteCatalog
 import com.loveqoo.queryguardian.exec.RewritePlanner
 import com.loveqoo.queryguardian.exec.auditCode
+import com.loveqoo.queryguardian.ir.forcedExpressionForms
 import com.loveqoo.queryguardian.ir.LimitCap
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewriteOutcome
@@ -163,7 +164,17 @@ class GateSteps(
 
     /** 재작성 + 자체 검증(§3.0.3). 검증 기대치는 계획이 아니라 **카탈로그**에서 재도출한다. */
     fun rewriteAndVerify(planned: Planned): GateOutcome<Ready> =
-        when (val outcome = rewriter.rewrite(planned.statement, planned.plan, planned.ir, rewriteCatalog::maskedColumns)) {
+        when (val outcome = rewriter.rewrite(
+            planned.statement, planned.plan, planned.ir, rewriteCatalog::maskedColumns,
+            // 검증기는 계획기와 **같은 허용 형태**를 봐야 한다 — 다르면 계획기는 건너뛴 것을
+            // 검증기가 "표현 불가"로 신고한다 (spec 012 P0)
+            { table, instanceKey, column ->
+                rewriteCatalog.maskExpressions(table)
+                    .filter { it.column.equals(column, ignoreCase = true) }
+                    .flatMap { forcedExpressionForms(it.template ?: return@flatMap emptyList(), instanceKey, it.column) }
+                    .toSet()
+            },
+        )) {
             is RewriteOutcome.Rewritten -> cleared(ReadyEvidence(planned, outcome))
             is RewriteOutcome.Refused -> stopped(GateStop.Unprocessable(outcome.refusal.auditCode, outcome.message))
         }

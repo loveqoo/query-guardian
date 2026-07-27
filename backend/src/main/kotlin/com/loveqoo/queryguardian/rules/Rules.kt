@@ -1,5 +1,7 @@
 package com.loveqoo.queryguardian.rules
 
+import com.loveqoo.queryguardian.ir.forcedExpressionForms
+
 import com.loveqoo.queryguardian.ir.Predicate
 import com.loveqoo.queryguardian.ir.SelectScope
 
@@ -34,11 +36,23 @@ interface TableCatalog {
     /** BLOCK 매핑 컬럼들(소문자) — no-blocked-column 룰이 사용. */
     fun blockedColumns(tableName: String): Set<String>
 
-    /**
-     * MASK 매핑 컬럼들(소문자) — must-be-masked 룰이 사용 (spec 008 §3.1).
-     * 강제식 원문은 판정에 필요 없다(재작성만 필요) — 여기서는 "마스킹 대상인가"만 알면 된다.
-     */
+    /** MASK 매핑 컬럼들(소문자) — must-be-masked 룰이 사용 (spec 008 §3.1). */
     fun maskedColumns(tableName: String): Set<String> = emptySet()
+
+    /**
+     * **사용자가 직접 써도 되는 가려진 형태들** (spec 012 P0).
+     *
+     * 예전에는 강제식 원문이 판정에 필요 없었다 — 서버가 알아서 가렸으니까. 이제는 사용자가 직접
+     * 가려서 쓰고, 우리는 그것이 **등록된 그 형태인지** 확인해야 한다. `mask_email(email)`은 통과하고
+     * `CONCAT(email,'')`은 막혀야 하는데, 둘을 가르는 유일한 근거가 등록된 강제식이다.
+     *
+     * 치환을 여기서 하는 이유: `{col}` 자리표시자를 아는 곳을 한 군데로 유지한다(`ir`에 사본을 두지 않는다).
+     * 한정자 유무는 **여기서 두 형태를 다 넣어** 다룬다 — 비교하는 쪽에서 한정자를 벗기면
+     * `other.email`까지 통과한다.
+     *
+     * 빈 집합 = 무엇도 "이미 가려짐"으로 인정하지 않음(예전 동작).
+     */
+    fun maskForms(tableName: String, instanceKey: String, column: String): Set<String> = emptySet()
 
     /** 카탈로그에 등록된 테이블인가 — unknown-table 경고 룰이 사용. */
     fun exists(tableName: String): Boolean
@@ -59,6 +73,8 @@ class InMemoryTableCatalog(
     private val required: List<Entry> = emptyList(),
     private val blocked: Map<String, Set<String>> = emptyMap(),
     private val masked: Map<String, Set<String>> = emptyMap(),
+    /** (테이블 → 컬럼 → `{col}`을 가진 MASK 강제식) — spec 012 P0의 "사용자가 써도 되는 형태" 근거. */
+    private val maskTemplates: Map<String, Map<String, String>> = emptyMap(),
     tables: Set<String> = emptySet(),
     /** defId → requires 판정용 정규형 (테스트 시드). */
     private val conditionPredicates: Map<Long, RequiredForm> = emptyMap(),
@@ -79,6 +95,12 @@ class InMemoryTableCatalog(
 
     override fun maskedColumns(tableName: String): Set<String> =
         masked[tableName.lowercase()] ?: emptySet()
+
+    override fun maskForms(tableName: String, instanceKey: String, column: String): Set<String> {
+        val template = maskTemplates[tableName.lowercase()]
+            ?.entries?.firstOrNull { it.key.equals(column, ignoreCase = true) }?.value ?: return emptySet()
+        return forcedExpressionForms(template, instanceKey, column)
+    }
 
     override fun blockedColumns(tableName: String): Set<String> =
         blocked.entries.firstOrNull { it.key.equals(tableName, ignoreCase = true) }

@@ -56,6 +56,7 @@ class SqlRewriter(
         plan: RewritePlan,
         judgedIr: QueryIR,
         maskedColumnsOf: (String) -> Set<String>,
+        maskFormsOf: (String, String, String) -> Set<String> = { _, _, _ -> emptySet() },
     ): RewriteOutcome {
         val handle = statement as? DruidMySqlParser.DruidParsedStatement
             ?: return refuse(RewriteRefusal.SCOPE_NOT_FOUND, "이 방언의 재작성 핸들이 아닙니다")
@@ -116,7 +117,7 @@ class SqlRewriter(
         val rewritten = SQLUtils.toSQLString(handle.statement, DbType.mysql)
 
         // §3.0.3 이중 방어: 실제로 실행될 **텍스트**를 다시 읽어 계획대로 됐는지 단정한다.
-        val problems = verifier.verify(rewritten, plan, judgedIr, maskedColumnsOf)
+        val problems = verifier.verify(rewritten, plan, judgedIr, maskedColumnsOf, maskFormsOf)
         if (problems.isNotEmpty()) {
             return refuse(RewriteRefusal.VERIFY_FAILED, "재작성 결과 검증 실패 — ${problems.joinToString("; ")}")
         }

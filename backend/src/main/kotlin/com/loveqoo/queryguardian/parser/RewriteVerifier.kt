@@ -5,6 +5,7 @@ import com.loveqoo.queryguardian.ir.Predicate
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewritePlan
 import com.loveqoo.queryguardian.ir.SelectItem
+import com.loveqoo.queryguardian.ir.forcedExpressionForms
 import com.loveqoo.queryguardian.ir.maskFindings
 import com.loveqoo.queryguardian.ir.SelectScope
 
@@ -31,14 +32,26 @@ class RewriteVerifier(private val parser: DialectParser) {
         plan: RewritePlan,
         judgedIr: QueryIR,
         maskedColumnsOf: (String) -> Set<String>,
+        /** 사용자가 직접 써도 되는 가려진 형태 (spec 012 P0) — 계획과 **독립적으로** 카탈로그에서 얻는다. */
+        maskFormsOf: (String, String, String) -> Set<String> = { _, _, _ -> emptySet() },
     ): List<String> {
         val problems = mutableListOf<String>()
 
         // ⓐ 계획 밖의 근거: 판정 IR에서 마스킹이 필요했던 지점을 재도출해 계획과 대조한다.
         for (scope in allScopes(judgedIr.root)) {
-            for (finding in maskFindings(scope) { table -> maskedColumnsOf(table) }) {
+            for (finding in maskFindings(scope, maskedColumnsOf, maskFormsOf)) {
                 when (finding.usage) {
                     MaskUsage.ABSENT -> Unit
+                    // 사용자가 이미 가린 것을 계획이 **또** 감쌌으면 이중 마스킹이다 (spec 012 P0)
+                    MaskUsage.ALREADY_MASKED -> {
+                        val planned = plan.maskProjections.any {
+                            it.instanceKey == finding.instanceKey && it.column.equals(finding.column, ignoreCase = true)
+                        }
+                        if (planned) {
+                            problems += "이미 가려진 컬럼을 계획이 또 감쌌습니다(이중 마스킹): " +
+                                "${finding.logicalTable}.${finding.column} (인스턴스 ${finding.instanceKey})"
+                        }
+                    }
                     MaskUsage.NOT_EXPRESSIBLE -> problems +=
                         "표현할 수 없는 마스킹 사용이 남아 있는데 재작성이 진행됐습니다: " +
                             "${finding.logicalTable}.${finding.column}"
@@ -130,10 +143,8 @@ class RewriteVerifier(private val parser: DialectParser) {
                 continue
             }
             // 한정·비한정 두 형태 모두 정상이다: `mask_email(u.email)` / `mask_email(email)`
-            val expected = setOf(
-                normalize(mask.expressionTemplate.replace("{col}", "${mask.instanceKey}.${mask.column}")),
-                normalize(mask.expressionTemplate.replace("{col}", mask.column)),
-            )
+            val expected = forcedExpressionForms(mask.expressionTemplate, mask.instanceKey, mask.column)
+                .map(::normalize).toSet()
             val applied = scopes.any { scope ->
                 scope.selectItems.any { item -> item is SelectItem.Expr && normalize(item.text) in expected }
             }

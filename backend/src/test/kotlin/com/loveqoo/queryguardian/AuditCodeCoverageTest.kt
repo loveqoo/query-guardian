@@ -411,7 +411,7 @@ class AuditCodeCoverageTest {
 
     private fun forceRewriteRefusal(refusal: RewriteRefusal) {
         doAnswer { RewriteOutcome.Refused(refusal, "주입된 거부($refusal)") }
-            .`when`(rewriter).rewrite(any(), any(), any(), any())
+            .`when`(rewriter).rewrite(any(), any(), any(), any(), any())
     }
 
     private fun forcePlanRefusal(refusal: RewriteRefusal) {

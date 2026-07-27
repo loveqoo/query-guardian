@@ -97,6 +97,8 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
             RuleOp.MUST_BE_MASKED -> when (maskUsage(cond, scope)) {
                 MaskUsage.ABSENT -> return Result.Neutral
                 MaskUsage.PROJECTION_ONLY -> true
+                // 사용자가 이미 등록된 형태로 가렸다 (spec 012 P0)
+                MaskUsage.ALREADY_MASKED -> true
                 MaskUsage.NOT_EXPRESSIBLE -> false
             }
             else -> return Result.Neutral

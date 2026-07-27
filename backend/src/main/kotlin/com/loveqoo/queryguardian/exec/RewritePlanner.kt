@@ -1,9 +1,9 @@
 package com.loveqoo.queryguardian.exec
 
-import com.loveqoo.queryguardian.catalog.Expressions
 import com.loveqoo.queryguardian.audit.AuditCode
 import com.loveqoo.queryguardian.ir.LimitCap
 import com.loveqoo.queryguardian.ir.MaskUsage
+import com.loveqoo.queryguardian.ir.forcedExpressionForms
 import com.loveqoo.queryguardian.ir.maskFindings
 import com.loveqoo.queryguardian.ir.MaskProjection
 import com.loveqoo.queryguardian.ir.PredicateInjection
@@ -101,8 +101,19 @@ class RewritePlanner(
     private fun planMasks(scope: SelectScope, into: MutableList<MaskProjection>): PlanOutcome.Refused? {
         // 판정(rules의 must-be-masked)과 **같은 순회 축·같은 기준**을 쓴다 — 갈라지면
         // "저장은 통과, 실행은 마스킹 없이"가 생긴다.
-        val findings = maskFindings(scope, catalog::maskedColumns)
+        val findings = maskFindings(
+            scope,
+            catalog::maskedColumns,
+            // 사용자가 등록된 형태로 이미 가렸으면 계획 대상이 아니다 — 또 감싸면 이중 마스킹이다 (spec 012 P0)
+            { table, instanceKey, column ->
+                catalog.maskExpressions(table)
+                    .filter { it.column.equals(column, ignoreCase = true) }
+                    .flatMap { forcedExpressionForms(it.template ?: return@flatMap emptyList(), instanceKey, it.column) }
+                    .toSet()
+            },
+        )
         for (finding in findings) {
+            if (finding.usage == MaskUsage.ALREADY_MASKED) continue // 사용자가 이미 가렸다
             if (finding.usage == MaskUsage.NOT_EXPRESSIBLE) {
                 return PlanOutcome.Refused(
                     RewriteRefusal.MASK_NOT_EXPRESSIBLE,

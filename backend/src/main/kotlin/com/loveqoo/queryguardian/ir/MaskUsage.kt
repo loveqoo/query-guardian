@@ -8,6 +8,25 @@ enum class MaskUsage {
     /** 최상위 bare 투영으로만 쓰였다 — 강제식 치환으로 표현할 수 있다. */
     PROJECTION_ONLY,
 
+    /**
+     * **사용자가 등록된 강제식 그대로 이미 가려서 썼다** (spec 012 P0).
+     *
+     * `SELECT mask_email(email)`처럼. 예전에는 이것이 [NOT_EXPRESSIBLE]로 떨어져 **막혔다** —
+     * 서버가 알아서 가리던 때는 무해했지만, "이렇게 고치세요"라고 알려주는 모델에서는
+     * **알려준 답을 막는** 꼴이라 치명적이다.
+     *
+     * 판정은 통과이고 재작성 대상도 아니다(또 감싸면 이중 마스킹).
+     *
+     * **[ABSENT]와 오늘의 결과가 같다**(둘 다 위반 아님) — 실측으로 확인했다. 그래도 나눠 두는 이유는
+     * 둘이 **다른 사실**이기 때문이다: `ABSENT`는 "이 스코프가 그 컬럼을 안 썼다", 여기는 "썼는데 제대로
+     * 가렸다". 사용자 규칙에서 전자는 중립(조건 무관)이고 후자는 충족이며, `RewriteVerifier`의
+     * 이중 마스킹 검사도 이 구분 없이는 쓸 수 없다.
+     *
+     * 다만 그 이중 마스킹 검사는 **아직 발화한 적이 없다** — 계획기가 이 값을 건너뛰므로 도달하려면
+     * 계획기 버그가 필요하다. 근거는 논증이지 측정이 아니다.
+     */
+    ALREADY_MASKED,
+
     /** 함수 인자·CASE·WHERE·GROUP BY·ORDER BY·`*` 투영 등 — 치환으로 표현할 수 없다. */
     NOT_EXPRESSIBLE,
 }
@@ -44,7 +63,18 @@ data class MaskFinding(
  *
  * [maskedColumnsOf]는 논리 테이블명 → MASK 매핑 컬럼(소문자) 집합.
  */
-fun maskFindings(scope: SelectScope, maskedColumnsOf: (String) -> Set<String>): List<MaskFinding> {
+fun maskFindings(
+    scope: SelectScope,
+    maskedColumnsOf: (String) -> Set<String>,
+    /**
+     * (논리 테이블, 인스턴스 키, 컬럼) → **사용자가 직접 써도 되는 가려진 형태들** (spec 012 P0).
+     *
+     * 치환은 **카탈로그 층에서** 한다 — `{col}` 자리표시자 토큰을 `ir`에도 두면 사본이 둘이 되고,
+     * 한쪽이 바뀌면 조용히 갈라진다(learning 011). 여기서는 **비교만** 한다.
+     * 기본값이 빈 집합이면 예전 동작과 같다(무엇도 "이미 가려짐"으로 인정하지 않음).
+     */
+    expectedMaskForms: (String, String, String) -> Set<String> = { _, _, _ -> emptySet() },
+): List<MaskFinding> {
     val findings = mutableListOf<MaskFinding>()
 
     // 이 스코프가 **실제로 참조하는** 물리 인스턴스 — 부모 체인에서 해석된 것(상관 참조)까지 포함한다.
@@ -54,7 +84,8 @@ fun maskFindings(scope: SelectScope, maskedColumnsOf: (String) -> Set<String>): 
 
     for (instance in instances) {
         for (column in maskedColumnsOf(instance.name)) {
-            val usage = maskUsageOf(scope, instance.instanceKey, column)
+            val usage = maskUsageOf(scope, instance.instanceKey, column,
+                expectedMaskForms(instance.name, instance.instanceKey, column))
             if (usage != MaskUsage.ABSENT) {
                 findings += MaskFinding(instance.instanceKey, instance.name, column, usage)
             }
@@ -73,7 +104,12 @@ fun maskFindings(scope: SelectScope, maskedColumnsOf: (String) -> Set<String>): 
     return findings
 }
 
-fun maskUsageOf(scope: SelectScope, instanceKey: String, column: String): MaskUsage {
+fun maskUsageOf(
+    scope: SelectScope,
+    instanceKey: String,
+    column: String,
+    expectedMaskForms: Set<String> = emptySet(),
+): MaskUsage {
     // `*`는 무엇이 나갈지 IR이 알 수 없다. 단, `o.*`처럼 한정된 star는 그 인스턴스만 덮는다.
     val starCovers = scope.selectItems.any { item ->
         item is SelectItem.Star && (item.qualifier == null || item.qualifier.equals(instanceKey, ignoreCase = true))
@@ -85,11 +121,19 @@ fun maskUsageOf(scope: SelectScope, instanceKey: String, column: String): MaskUs
             item.column.table == instanceKey &&
             item.column.column.equals(column, ignoreCase = true)
     }
+    // 사용자가 **등록된 형태 그대로** 가려서 쓴 투영. 이것도 컬럼 참조를 1건 기여하므로
+    // 아래 초과분 계산에 포함해야 한다 — 빼먹으면 정답을 쓴 쿼리가 "투영 아닌 위치에도 썼다"로 잘못 걸린다.
+    val alreadyMasked = if (expectedMaskForms.isEmpty()) 0 else scope.selectItems.count { item ->
+        item is SelectItem.Expr && normalizeExpr(item.text) in expectedMaskForms.map(::normalizeExpr)
+    }
+
     val references = scope.columnRefs.count { ref ->
         ref.table?.instanceKey == instanceKey && ref.column.equals(column, ignoreCase = true)
     }
-    if (references > projected.size) return MaskUsage.NOT_EXPRESSIBLE
-    if (projected.isEmpty()) return MaskUsage.ABSENT
+    if (references > projected.size + alreadyMasked) return MaskUsage.NOT_EXPRESSIBLE
+    if (projected.isEmpty()) {
+        return if (alreadyMasked > 0) MaskUsage.ALREADY_MASKED else MaskUsage.ABSENT
+    }
 
     // 마스킹은 many-to-one이다(실측: 서로 다른 두 이메일이 같은 `j***@naver.com`이 된다).
     // 따라서 치환 후 중복 제거하면 원본보다 행이 줄어든다 — 조용한 결과 변경보다 거부가 안전하다.
@@ -105,3 +149,13 @@ fun maskUsageOf(scope: SelectScope, instanceKey: String, column: String): MaskUs
 
     return MaskUsage.PROJECTION_ONLY
 }
+
+/**
+ * 표현식 비교용 정규화 — 대소문자·공백·백틱을 무시한다.
+ *
+ * IR의 [SelectItem.Expr.text]는 Druid AST의 렌더링이라 이미 공백이 정돈돼 있지만, 등록된 강제식은
+ * 사람이 손으로 적은 문자열이다. 한정자(`u.email`) 차이는 **비교 대상 집합에 두 형태를 다 넣는 것**으로
+ * 다룬다(치환하는 쪽의 책임) — 여기서 한정자를 벗기면 `other.email`도 통과해 버린다.
+ */
+private fun normalizeExpr(s: String): String =
+    s.lowercase().replace("`", "").filterNot { it.isWhitespace() }

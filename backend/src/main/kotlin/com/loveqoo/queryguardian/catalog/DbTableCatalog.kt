@@ -2,6 +2,7 @@ package com.loveqoo.queryguardian.catalog
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.loveqoo.queryguardian.ir.Predicate
+import com.loveqoo.queryguardian.ir.forcedExpressionForms
 import com.loveqoo.queryguardian.parser.DialectParser
 import com.loveqoo.queryguardian.parser.PredicateParse
 import com.loveqoo.queryguardian.rules.RequiredForm
@@ -28,6 +29,21 @@ class DbTableCatalog(
 
     override fun partitionKeys(tableName: String): List<String> =
         boundFor(tableName).filter { it.def.kind == DefKind.PARTITION }.map { it.column.name }
+
+    /**
+     * 사용자가 직접 써도 되는 가려진 형태 (spec 012 P0) — 등록된 MASK 강제식이 근거다.
+     * 목록을 따로 만들지 않는다: 스튜어드가 이미 등록한 그 값이 곧 허용 목록이다.
+     */
+    override fun maskForms(tableName: String, instanceKey: String, column: String): Set<String> =
+        boundFor(tableName)
+            .filter { it.def.kind == DefKind.MASK && it.column.name.equals(column, ignoreCase = true) }
+            .flatMap { bound ->
+                val template = bound.def.expression ?: return@flatMap emptyList()
+                val params = Expressions.parseParams(objectMapper, bound.mapping.paramsJson) ?: return@flatMap emptyList()
+                val withParams = Expressions.substituteParams(template, params) ?: return@flatMap emptyList()
+                forcedExpressionForms(withParams, instanceKey, bound.column.name)
+            }
+            .toSet()
 
     override fun maskedColumns(tableName: String): Set<String> =
         boundFor(tableName).filter { it.def.kind == DefKind.MASK }.map { it.column.name.lowercase() }.toSet()

@@ -36,6 +36,9 @@ object Fixtures {
         blocked = mapOf("users" to setOf("ssn")),
         // spec 008: users.email은 MASK 매핑 (실행 시 자동 마스킹, 표현 불가 위치는 BLOCK)
         masked = mapOf("users" to setOf("email")),
+        // 실제 카탈로그에 등록된 강제식과 같은 값 — 사용자가 직접 `mask_email(email)`로 써도
+        // 정답으로 인정되려면 픽스처도 그 근거를 갖고 있어야 한다 (spec 012 P0).
+        maskTemplates = mapOf("users" to mapOf("email" to "mask_email({col})")),
         tables = setOf("user_events", "users"),
     )
 

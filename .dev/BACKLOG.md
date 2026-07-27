@@ -1,7 +1,10 @@
-# 백로그 (작업 중단 시점: spec 008 M2 완료, 커밋 14bf0c3)
+# 백로그
 
-사용자 코드 리뷰를 위해 작업을 멈춘 시점의 대기 목록. 재개하면 **위에서부터** 6단계 루프로 처리한다.
-(리뷰 결과로 나온 항목은 이 파일 맨 위 "리뷰 후속"에 쌓는다 — 기존 순서보다 앞선다.)
+> **순서는 `docs/spec/014-phases.md`가 정한다.** 이 파일은 **왜 아직인가·어떻게 착수하는가**를 보유하고,
+> 014는 **끝나면 무엇을 쓸 수 있게 되는가**를 보유한다. 둘을 중복해 적으면 갈라진다.
+> 항목이 해결되면 **그 자리에서** 지우거나 취소선을 긋는다 — 이 파일은 옮겨 쓰이는 원본이다.
+
+(원 메모: 사용자 코드 리뷰를 위해 작업을 멈춘 시점의 대기 목록 — spec 008 M2 완료, 커밋 `14bf0c3`.)
 
 ## 즉시 — 적대 검토가 찾은 **현행 코드 결함** (설계 대기와 무관, spec 010 §9)
 
@@ -97,8 +100,12 @@ craft 검토가 "발급 권한 폐쇄를 **방해**한다"고 지목한 순서�
 - **방언이 늘면 문법 전수 대조를 다시 해야 한다**(PostgreSQL·Trino). 이번 수정(블록 전수 훑기)이
   비용을 줄였을 뿐 없애지 못한다. 멀티 벤더 착수 시 선행 작업으로 잡을 것.
 - **`SINGLE`/`MULTI`·`server`가 평가에 쓰이지 않는다** — `applies()`는 대상 테이블 참조만 본다.
-  화면은 "적용 범위"로 제시하는데 실제로는 범위가 아니다. 지금은 안전한 방향(넓게 적용)이나
+  화면은 "적용 범위"로 제시하는데 실제로는 범위가 아니다. `SINGLE`/`MULTI`는 안전한 방향(넓게 적용)이나
   멀티 벤더에서는 A 서버 규칙이 B 서버 쿼리를 판정하게 된다.
+  > ⚠️ **정정(2026-07-28)**: `GLOBAL`은 **정반대**다 — `UserRuleEvaluator`가 `scope != GLOBAL`로 걸러
+  > **평가에서 통째로 제외**한다. 넓게가 아니라 **0회**다(→ `D-M`). 이 줄의 "안전한 방향"이 낡은 채
+  > 남아 `docs/OVERVIEW.md` 초안에 **정반대 서술**로 옮겨졌다.
+  > 그리고 화면은 `server`를 **존재하지 않는 mock 서버 목록**에서 고르게 한다 — 고른 값은 평가에 안 쓰인다.
 
 ## 요청서가 규칙을 고른다 (2026-07-27 사용자 논의 — 별도 스펙 대기)
 
@@ -185,7 +192,8 @@ P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝�
 
 ## spec 010 P0가 남긴 것 (P1 착수 시 함께 본다)
 
-- **A2의 판정 기준은 이미 파일에 있다** — `AuditCodeCoverageTest`에서 `bodyCode = null`인 시나리오 **9개**가
+- ~~**A2의 판정 기준은 이미 파일에 있다**~~ **해결** — `AuditCodeCoverageTest`에 `bodyCode = null` 0건 —
+  `AuditCodeCoverageTest`에서 `bodyCode = null`인 시나리오 **9개**가
   "감사에는 남는데 응답에는 코드가 없는" 경로다. 그 `null`이 코드로 바뀌는 것이 A2의 통과 조건.
   재작성 실패 6종의 **403 → 422** 변경도 같은 파일에서 드러난다.
 - **실제 실행 실패 분류 경로가 무검증** (codex 검토 #3). `SQLTimeoutException → TIMEOUT`,
@@ -193,7 +201,8 @@ P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝�
   짝(enum ↔ enum)만 이름 집합으로 고정했다. → spec 010 A7.
 - **감사 코드 6종은 정상 입력으로 도달 불가**(2선 방어). 판정이 재작성과 **같은 기준**을 쓰는 한
   `REWRITE_MASK_NOT_EXPRESSIBLE`은 발화하지 않는다. 두 층이 갈라지는 순간에만 나온다.
-- **`.claude/agents/`가 없다** — CLAUDE.md가 위임 대상으로 적은 `deep-reasoner`·`fast-worker`가 미정의.
+- ~~**`.claude/agents/`가 없다**~~ **해결** — `.claude/agents/`에 `deep-reasoner`·`craft-reviewer`·
+  `fast-worker` 3종 정의됨 (커밋 `9e8fcd1`) — CLAUDE.md가 위임 대상으로 적은 `deep-reasoner`·`fast-worker`가 미정의.
   다음 Scaffolding에서 정의하거나 CLAUDE.md를 현실에 맞춘다.
 
 ## 개요 문서(`docs/OVERVIEW.md`) 사실 검증이 찾은 것 (2026-07-28)
@@ -206,6 +215,10 @@ P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝�
   `UserRuleEvaluator`가 BLOCK 위반 발화). **화면이 틀린 말을 한다** — 담당자가 "어차피 안 걸린다"고
   믿고 등록하면 실제로는 사용자 쿼리가 막힌다. `docker/seed.sh`의 "미강제(판정 미구현) 데모" 주석도 낡았다.
   → 프론트 상수를 백엔드 `judged` 정의와 한 출처로 묶는다(와이어 대조 도구에 어휘 쌍 추가).
+- **D-N. `/api/preview-rewrite`에 소비자가 없다.** 프론트 전수 grep 0건(`src/api/`는 넷뿐)인데
+  그 KDoc은 *"무엇이 자동 적용되는지를 보여준다"*고 적혀 있다 — **spec 012 모델과 어긋난다**(서버는
+  자동 적용하지 않는다). 소비자 없는 카탈로그 오라클 창구다. → 지울지, 고쳐 쓸지, 게이트를 걸지 판단.
+  (`docs/spec/014-phases.md` O7 "근거 잃은 주석"과 같은 갈래.)
 - **D-M. 전역(GLOBAL) 스코프 규칙은 평가에서 통째로 제외된다** — `UserRuleEvaluator`가
   `it.scope != RuleScope.GLOBAL`로 거른다. 백로그의 기존 항목("`SINGLE`/`MULTI`가 평가에 안 쓰임,
   지금은 안전한 방향")이 **전역에는 정반대로 적용**된다 — 넓게가 아니라 **0회**다.
@@ -220,18 +233,21 @@ P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝�
 
 사용자 코드 리뷰 1회차(2026-07-25) — `QueryExecutionService.execute` 표본. 3건 전부 인정.
 
-- **R1. enum이 타입이 아니라 문자열 상수로 쓰인다.**
+- ~~**R1. enum이 타입이 아니라 문자열 상수로 쓰인다.**~~ **해결** — `RuleTree.kt`가 `@JsonValue`로
+  상수명과 와이어 표현을 분리, `SavedQuery.reviewStatus`가 enum (spec 010 P3)
   - 소문자 enum 2개: `rules/RuleTree.kt:15` `RuleOp`, `:30` `Combinator` — 와이어 포맷(JSON)에 맞추려고
     상수 이름을 소문자로 썼다. `@JsonProperty`/`@JsonValue`로 분리해야 한다.
   - 더 깊은 층: 영속 경계에서 enum 규약이 엔티티마다 다르다 —
     `ApprovalRequest.status: RequestStatus`(enum) vs `SavedQuery.reviewStatus: String` vs
     `ExecutionEvent.outcome: String`. 그래서 `ReviewStatus.APPROVED.name` 비교,
     `it.severity.name == "BLOCK"` 문자열 비교(`QueryExecutionService.kt:278`, `QueryService.kt:113`)가 생겼다.
-- **R2. 객체지향 기법이 레이어 분리(DI)에서 멈춘다.** `execute`(118줄)와 `previewRewrite`(65줄)가
+- ~~**R2. 객체지향 기법이 레이어 분리(DI)에서 멈춘다.**~~ **해결** — `QueryExecutionService.runGate`로
+  사본 통합 (spec 010 P1). `execute`(118줄)와 `previewRewrite`(65줄)가
   ~85% 같은 절차의 복사본. sealed class는 있는데 호출부에서 손으로 `when` 분해를 **두 번씩** 한다.
   `blocked()` 지역 클로저 중복, 생성자 의존 11개, `blockedByReport` 파라미터 5개(컨텍스트 객체 부재).
   → 게이트 단계 체인 + 감사 데코레이터 + 실행 컨텍스트 객체. 두 진입점은 **설정 차이**가 되어야 한다.
-- **R3. 예외 처리가 6채널로 갈라져 있다.** `blocked()`→`ForbiddenException`(비권한 실패에도 403),
+- ~~**R3. 예외 처리가 6채널로 갈라져 있다.**~~ **해결** — `GateStop` 값 기반 실패로 통합 (spec 010 P0·P1).
+  `blocked()`→`ForbiddenException`(비권한 실패에도 403),
   타입별 catch-record-rethrow 3벌, `blockedByReport()`→`BlockedException`(422),
   `runCatching{audit}`(오류 경로), 성공 경로 감사 예외 무매핑(→500), `inspected.statement!!`.
   응답 바디 모양이 5종(`ErrorResponse`/`AccessBlockedDto`/`ApprovalBlockedDto`/`LintReportDto`/`mapOf`).
@@ -243,7 +259,9 @@ P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝�
   구조적 원인: CLAUDE.md "모든 플랜은 파일로 → `docs/spec/NNN`"이 시한부 계획을 영구 스펙에 밀어넣는다.
   → 스펙은 불변식 + 관측 가능한 수용 기준만. 서사는 이미 learning/retrospect가 보유(§3.8은 3중 중복).
 
-- **R5. 파서 타임아웃 장치가 자기 목적을 뒤집는다.** `DruidMySqlParser:99` `newCachedThreadPool`은 **무제한**,
+- ~~**R5. 파서 타임아웃 장치가 자기 목적을 뒤집는다.**~~ **해결** — `DruidMySqlParser`가 유계 풀 +
+  `@PreDestroy`, `BoundedMySqlParser`가 깊이 상한 (spec 010 P1.5). `DruidMySqlParser:99`
+  `newCachedThreadPool`은 **무제한**,
   `:154 future.cancel(true)`는 인터럽트 플래그만 세우고 Druid 파서는 순수 CPU라 확인하지 않는다 → 파싱
   스레드는 끝까지 돈다(:154 주석은 방향이 거꾸로다). 타임아웃이 실제로 나는 상황에서 요청마다 죽일 수 없는
   스레드가 남고 새 스레드가 생긴다. 인라인 파싱은 컨테이너 풀로 유계인데 지금은 무계다.
@@ -251,7 +269,8 @@ P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝�
   → 불변식은 "**파싱 비용은 유계다**". 기다림을 재지 말고 입력을 유계로 — 바이트 상한(있음) +
   어휘 스캐너에서 중첩 깊이·토큰 수 상한(§3.8이 미룬 그 항목이 진짜 방어였다). 마감을 이중방어로
   남기려면 **고정 크기 풀 + 거부 정책**.
-- **R6. null을 허용으로 착각했다** — nullable 선언 134개, `!!` 34곳. 뿌리 3개:
+- ~~**R6. null을 허용으로 착각했다**~~ **대체로 해결** — `!!` 34→23곳, `norm` 정의역 분할·`parsePredicate`
+  타입 실패 (spec 010 P3). 잔여 23곳이 정당한 null인지는 미검토. — nullable 선언 134개, `!!` 34곳. 뿌리 3개:
   - 합의 타입을 곱 타입에 눌러 담음: `InspectResult.statement: ParsedStatement? = null` — 상관("Success일
     때만 있다")을 **KDoc 산문**으로 적었다. → `ParseResult.Success(ir, statement)`로 옮기면 `!!` 2곳 소멸.
   - 엔티티 PK `id: Long? = null` → `e.id!!` **18곳**. 저장 전/후를 한 타입이 겸한다.
@@ -264,7 +283,7 @@ P0은 사본을 없애는 대신 테스트를 두 벌로 늘렸다. **1을 끝�
 → 리팩터링 스펙 초안이 필요하다(번호는 **010** — 009는 mobile-layout이 점유).
    R4를 적용해 **불변식만** 적는다. **M3보다 먼저** 할지 사용자 판단 대기.
 
-## 1. spec 008 M3 — 실행 결과 UI (다음 차례, 계획 미승인)
+## ~~1. spec 008 M3 — 실행 결과 UI (다음 차례, 계획 미승인)~~ **해결** — spec 013으로 완료
 
 에디터 실행 결과·재작성 표시 + 저장쿼리 실행 액션·이력 + E2E·화면 대조 (spec 008 §10-3).
 **계획을 spec 008에 초안으로 쓰고 승인받은 뒤** 착수한다. retrospect 012가 넘긴 제약 2개:
@@ -293,7 +312,7 @@ PostgreSQL·Trino 방언 + 에이전트. M3 이후.
 |---|---|
 | 컬럼 수준 카탈로그 검증 | 판정 축 추가 → **별도 스펙**. 현 상태도 422 SQL_ERROR로 크게 실패하고 감사에 남는다 |
 | `demo_table_map` 정합성 제약·변경 감사 | 매핑 **UI**의 선행 조건. 지금은 seed로만 바뀐다 |
-| 파서 실행 시간·깊이 상한 | 접수 검사가 문형을 좁혀 폭발 반경이 작다. 길이 상한이 1차 방어 |
+| ~~파서 실행 시간·깊이 상한~~ **해결** | `BoundedMySqlParser` 깊이 상한 100 (spec 010 P1.5). 접수 검사가 문형을 좁혀 폭발 반경이 작다. 길이 상한이 1차 방어 |
 | `/api/users`·`/api/directory/*` 전 인증 공개 | spec 007 H3 카브아웃(승인선 편성에 후보 목록 필요) |
 
 ## 상태 메모

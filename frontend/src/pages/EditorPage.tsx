@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
@@ -29,6 +29,7 @@ import { sql as sqlLang, MySQL } from "@codemirror/lang-sql";
 import type { Extension } from "@codemirror/state";
 import { MONO_FONT } from "../theme";
 import { mockSql } from "../mock/design";
+import { applyFix } from "../api/fix";
 import { useAuth } from "../auth/AuthContext";
 import {
   apiErrorMessage,
@@ -42,7 +43,9 @@ import {
   type ApprovalBlocked,
   type ApprovalSummary,
   type Id,
+  type Fix,
   type LintReport,
+  type ReviewStatus,
   type SchemaDict,
   type Violation,
 } from "../api/client";
@@ -129,20 +132,14 @@ const SUGGESTIONS = [
   { kind: "K", text: "GROUP BY", hint: "keyword", badgeBg: "#f0f5ff", badgeColor: "#2f54eb" },
 ];
 
-/** 규칙 검사 결과 예시 카드 (dc.html 1434–1449) — 실 리포트가 없을 때만 노출, "예시" 표시. */
-const SAMPLE_RULE_CARDS = [
-  { rule: "PII 컬럼 마스킹 필수", status: "pass" as const, note: "email·name 조회는 승인 요청 REQ-1043 요건에 포함됨" },
-  { rule: "마케팅 동의 사용자 한정", status: "pass" as const, note: "m.is_agreed = TRUE 조건 확인됨" },
-  { rule: "대량 조회 LIMIT 강제", status: "warn" as const, note: "LIMIT 100 — 권장 최대 1,000 이내" },
-];
-
-/** 실행 결과 예시 그리드 (dc.html 1453–1458). */
-const RESULT_ROWS = [
-  { id: "10231", email: "j***@naver.com", name: "김*현", consent: "2026-07-20 09:12" },
-  { id: "10244", email: "s***@gmail.com", name: "이*연", consent: "2026-07-19 22:41" },
-  { id: "10250", email: "p***@kakao.com", name: "박*준", consent: "2026-07-18 14:03" },
-  { id: "10262", email: "h***@daum.net", name: "정*윤", consent: "2026-07-17 11:55" },
-];
+// 규칙 검사 예시 카드와 실행 결과 예시 그리드를 **지웠다** (spec 013 C2).
+//
+// 디자인의 그 그리드가 이 프로젝트에서 가장 비싼 오해의 출처였다 — 마스킹된 값이 그려져 있는 것을
+// 보고 "서버가 SQL을 고쳐서 마스킹한다"를 유추했고, 그 유추가 스펙 하나와 마일스톤 셋을 지탱했다
+// (spec 008 §0 정정). 샘플은 없는 동작을 있는 것처럼 보이게 한다.
+//
+// 실용적인 이유도 있다: 샘플이 남아 있으면 "데이터가 안 와서 빈 화면"과 "샘플이라 되는 것처럼 보임"이
+// 구분되지 않아, 다음 커밋(C3)의 실패가 초록으로 보인다.
 
 const PROMPT_CHIPS = [
   { label: "최근 30일 마케팅 동의자", icon: <BulbOutlined /> },
@@ -217,6 +214,12 @@ export default function EditorPage() {
   const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
   const [aiInput, setAiInput] = useState("");
 
+  /**
+   * 편집 중인 저장 쿼리의 검토 상태 — **실행 자격**을 정한다(spec 008 §7).
+   * 미저장(null)·검토 대기·반려에서는 실행할 수 없고, 화면은 그 이유를 서버 어휘로 말한다(F3).
+   */
+  const [reviewStatus, setReviewStatus] = useState<ReviewStatus | null>(null);
+
   const [report, setReport] = useState<LintReport | null>(null);
   const [linting, setLinting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -235,6 +238,7 @@ export default function EditorPage() {
         setQueryName(q.name);
         setSql(q.sql);
         setRequestId(q.requestId);
+        setReviewStatus(q.reviewStatus);
         if (q.lintReport) setReport(q.lintReport);
       })
       .catch(() => {
@@ -432,6 +436,33 @@ export default function EditorPage() {
     void runLint(true);
   }, [runLint]);
 
+  /**
+   * 조각 적용 — **에디터 텍스트만** 고친다(F4). 서버는 부르지 않는다.
+   * 재판정은 따로 부르지 않는다: `sql`이 바뀌면 디바운스 검사가 0.5초 뒤에 다시 판정한다(U2).
+   */
+  const onApplyFix = useCallback(
+    (fix: Fix) => {
+      setSql((prev) => {
+        const next = applyFix(prev, fix);
+        if (next === prev) message.warning("이 제안을 적용할 자리를 찾지 못했습니다 — 직접 고쳐 주세요");
+        return next;
+      });
+    },
+    [message],
+  );
+
+  /**
+   * 실행 자격과 **그 이유**. 서버가 막을 것을 화면이 미리 말한다 — 활성으로 보였다가 403이 나면
+   * 사용자는 자기가 뭘 잘못했는지 모른다. 이유는 **서버 어휘 그대로**다(F3): 미저장 / 검토 대기 / 반려.
+   */
+  const runBlockedReason = useMemo((): string | null => {
+    if (!editId) return "저장한 뒤에 실행할 수 있습니다";
+    if (reviewStatus === "PENDING_REVIEW") return "검토 대기 중입니다 — 승인 후 실행할 수 있습니다";
+    if (reviewStatus === "REJECTED") return "반려된 쿼리는 실행할 수 없습니다";
+    if (reviewStatus !== "APPROVED") return "검토 상태를 확인하는 중입니다";
+    return null;
+  }, [editId, reviewStatus]);
+
   const onRun = useCallback(() => {
     setBottomTab("result");
     message.info("실행 기능은 다음 단계에서 구현됩니다");
@@ -519,9 +550,14 @@ export default function EditorPage() {
           <Button icon={<CheckCircleOutlined />} loading={linting} onClick={onRuleCheck}>
             규칙 검사
           </Button>
-          <Button icon={<ThunderboltOutlined />} onClick={onRun}>
-            실행
-          </Button>
+          <Tooltip title={runBlockedReason ?? ""}>
+            {/* disabled 버튼은 마우스 이벤트를 안 받으므로 Tooltip이 붙을 래퍼가 필요하다 */}
+            <span>
+              <Button icon={<ThunderboltOutlined />} onClick={onRun} disabled={runBlockedReason != null}>
+                실행
+              </Button>
+            </span>
+          </Tooltip>
           <Tooltip title={noUsable ? "먼저 승인을 받으세요" : ""}>
             <Button
               type="primary"
@@ -772,7 +808,12 @@ export default function EditorPage() {
           </div>
           <div style={{ padding: 16, maxHeight: 210, overflowY: "auto" }}>
             {bottomTab === "rulecheck" && (
-              <RuleCheckPanel report={report} linting={linting} accessBlocked={!!accessBlock} />
+              <RuleCheckPanel
+                report={report}
+                linting={linting}
+                accessBlocked={!!accessBlock}
+                onApplyFix={onApplyFix}
+              />
             )}
             {bottomTab === "result" && <ResultPanel />}
             {bottomTab === "messages" && <MessagesPanel />}
@@ -920,10 +961,12 @@ function RuleCheckPanel({
   report,
   linting,
   accessBlocked,
+  onApplyFix,
 }: {
   report: LintReport | null;
   linting: boolean;
   accessBlocked: boolean;
+  onApplyFix: (fix: Fix) => void;
 }) {
   // 권한 게이트가 룰보다 앞이므로(§6.0) 권한 차단 시 위반 목록 자체가 존재하지 않는다.
   if (accessBlocked && !report) {
@@ -968,53 +1011,68 @@ function RuleCheckPanel({
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {report.violations.map((v, i) => (
-          <ViolationCard key={`${v.ruleId}-${i}`} v={v} />
+          <ViolationCard key={`${v.ruleId}-${i}`} v={v} onApply={onApplyFix} />
         ))}
       </div>
     );
   }
 
-  // 실 리포트 없음 → 예시 카드 (명확히 구분)
+  // 실 리포트 없음 — **예시를 그리지 않는다**(C2). 아직 검사하지 않았다는 사실을 그대로 보인다.
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ fontSize: 12, color: C.textTertiary, display: "flex", alignItems: "center", gap: 6 }}>
-        {linting ? <Spin size="small" /> : <Tag color="default">예시</Tag>}
-        <span>실제 검사 전 표시되는 예시입니다. 타이핑 후 0.5초 또는 "규칙 검사"로 실제 검사가 실행됩니다.</span>
-      </div>
-      {SAMPLE_RULE_CARDS.map((r) => {
-        const isPass = r.status === "pass";
-        return (
-          <div
-            key={r.rule}
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 10,
-              padding: "10px 12px",
-              border: `1px solid ${isPass ? C.green3 : C.gold3}`,
-              background: isPass ? C.green1 : C.gold1,
-              borderRadius: 6,
-              opacity: 0.75,
-            }}
-          >
-            <span style={{ color: isPass ? C.green6 : C.gold6, display: "inline-flex", fontSize: 16, marginTop: 1 }}>
-              {isPass ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />}
-            </span>
-            <span>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>{r.rule}</div>
-              <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>{r.note}</div>
-            </span>
-            <span style={{ marginLeft: "auto", flex: "none" }}>
-              <Tag color={isPass ? "green" : "gold"}>{isPass ? "통과" : "경고"}</Tag>
-            </span>
-          </div>
-        );
-      })}
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textTertiary }}>
+      {linting ? <Spin size="small" /> : <ExclamationCircleOutlined />}
+      <span>
+        {linting
+          ? "규칙을 검사하고 있습니다…"
+          : '아직 검사하지 않았습니다 — 타이핑 후 0.5초 또는 "규칙 검사"를 누르세요.'}
+      </span>
     </div>
   );
 }
 
-function ViolationCard({ v }: { v: Violation }) {
+/**
+ * **고칠 방법 한 조각** (spec 013 §3-1).
+ *
+ * 조각이 없는 위반은 문장만 보인다 — 서버가 조각을 못 만든 자리에 화면이 지어내지 않는다.
+ * `[적용]`은 **서버를 부르지 않는다**(F4). 에디터 텍스트만 고치고, 디바운스 검사가 그 결과를 다시 판정한다.
+ */
+function FixChip({ fix, onApply }: { fix: Fix; onApply?: (fix: Fix) => void }) {
+  const add = fix.kind === "ADD_PREDICATE";
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 8,
+        padding: "6px 8px",
+        background: C.gray2,
+        border: `1px solid ${C.borderSecondary}`,
+        borderRadius: 4,
+        fontFamily: MONO_FONT,
+        fontSize: 12,
+        flexWrap: "wrap",
+      }}
+    >
+      {add ? (
+        <span style={{ color: C.textTertiary }}>WHERE +</span>
+      ) : (
+        <>
+          <span style={{ color: C.textSecondary, textDecoration: "line-through" }}>{fix.from}</span>
+          <span style={{ color: C.textQuaternary }}>&rarr;</span>
+        </>
+      )}
+      <span style={{ color: C.text }}>{fix.to}</span>
+      {onApply && (
+        <Button size="small" style={{ marginLeft: "auto" }} onClick={() => onApply(fix)}>
+          적용
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function ViolationCard({ v, onApply }: { v: Violation; onApply?: (fix: Fix) => void }) {
   const block = v.severity === "BLOCK";
   return (
     <div
@@ -1034,6 +1092,7 @@ function ViolationCard({ v }: { v: Violation }) {
       <span style={{ minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 500 }}>{v.ruleId}</div>
         <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>{v.message}</div>
+        {v.fix && <FixChip fix={v.fix} onApply={onApply} />}
       </span>
       <span style={{ marginLeft: "auto", flex: "none" }}>
         <Tag color={block ? "red" : "gold"}>{block ? "차단 (오류)" : "경고"}</Tag>
@@ -1042,48 +1101,17 @@ function ViolationCard({ v }: { v: Violation }) {
   );
 }
 
-/** 실행 결과 — 스텁 마스킹 그리드. */
+/**
+ * 실행 결과 — **아직 실행 기능이 붙지 않았다**(C3에서 붙인다).
+ *
+ * 예시 그리드를 지웠다: 남겨 두면 "데이터가 안 와서 빈 화면"과 "샘플이라 되는 것처럼 보임"이
+ * 구분되지 않는다. 없는 것은 없다고 말한다.
+ */
 function ResultPanel() {
-  const cell: React.CSSProperties = {
-    padding: "8px 10px",
-    borderBottom: `1px solid ${C.split}`,
-  };
-  const head: React.CSSProperties = {
-    padding: "8px 10px",
-    background: C.gray2,
-    color: C.textTertiary,
-    borderBottom: `1px solid ${C.borderSecondary}`,
-  };
   return (
-    // data-scroll-x: 결과 표는 좁은 화면에서 **한 열로 접지 않고** 이 컨테이너 안에서 가로 스크롤한다
-    // (4열 데이터 표를 세로로 접으면 어느 값이 어느 컬럼인지 알 수 없게 된다).
-    <div data-scroll-x style={{ overflowX: "auto" }}>
-      <div style={{ marginBottom: 10 }}>
-        <Tag color="default">예시 데이터</Tag>
-      </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "60px 1fr 100px 160px",
-          fontFamily: MONO_FONT,
-          fontSize: 12,
-          minWidth: 480,
-        }}
-      >
-        <div style={head}>id</div>
-        <div style={head}>email</div>
-        <div style={head}>name</div>
-        <div style={head}>consent_at</div>
-        {RESULT_ROWS.map((row) => (
-          <Fragment key={row.id}>
-            <div style={cell}>{row.id}</div>
-            <div style={cell}>{row.email}</div>
-            <div style={cell}>{row.name}</div>
-            <div style={cell}>{row.consent}</div>
-          </Fragment>
-        ))}
-      </div>
-      <div style={{ fontSize: 12, color: C.textTertiary, marginTop: 10 }}>4 rows · 0.08s · LIMIT 100 적용됨</div>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.textTertiary }}>
+      <ExclamationCircleOutlined />
+      <span>아직 실행하지 않았습니다.</span>
     </div>
   );
 }

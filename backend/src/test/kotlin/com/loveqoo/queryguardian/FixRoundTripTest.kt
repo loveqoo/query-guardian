@@ -85,9 +85,11 @@ class FixRoundTripTest {
      * 여기서 SQL을 다시 조립하면 그것이 재작성이다.
      */
     private fun applyFix(sql: String, fix: Fix): String = when (fix) {
-        // 투영 자리의 컬럼 참조 하나를 강제식으로 바꾼다. 단어 경계로 끊어 `email_verified` 같은 이름을 건드리지 않는다.
+        // 투영 자리의 컬럼 참조 하나를 강제식으로 바꾼다. 경계 셋이 모두 필요하다 —
+        // 앞이 식별자/점/**여는 괄호**면 안 되고(마지막 것이 이미 감싼 것을 또 감싸는 걸 막는다),
+        // 뒤가 식별자/여는 괄호여도 안 된다. 화면의 `src/api/fix.ts`와 **같은 규칙**이다.
         is Fix.ReplaceProjection ->
-            sql.replaceFirst(Regex("(?<![\\w.])${Regex.escape(fix.from)}(?![\\w(])"), fix.to)
+            sql.replaceFirst(Regex("(?<![\\w.(])${Regex.escape(fix.from)}(?![\\w(])"), fix.to)
         // 최상위 WHERE에 AND로 잇는다. WHERE가 없으면 FROM 뒤(다음 절 앞)에 새로 만든다.
         is Fix.AddPredicate ->
             if (sql.contains(" WHERE ", ignoreCase = true)) {
@@ -119,6 +121,20 @@ class FixRoundTripTest {
             "SELECT id FROM marketing_consents WHERE id > 0 LIMIT 10",
         ),
     )
+
+    /**
+     * **적용기가 이미 가려진 것을 또 감싸지 않는가.**
+     *
+     * 화면 쪽 계약 테스트(`frontend/tests/apply-fix.spec.ts`)가 이 결함을 먼저 잡았고, 같은 정규식이
+     * 여기에도 있었다. 판정상으로는 이 상황이 위반이 아니라 왕복 시나리오로는 안 잡힌다 —
+     * 적용기를 직접 겨눠야 보인다.
+     */
+    @Test
+    fun `이미 가려진 투영은 적용기가 건드리지 않는다`() {
+        val sql = "SELECT mask_email(email) FROM users LIMIT 10"
+        val fix = Fix.ReplaceProjection("users", "email", from = "email", to = "mask_email(email)")
+        assertEquals(sql, applyFix(sql, fix), "이미 가려진 것을 또 감쌌다 — 이중 마스킹은 사용자 의도를 바꾼다")
+    }
 
     /** 이 시나리오에서 나온 조각들 — 없으면 그 자체가 실패다(막혔는데 고칠 방법을 안 줬다). */
     private fun fixesOf(scenario: Scenario): List<Fix> {

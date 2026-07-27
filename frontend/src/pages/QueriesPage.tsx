@@ -12,6 +12,7 @@ import {
   Tag,
   Tooltip,
   Alert,
+  Spin,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -21,6 +22,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   EyeOutlined,
+  PlayCircleOutlined,
   FileOutlined,
   PlusOutlined,
   SearchOutlined,
@@ -32,13 +34,16 @@ import {
   sqlHighlight,
 } from "../theme";
 import { useAuth } from "../auth/AuthContext";
+import { runDeniedReason } from "../api/runnable";
 import { userLabel, useUsers } from "../auth/useUsers";
 import {
   apiErrorMessage,
   deleteQuery,
   getQuery,
   listQueries,
+  listQueryExecutions,
   reviewQuery,
+  type ExecutionEvent,
   type Id,
   type QueryListItem,
   type ReviewStatus,
@@ -50,6 +55,17 @@ const RULE_PASS_COLOR = "#389e0d"; // var(--green-7)
 const RULE_FAIL_COLOR = "#ff4d4f"; // var(--color-error)
 const TEXT_TERTIARY = "#8c8c8c";
 const TEXT_SECONDARY = "#595959";
+
+/**
+ * 실행 결말의 색. **서버 어휘를 그대로 쓴다**(spec 013 F3) — 라벨을 번역하지 않는다.
+ * `PREVIEW`는 데이터가 나가지 않은 기록이라 중립색이다(성공도 실패도 아니다).
+ */
+const OUTCOME_COLOR: Record<ExecutionEvent["outcome"], string> = {
+  SUCCESS: "green",
+  BLOCKED: "gold",
+  ERROR: "red",
+  PREVIEW: "default",
+};
 
 /**
  * 검토 상태(review_status) 라벨/색 (spec 005 §3.2).
@@ -77,6 +93,11 @@ interface Row {
   vendor: string;
   db: string;
   author: string;
+  /**
+   * 소유자 = 근거 승인 요청의 요청자. **실행 자격**을 정한다 — 실행은 본인만(결정 14).
+   * 예시 행은 소유자가 없다(실행 자체가 불가).
+   */
+  owner?: string | null;
   /** 실 review_status (spec 005 §3.2 — 이번 버전은 표시·감사용). */
   review: ReviewStatus;
   reviewer?: string | null;
@@ -86,6 +107,86 @@ interface Row {
   /** 예시(디자인 시드) 행이면 sql 을 이미 보유. 실제 행은 상세 조회 시 로드. */
   sql?: string;
   isSample: boolean;
+}
+
+/**
+ * **그 쿼리의 실행 이력** (spec 013 §3-3).
+ *
+ * 서버가 권한에 따라 `errorDetail`을 채우거나 비운다(스튜어드/관리자에게만 원문 — MySQL 오류 메시지는
+ * 데이터 값을 에코한다). **화면은 받은 대로 보인다** — 없으면 분류 코드까지만 보이고, 그것이 정상이다.
+ *
+ * 여기서 다시 계산하는 값이 없다: 행수·소요·상한·결말 전부 서버가 준 것이다.
+ */
+function ExecutionHistory({ queryId }: { queryId: Id }) {
+  const [events, setEvents] = useState<ExecutionEvent[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setEvents(null);
+    setFailed(false);
+    listQueryExecutions(queryId)
+      .then((e) => alive && setEvents(e))
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [queryId]);
+
+  if (failed) return <div style={{ fontSize: 12, color: TEXT_TERTIARY }}>실행 이력을 불러오지 못했습니다.</div>;
+  if (events == null) return <Spin size="small" />;
+  if (events.length === 0) return <div style={{ fontSize: 12, color: TEXT_TERTIARY }}>아직 실행한 적이 없습니다.</div>;
+
+  return (
+    <div data-scroll-x style={{ overflowX: "auto" }}>
+      <Table<ExecutionEvent>
+        size="small"
+        rowKey={(e) => String(e.id)}
+        dataSource={events}
+        pagination={false}
+        columns={[
+          {
+            title: "시각",
+            dataIndex: "at",
+            width: 150,
+            render: (at: string) => <span style={{ fontSize: 12 }}>{fmtDate(at)}</span>,
+          },
+          {
+            title: "결말",
+            dataIndex: "outcome",
+            width: 90,
+            render: (o: ExecutionEvent["outcome"]) => <Tag color={OUTCOME_COLOR[o]}>{o}</Tag>,
+          },
+          {
+            title: "행수",
+            dataIndex: "rowCount",
+            width: 70,
+            render: (n: number | null | undefined) => <span style={{ fontSize: 12 }}>{n ?? "—"}</span>,
+          },
+          {
+            title: "소요",
+            dataIndex: "elapsedMs",
+            width: 80,
+            render: (ms: number | null | undefined) => (
+              <span style={{ fontSize: 12 }}>{ms == null ? "—" : `${(ms / 1000).toFixed(2)}s`}</span>
+            ),
+          },
+          {
+            title: "코드",
+            dataIndex: "errorCode",
+            render: (code: string | null | undefined, e) => (
+              <span style={{ fontSize: 12, fontFamily: MONO_FONT }}>
+                {code ?? "—"}
+                {e.errorDetail && (
+                  <div style={{ color: TEXT_TERTIARY, whiteSpace: "pre-wrap" }}>{e.errorDetail}</div>
+                )}
+              </span>
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
 }
 
 /** dialect 문자열 → 표시용 벤더명 (VENDOR_COLOR 키). */
@@ -108,6 +209,7 @@ function realRow(q: QueryListItem): Row {
     key: `real-${q.id}`,
     id: q.id,
     name: q.name,
+    owner: q.owner ?? null,
     vendor: vendorFromDialect(q.dialect),
     db: "—", // 실 API 미보유
     author: "—", // 실 API 미보유 (작성자 필드 없음)
@@ -373,6 +475,18 @@ export default function QueriesPage() {
       align: "right",
       render: (_: unknown, row) => (
         <Space size={2}>
+          <Tooltip title={runDeniedReason(row, user?.id) ?? "실행"}>
+            <span>
+              <Button
+                type="text"
+                size="small"
+                icon={<PlayCircleOutlined />}
+                disabled={runDeniedReason(row, user?.id) != null}
+                onClick={() => navigate(`/editor?id=${row.id}&run=1`)}
+                title=""
+              />
+            </span>
+          </Tooltip>
           <Button type="text" size="small" icon={<EyeOutlined />} onClick={() => openDetail(row)} title="보기" />
           <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openInEditor(row)} title="에디터에서 열기" />
           <Button
@@ -644,6 +758,13 @@ export default function QueriesPage() {
                 }}
               />
             </div>
+
+            {!detailRow.isSample && (
+              <>
+                <div style={{ fontSize: 12, color: TEXT_TERTIARY, margin: "16px 0 8px" }}>실행 이력</div>
+                <ExecutionHistory queryId={detailRow.id} />
+              </>
+            )}
           </>
         )}
       </Modal>

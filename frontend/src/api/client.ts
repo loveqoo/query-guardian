@@ -48,6 +48,11 @@ export const queryListItemSchema = z.object({
   purposeCode: z.string().nullish(),
   /** 근거 승인 요청 id (spec 005 §3.2 — NOT NULL). */
   requestId: idSchema,
+  /**
+   * 소유자 = 근거 승인 요청의 요청자. **실행 자격**을 정한다 — 실행은 본인만 가능하다(결정 14).
+   * null이면 근거 요청이 사라진 것이고, 그때는 아무도 소유자가 아니므로 실행할 수 없다.
+   */
+  owner: z.string().nullish(),
   reviewStatus: reviewStatusSchema,
   reviewer: z.string().nullish(),
   createdAt: z.string(),

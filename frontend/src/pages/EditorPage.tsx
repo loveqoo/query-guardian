@@ -194,6 +194,8 @@ export default function EditorPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const editId = params.get("id");
+  /** 저장쿼리 목록의 `실행` 액션이 붙여 보내는 표식 — 열리자마자 한 번 실행한다(spec 013 §3-3). */
+  const autoRun = params.get("run") === "1";
 
   const { user } = useAuth();
   /** 사용자별 캐시 키 — 로그인/로그아웃 시 자동완성 사전·usable 목록을 다시 받는다 (§8 M5). */
@@ -507,6 +509,19 @@ export default function EditorPage() {
       setRunning(false);
     }
   }, [editId]);
+
+  /**
+   * 목록에서 `실행`으로 들어온 경우 한 번만 실행한다.
+   * `reviewStatus`가 채워진 **뒤에** 돈다 — 그 전에는 실행 자격을 알 수 없어 무조건 403이 된다.
+   * `ranOnce`로 잠그지 않으면 `onRun`이 새로 만들어질 때마다 다시 실행된다.
+   */
+  const ranOnce = useRef(false);
+  useEffect(() => {
+    if (!autoRun || ranOnce.current) return;
+    if (!editId || reviewStatus == null || runBlockedReason != null) return;
+    ranOnce.current = true;
+    void onRun();
+  }, [autoRun, editId, reviewStatus, runBlockedReason, onRun]);
 
   const appendSuggestion = useCallback((text: string) => {
     setSql((p) => p.replace(/;?\s*$/, "") + " " + text);

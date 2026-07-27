@@ -34,6 +34,7 @@ FIELD_PAIRS = [
     ("ExecutionColumnDto", "executionColumnSchema"),
     ("AppliedRewriteDto", "appliedRewriteSchema"),
     ("ExecutionEventDto", "executionEventSchema"),
+    ("QuerySummaryDto", "queryListItemSchema"),
 ]
 
 # (Kotlin enum, zod enum) — 상수 **이름**이 곧 와이어 값이다(Jackson 기본)

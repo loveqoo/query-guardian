@@ -3,6 +3,7 @@ package com.loveqoo.queryguardian.api
 import com.loveqoo.queryguardian.audit.AuditCode
 
 import com.loveqoo.queryguardian.rules.LintReport
+import com.loveqoo.queryguardian.rules.Fix
 import com.loveqoo.queryguardian.rules.Severity
 import com.loveqoo.queryguardian.audit.ExecutionOutcome
 import com.loveqoo.queryguardian.query.ReviewStatus
@@ -13,7 +14,40 @@ import java.time.Instant
 /** purposeCode는 클라이언트가 보내지 않는다 — 서버가 승인 요청에서 주입 (spec 005 C1). */
 data class LintRequest(val dialect: String, val sql: String, val requestId: Long? = null)
 
-data class ViolationDto(val ruleId: String, val severity: Severity, val message: String)
+/**
+ * 고칠 방법 한 조각 — 화면이 클릭 한 번에 적용한다 (spec 012 §7-3).
+ *
+ * 와이어에서는 `kind`로 갈라 놓는다. 서버 안에서는 [Fix]가 sealed로 비대칭을 들고 있지만
+ * (`ADD_PREDICATE`엔 바꿀 원본이 없다), JSON에는 그 타입 정보가 없으므로 **읽는 쪽이 갈라 볼
+ * 근거**를 명시적으로 준다. 다형 역직렬화를 켜지 않는 이유: 이 DTO는 서버→화면 단방향이고,
+ * Jackson의 타입 정보 주입은 와이어 표현을 클래스 이름에 묶어 버린다(spec 010 I13의 교훈).
+ *
+ * [from]은 `REPLACE_PROJECTION`에만 있다. `ADD_PREDICATE`에서 null인 것은 "못 찾았다"가 아니라
+ * **"바꾸는 게 아니라 더하는 것"**이라는 뜻이다.
+ */
+data class FixDto(
+    val kind: String,
+    val table: String,
+    val column: String,
+    val from: String?,
+    val to: String,
+) {
+    companion object {
+        fun from(fix: Fix): FixDto = when (fix) {
+            is Fix.ReplaceProjection ->
+                FixDto("REPLACE_PROJECTION", fix.table, fix.column, from = fix.from, to = fix.to)
+            is Fix.AddPredicate ->
+                FixDto("ADD_PREDICATE", fix.table, fix.column, from = null, to = fix.predicate)
+        }
+    }
+}
+
+data class ViolationDto(
+    val ruleId: String,
+    val severity: Severity,
+    val message: String,
+    val fix: FixDto? = null,
+)
 
 data class LintReportDto(
     val violations: List<ViolationDto>,
@@ -30,7 +64,7 @@ data class LintReportDto(
 ) {
     companion object {
         fun from(report: LintReport) = LintReportDto(
-            violations = report.violations.map { ViolationDto(it.ruleId, it.severity, it.message) },
+            violations = report.violations.map { ViolationDto(it.ruleId, it.severity, it.message, it.fix?.let(FixDto::from)) },
             blocked = report.blocked,
         )
     }

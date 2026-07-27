@@ -20,8 +20,19 @@ const val COL_PLACEHOLDER = "{col}"
  * `{col}`이 없으면 빈 집합 — 무엇도 정답으로 인정하지 않는다(fail-closed).
  */
 fun forcedExpressionForms(template: String, instanceKey: String, column: String): Set<String> =
-    if (!template.contains(COL_PLACEHOLDER)) emptySet()
-    else setOf(
-        template.replace(COL_PLACEHOLDER, column),
-        template.replace(COL_PLACEHOLDER, "$instanceKey.$column"),
+    setOfNotNull(
+        forcedExpressionForm(template, qualifier = null, column = column),
+        forcedExpressionForm(template, qualifier = instanceKey, column = column),
     )
+
+/**
+ * **한 형태만** 렌더링한다 — 제안에 쓴다.
+ *
+ * 판정은 여러 형태를 인정해야 하지만(위), 제안은 **하나를 골라 줘야** 한다. 목록을 주면 사용자가
+ * 고르는 일이 남고, 그것은 추천이 아니라 문제의 재출제다.
+ *
+ * `{col}`이 없으면 null — 정답을 만들 수 없다는 사실을 숨기지 않는다(fail-closed).
+ */
+fun forcedExpressionForm(template: String, qualifier: String?, column: String): String? =
+    if (!template.contains(COL_PLACEHOLDER)) null
+    else template.replace(COL_PLACEHOLDER, if (qualifier == null) column else "$qualifier.$column")

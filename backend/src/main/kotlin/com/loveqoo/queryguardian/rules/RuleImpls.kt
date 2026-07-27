@@ -1,6 +1,7 @@
 package com.loveqoo.queryguardian.rules
 
 import com.loveqoo.queryguardian.ir.Op
+import com.loveqoo.queryguardian.ir.forcedExpressionForm
 import com.loveqoo.queryguardian.ir.Predicate
 import com.loveqoo.queryguardian.ir.ResolvedColumn
 import com.loveqoo.queryguardian.ir.ScopeKind
@@ -107,15 +108,20 @@ class MustBeMaskedRule : Rule {
                 // spec 012 P2: 서버가 대신 가리지 않는다 — **사용자가 직접** 가려야 한다.
                 // 예전에는 WARN이었다("실행 시 자동으로 마스킹됩니다"). 그 문장이 참이려면 서버가
                 // 사용자의 SQL을 고쳐야 하는데, 그 전제가 틀렸다(spec 008 §0).
-                MaskUsage.PROJECTION_ONLY -> Violation(
-                    id, Severity.BLOCK,
-                    suggestion(catalog, finding)
-                        ?.let { "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 합니다 — `$it` 로 바꿔 주세요." }
-                    // 등록된 형태를 못 얻으면 **정답을 알려줄 수 없다.** 그 사실을 숨기지 않는다 —
-                    // "감싸 주세요"라고만 하면 사용자는 무엇으로 감쌀지 알 수 없고, 카탈로그가 깨진 것도 모른다.
-                        ?: "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 하는데 " +
-                        "등록된 강제식을 읽을 수 없습니다 — 카탈로그의 MASK 제약을 확인하세요.",
-                )
+                MaskUsage.PROJECTION_ONLY -> suggestion(catalog, finding).let { fixed ->
+                    Violation(
+                        id, Severity.BLOCK,
+                        fixed?.let { "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 합니다 — `$it` 로 바꿔 주세요." }
+                        // 등록된 형태를 못 얻으면 **정답을 알려줄 수 없다.** 그 사실을 숨기지 않는다 —
+                        // "감싸 주세요"라고만 하면 사용자는 무엇으로 감쌀지 알 수 없고, 카탈로그가 깨진 것도 모른다.
+                            ?: "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 하는데 " +
+                            "등록된 강제식을 읽을 수 없습니다 — 카탈로그의 MASK 제약을 확인하세요.",
+                        // 문장과 조각이 **같은 값**에서 나온다 — 갈라질 자리를 만들지 않는다(spec 012 I3).
+                        fix = fixed?.let {
+                            Fix.ReplaceProjection(finding.logicalTable, finding.column, from = finding.column, to = it)
+                        },
+                    )
+                }
                 MaskUsage.NOT_EXPRESSIBLE -> Violation(
                     id, Severity.BLOCK,
                     "컬럼 ${finding.logicalTable}.${finding.column}은(는) 마스킹 대상인데 치환으로 표현할 수 없는 " +
@@ -202,8 +208,18 @@ class RequirePredicateRule : Rule {
                     Violation(id, severity, "테이블 ${table.name}의 필수 술어(${required.label})를 검증할 수 없습니다. 카탈로그 등록 형태를 확인하세요.")
                 } else {
                     val satisfied = scope.whereConjuncts.any { satisfiesRequiredForm(it, table.instanceKey, normalized) }
-                    if (satisfied) null
-                    else Violation(id, severity, "테이블 ${table.name}(${table.instanceKey})은(는) 필수 조건 `${required.label}` 이 WHERE에 필요합니다.")
+                    if (satisfied) {
+                        null
+                    } else {
+                        // 인스턴스로 한정해 제안한다 — 같은 테이블이 두 번 나오면 한정 없는 조건은 모호하다.
+                        val qualified =
+                            forcedExpressionForm(required.template, table.instanceKey, required.column)
+                        Violation(
+                            id, severity,
+                            "테이블 ${table.name}(${table.instanceKey})은(는) 필수 조건 `${required.label}` 이 WHERE에 필요합니다.",
+                            fix = qualified?.let { Fix.AddPredicate(table.name, required.column, it) },
+                        )
+                    }
                 }
             }
         }

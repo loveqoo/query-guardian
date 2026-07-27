@@ -3,6 +3,7 @@ package com.loveqoo.queryguardian.rules
 import com.loveqoo.queryguardian.ir.ColumnEquality
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.MaskUsage
+import com.loveqoo.queryguardian.ir.forcedExpressionForm
 import com.loveqoo.queryguardian.ir.SelectScope
 import com.loveqoo.queryguardian.ir.maskUsageOf
 
@@ -106,9 +107,46 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
         }
         return if (satisfied) Result.Satisfied
         else Result.Violated(
-            listOf(Violation("rule/${rule.id}", cond.severity, conditionMessage(rule, cond))),
+            listOf(Violation("rule/${rule.id}", cond.severity, conditionMessage(rule, cond), conditionFix(cond, scope, catalog))),
             cond.severity,
         )
+    }
+
+    /**
+     * **고칠 방법 한 조각** (spec 013 S3). 시스템 룰과 같은 어휘를 쓴다 — 화면이 규칙의 출처에 따라
+     * 다르게 그리지 않도록.
+     *
+     * `blocks`·`joins`에는 조각이 없다: 차단된 컬럼은 **빼는** 것이지 무엇으로 바꾸는 것이 아니고,
+     * 조인 요건은 FROM 절 구조를 바꾸는 일이라 한 조각으로 표현되지 않는다. 없는 것을 지어내지 않는다.
+     */
+    private fun conditionFix(cond: RuleCondition, scope: SelectScope, catalog: TableCatalog): Fix? = when (cond.op) {
+        RuleOp.REQUIRES -> {
+            val table = cond.targetTable
+            val column = cond.targetColumn
+            val defId = cond.defId
+            if (table == null || column == null || defId == null) {
+                null
+            } else {
+                val resolved = catalog.resolveConditionPredicate(defId, cond.mappingId, column)
+                // 판정이 본 그 인스턴스에 맞춰 한정한다 — 없으면(테이블이 이 스코프에 없으면) 한정 없이.
+                val instanceKey = scope.tables
+                    .firstOrNull { it.physical && it.name.equals(table, ignoreCase = true) }?.instanceKey
+                resolved?.let { forcedExpressionForm(it.template, instanceKey, column) }
+                    ?.let { Fix.AddPredicate(table, column, it) }
+            }
+        }
+        RuleOp.MUST_BE_MASKED -> {
+            val table = cond.targetTable
+            val column = cond.targetColumn
+            if (table == null || column == null) null
+            else {
+                val instanceKey = scope.tables
+                    .firstOrNull { it.physical && it.name.equals(table, ignoreCase = true) }?.instanceKey ?: table
+                catalog.maskForms(table, instanceKey, column).minByOrNull { it.length }
+                    ?.let { Fix.ReplaceProjection(table, column, from = column, to = it) }
+            }
+        }
+        else -> null
     }
 
     // ---- op별 판정 (fail-closed) ----
@@ -120,7 +158,7 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
             ?: return false // dangling·판정 불가 → fail-closed 미충족 (C4)
         // 대상 테이블 인스턴스에 귀속된 최상위 AND conjunct가 술어를 충족해야 함
         return scope.tables.filter { it.physical && it.name.equals(table, ignoreCase = true) }.any { t ->
-            scope.whereConjuncts.any { satisfiesRequiredForm(it, t.instanceKey, required) }
+            scope.whereConjuncts.any { satisfiesRequiredForm(it, t.instanceKey, required.form) }
         }
     }
 

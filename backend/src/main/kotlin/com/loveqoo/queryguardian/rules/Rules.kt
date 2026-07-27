@@ -1,5 +1,6 @@
 package com.loveqoo.queryguardian.rules
 
+import com.loveqoo.queryguardian.ir.forcedExpressionForm
 import com.loveqoo.queryguardian.ir.forcedExpressionForms
 
 import com.loveqoo.queryguardian.ir.Predicate
@@ -11,7 +12,49 @@ enum class Severity { BLOCK, WARN }
 internal fun worstSeverity(severities: Collection<Severity>): Severity =
     if (severities.any { it == Severity.BLOCK }) Severity.BLOCK else Severity.WARN
 
-data class Violation(val ruleId: String, val severity: Severity, val message: String)
+/**
+ * **고칠 방법 한 조각** (spec 012 §7-3 · §9).
+ *
+ * P3은 제안을 [Violation.message] **문장 안**에 넣었다. 사람은 읽을 수 있지만 화면은 정규식으로
+ * 뽑아내야 하고, 무엇보다 **어디를 고쳐야 하는지 모른다**. 그래서 조각을 값으로 꺼낸다 —
+ * 화면이 클릭 한 번에 적용할 수 있게(사용자 결정: "코드 추천해주듯이").
+ *
+ * **종류를 갈라 두는 이유**: `ADD_PREDICATE`에는 "무엇을" 바꿀 원본이 없다. 더하는 것이다.
+ * `from: String?`으로 뭉치면 그 null이 "원본이 없음"인지 "원본을 못 찾음"인지 구별되지 않고,
+ * 화면은 둘을 같게 그린다. 비대칭은 타입으로 드러내는 편이 싸다(learning 019: 합 타입).
+ *
+ * 조각은 **적용하면 판정을 통과해야** 한다(spec 012 I3). 그것을 재는 것이 왕복 테스트다.
+ */
+sealed interface Fix {
+    val table: String
+    val column: String
+
+    /** [from] 자리의 투영을 [to]로 바꾼다 — 예: `email` → `mask_email(email)`. */
+    data class ReplaceProjection(
+        override val table: String,
+        override val column: String,
+        val from: String,
+        val to: String,
+    ) : Fix
+
+    /** WHERE에 [predicate]를 더한다 — 예: `mc.consent_yn = 'Y'`. 바꿀 원본이 없다. */
+    data class AddPredicate(
+        override val table: String,
+        override val column: String,
+        val predicate: String,
+    ) : Fix
+}
+
+/**
+ * [fix]가 null인 경우는 **"고칠 방법을 만들 수 없다"**는 사실이다 — 없는 것을 지어내지 않는다.
+ * 강제식이 깨졌거나(카탈로그 문제), 애초에 자동으로 고칠 수 있는 종류가 아닌 위반이 그렇다.
+ */
+data class Violation(
+    val ruleId: String,
+    val severity: Severity,
+    val message: String,
+    val fix: Fix? = null,
+)
 
 data class LintContext(val purposeCode: String?)
 
@@ -61,11 +104,38 @@ interface TableCatalog {
      * 사용자 규칙 requires 조건의 술어 해석 (spec 004 §4.2). defId+컬럼(+mappingId)의 FILTER 정의를
      * 치환·파싱해 판정 가능 정규형으로 반환. 매핑 사라짐(dangling)·판정 불가 형태면 null → 평가기가 fail-closed 처리.
      */
-    fun resolveConditionPredicate(defId: Long, mappingId: Long?, columnName: String): RequiredForm?
+    fun resolveConditionPredicate(defId: Long, mappingId: Long?, columnName: String): ConditionPredicate?
 }
 
-/** [predicate]는 카탈로그의 predicate_sql을 DialectParser.parsePredicate로 파싱해 둔 것 (§6.5 구조 비교). */
-data class RequiredPredicate(val label: String, val predicate: Predicate)
+/**
+ * 카탈로그에 등록된 필수 술어.
+ *
+ * [predicate]는 등록된 강제식을 `DialectParser.parsePredicate`로 파싱해 둔 것 (§6.5 구조 비교).
+ * [template]은 `{col}` 자리표시자가 **남아 있는** 형태다 — 인스턴스 한정(`mc.consent_yn`)은
+ * 판정 시점에만 할 수 있으므로(같은 테이블이 여러 인스턴스일 수 있다) 렌더링을 미뤄 둔다.
+ *
+ * 예전에는 [label] 한 문자열이 이름과 술어를 함께 담았고(`"동의 필수 (consent_yn = 'Y')"`),
+ * 제안을 만들려면 그 문장에서 술어를 **다시 뽑아내야** 했다. 문장은 사람이 읽는 것이고
+ * 조각은 화면이 쓰는 것이라, 한 값에 겸직시키면 둘 다 어정쩡해진다.
+ */
+data class RequiredPredicate(
+    val name: String,
+    val column: String,
+    val template: String,
+    val predicate: Predicate,
+) {
+    /** 사람이 읽는 한 줄 — 메시지에 그대로 쓴다. */
+    val label: String get() = "$name (${forcedExpressionForm(template, qualifier = null, column = column) ?: template})"
+}
+
+/**
+ * 사용자 규칙 `requires`가 참조하는 등록 술어.
+ *
+ * [form]은 **판정**이 쓰는 정규형(컬럼 = 리터럴), [template]은 **제안**이 쓰는 `{col}` 형태다.
+ * 한 번의 조회에서 둘 다 나오게 묶어 둔다 — 따로 조회하면 그 사이에 매핑이 바뀌어
+ * "판정은 옛 술어로, 제안은 새 술어로" 갈라질 수 있다.
+ */
+data class ConditionPredicate(val form: RequiredForm, val template: String)
 
 class InMemoryTableCatalog(
     private val partitionKeys: Map<String, List<String>> = emptyMap(),
@@ -76,8 +146,8 @@ class InMemoryTableCatalog(
     /** (테이블 → 컬럼 → `{col}`을 가진 MASK 강제식) — spec 012 P0의 "사용자가 써도 되는 형태" 근거. */
     private val maskTemplates: Map<String, Map<String, String>> = emptyMap(),
     tables: Set<String> = emptySet(),
-    /** defId → requires 판정용 정규형 (테스트 시드). */
-    private val conditionPredicates: Map<Long, RequiredForm> = emptyMap(),
+    /** defId → requires 판정용 정규형 + 제안용 template (테스트 시드). */
+    private val conditionPredicates: Map<Long, ConditionPredicate> = emptyMap(),
 ) : TableCatalog {
     data class Entry(val table: String, val purposeCode: String?, val predicate: RequiredPredicate)
 
@@ -108,6 +178,6 @@ class InMemoryTableCatalog(
 
     override fun exists(tableName: String): Boolean = known.contains(tableName.lowercase())
 
-    override fun resolveConditionPredicate(defId: Long, mappingId: Long?, columnName: String): RequiredForm? =
+    override fun resolveConditionPredicate(defId: Long, mappingId: Long?, columnName: String): ConditionPredicate? =
         conditionPredicates[defId]
 }

@@ -2,6 +2,7 @@ package com.loveqoo.queryguardian
 
 import com.loveqoo.queryguardian.lint.LintService
 import com.loveqoo.queryguardian.rules.InMemoryTableCatalog
+import com.loveqoo.queryguardian.rules.ConditionPredicate
 import com.loveqoo.queryguardian.rules.RequiredForm
 import com.loveqoo.queryguardian.rules.RuleCondition
 import com.loveqoo.queryguardian.rules.RuleEngine
@@ -73,7 +74,9 @@ class ShapeCoverageTest {
         // spec 012 P0: 사용자가 직접 써도 되는 가려진 형태의 근거
         maskTemplates = mapOf("users" to mapOf("email" to "mask_email({col})")),
         // requires 판정용 정규형: `users.created_at = '2026-01-01'`
-        conditionPredicates = mapOf(901L to RequiredForm("created_at", "2026-01-01")),
+        conditionPredicates = mapOf(
+            901L to ConditionPredicate(RequiredForm("created_at", "2026-01-01"), "{col} = '2026-01-01'"),
+        ),
     )
 
     private val userRules = listOf(

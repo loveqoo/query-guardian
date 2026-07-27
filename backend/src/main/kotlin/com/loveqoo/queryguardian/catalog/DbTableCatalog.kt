@@ -5,6 +5,7 @@ import com.loveqoo.queryguardian.ir.Predicate
 import com.loveqoo.queryguardian.ir.forcedExpressionForms
 import com.loveqoo.queryguardian.parser.DialectParser
 import com.loveqoo.queryguardian.parser.PredicateParse
+import com.loveqoo.queryguardian.rules.ConditionPredicate
 import com.loveqoo.queryguardian.rules.RequiredForm
 import com.loveqoo.queryguardian.rules.RequiredPredicate
 import com.loveqoo.queryguardian.rules.TableCatalog
@@ -69,8 +70,11 @@ class DbTableCatalog(
             .map { bound ->
                 val expression = bound.def.expression ?: return@map unverifiable(bound)
                 val params = Expressions.parseParams(objectMapper, bound.mapping.paramsJson) ?: return@map unverifiable(bound)
+                // 두 벌을 만든다: `{col}`이 남은 template(제안이 인스턴스로 한정할 때)과
+                // 컬럼까지 채운 sql(파싱해 구조 비교에 쓴다). 같은 치환 함수에서 나오므로 갈라지지 않는다.
+                val template = Expressions.substituteParams(expression, params) ?: return@map unverifiable(bound)
                 val sql = Expressions.substitute(expression, bound.column.name, params) ?: return@map unverifiable(bound)
-                RequiredPredicate("${bound.def.name} ($sql)", predicateOrRaw(bound, sql))
+                RequiredPredicate(bound.def.name, bound.column.name, template, predicateOrRaw(bound, sql))
             }
 
     /**
@@ -95,8 +99,17 @@ class DbTableCatalog(
             }
         }
 
+    /**
+     * 치환·파싱이 안 되면 **검증 불가**로 내린다 — 룰이 fail-closed로 차단한다.
+     * `template`에 `{col}`이 없으므로 제안도 만들어지지 않는다: 정답을 모르는데 아는 척하지 않는다.
+     */
     private fun unverifiable(bound: ConstraintBinding) =
-        RequiredPredicate("${bound.def.name} (검증 불가)", Predicate.Raw(bound.def.expression ?: ""))
+        RequiredPredicate(
+            name = "${bound.def.name} (검증 불가)",
+            column = bound.column.name,
+            template = "",
+            predicate = Predicate.Raw(bound.def.expression ?: ""),
+        )
 
     override fun exists(tableName: String): Boolean = bindings.tableExists(tableName)
 
@@ -104,7 +117,7 @@ class DbTableCatalog(
      * 사용자 규칙 requires 조건의 술어 해석 (spec 004 §4.2). def(FILTER)의 강제식을 컬럼·params로 치환·파싱해
      * 판정 정규형(EQ 리터럴/IN 단일)으로 반환. 매핑 사라짐·판정 불가 형태면 null → 평가기 fail-closed.
      */
-    override fun resolveConditionPredicate(defId: Long, mappingId: Long?, columnName: String): RequiredForm? {
+    override fun resolveConditionPredicate(defId: Long, mappingId: Long?, columnName: String): ConditionPredicate? {
         val def = defs.findById(defId).orElse(null) ?: return null
         if (def.kind != DefKind.FILTER) return null
         val expression = def.expression ?: return null
@@ -116,6 +129,8 @@ class DbTableCatalog(
         val sql = Expressions.substitute(expression, columnName, params) ?: return null
         // 여기서는 이유가 정책을 바꾸지 않는다 — 판정 불가면 평가기가 fail-closed로 차단한다(§4.2).
         val predicate = parser.parsePredicate(sql).predicateOrNull ?: return null
-        return requiredForm(predicate)
+        val form = requiredForm(predicate) ?: return null
+        val template = Expressions.substituteParams(expression, params) ?: return null
+        return ConditionPredicate(form, template)
     }
 }

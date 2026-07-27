@@ -3,6 +3,7 @@ package com.loveqoo.queryguardian
 import com.loveqoo.queryguardian.parser.DruidMySqlParser
 import com.loveqoo.queryguardian.parser.ParseResult
 import com.loveqoo.queryguardian.rules.InMemoryTableCatalog
+import com.loveqoo.queryguardian.rules.ConditionPredicate
 import com.loveqoo.queryguardian.rules.RequiredForm
 import com.loveqoo.queryguardian.rules.RuleGroup
 import com.loveqoo.queryguardian.rules.RuleCondition
@@ -25,7 +26,9 @@ class UserRuleEvaluatorTest {
     // 카탈로그: marketing_consents.consent_yn에 매핑된 FILTER def(id=100) = consent_yn='Y'
     private val catalog = InMemoryTableCatalog(
         tables = setOf("users", "marketing_consents"),
-        conditionPredicates = mapOf(100L to RequiredForm("consent_yn", "Y")),
+        conditionPredicates = mapOf(
+            100L to ConditionPredicate(RequiredForm("consent_yn", "Y"), "{col} = 'Y'"),
+        ),
     )
 
     private fun engineWith(vararg rules: UserRule): RuleEngine =

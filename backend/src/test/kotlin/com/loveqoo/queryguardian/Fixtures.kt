@@ -29,7 +29,12 @@ object Fixtures {
                 purposeCode = "marketing",
                 // 픽스처가 파싱에 실패하면 그 자리에서 터져야 한다 — 조용히 Raw로 흐르면
                 // 구조 비교 테스트가 텍스트 비교로 바뀐 채 초록이 된다.
-                predicate = RequiredPredicate("consent_yn = 'Y'", parsedFixture("consent_yn = 'Y'")),
+                predicate = RequiredPredicate(
+                    name = "동의 필수",
+                    column = "consent_yn",
+                    template = "{col} = 'Y'",
+                    predicate = parsedFixture("consent_yn = 'Y'"),
+                ),
             ),
         ),
         // spec 002: users.ssn은 BLOCK 매핑 (디자인 표본 — 조회 전면 차단)

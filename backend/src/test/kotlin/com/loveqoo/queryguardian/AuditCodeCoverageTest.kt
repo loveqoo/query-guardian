@@ -272,16 +272,10 @@ class AuditCodeCoverageTest {
             forcePlanRefusal(RewriteRefusal.MASK_NOT_EXPRESSIBLE)
             preview("SELECT mask_email(email) FROM users", f.approvedRequestId)
         },
-        previewScenario(AuditCode.REWRITE_OUTER_JOIN_FILTER, HttpStatus.UNPROCESSABLE_ENTITY,
-            bodyCode = "REWRITE_OUTER_JOIN_FILTER") { f ->
-            // 주입이 LEFT JOIN을 INNER로 바꾸므로 fail-closed. 필수 술어를 **직접 써서** 판정을 통과시킨
-            // 뒤에야 이 거부가 드러난다 — WHERE가 없으면 require-predicate(BLOCK)가 먼저 잡는다.
-            preview(
-                "SELECT u.id FROM users u LEFT JOIN marketing_consents c ON c.user_id = u.id " +
-                    "WHERE c.consent_yn = 'Y'",
-                f.approvedRequestId,
-            )
-        },
+        // REWRITE_OUTER_JOIN_FILTER는 **없어졌다**(spec 013 S2). 술어 주입이 사라지면서 그 거부의
+        // 근거가 사라졌다 — LEFT JOIN 쿼리가 "주입하면 조인 의미가 INNER로 바뀐다"는 이유만으로
+        // 실행 단계에서 거절되던 오차단의 회수다. `RewriteRefusal`↔`REWRITE_*` 짝 검사가 감사 코드도
+        // 함께 지워졌음을 강제한다.
         previewScenario(AuditCode.REWRITE_EXPRESSION_NOT_USABLE, HttpStatus.UNPROCESSABLE_ENTITY,
             bodyCode = "REWRITE_EXPRESSION_NOT_USABLE") { f ->
             // spec 012 P2 이후 **정상 입력으로는 도달할 수 없다** — 강제식이 깨졌으면 판정이 먼저 막는다
@@ -366,6 +360,35 @@ class AuditCodeCoverageTest {
         }
     }
 
+    /**
+     * **회수한 오차단** (spec 013 S2). 이 쿼리는 `REWRITE_OUTER_JOIN_FILTER`로 거절되던 것이다:
+     * 사용자가 필수 조건을 **직접 써서 판정을 통과**했는데도, 재작성기가 같은 조건을 주입하려다
+     * "LEFT JOIN이 INNER로 바뀐다"며 실행을 막았다. 주입이 사라졌으니 막을 이유가 없다.
+     *
+     * 이 파일에 두는 이유: 그 감사 코드의 시나리오가 여기 있었고, 그것을 재현하던 **바로 그 쿼리와
+     * 픽스처**로 반대 결과를 재는 것이 회수의 증거이기 때문이다. 다른 곳에 새로 차리면 승인 범위·
+     * 검토 상태가 미묘하게 달라져 "무엇이 달라져서 통과했는지"가 흐려진다.
+     */
+    @Test
+    fun `LEFT JOIN에 조건을 직접 쓰면 더 이상 거절되지 않는다`() {
+        val f = ensureFixtures()
+        val response = preview(
+            "SELECT u.id FROM users u LEFT JOIN marketing_consents c ON c.user_id = u.id " +
+                "WHERE c.consent_yn = 'Y'",
+            f.approvedRequestId,
+        )
+        assertEquals(
+            HttpStatus.OK, response.statusCode,
+            "주입을 지웠는데도 LEFT JOIN이 거절된다 — 회수하려던 오차단이 남아 있다: ${response.body}",
+        )
+        val body = response.body as? Map<*, *> ?: error("본문 없음: ${response.body}")
+        // 서버가 조건을 덧붙이지 않았는지 — 사용자가 쓴 WHERE 하나뿐이어야 한다(spec 012 I1)
+        assertTrue(
+            !body["applied"].toString().contains("FILTER"),
+            "서버가 여전히 조건을 붙인다: ${body["applied"]}",
+        )
+    }
+
     /** `error_code VARCHAR(32)` — 넘치면 조용히 잘려 사후 분류가 어긋난다. */
     @Test
     fun `감사 코드 이름은 저장 폭 안에 있다`() {
@@ -420,7 +443,7 @@ class AuditCodeCoverageTest {
 
     private fun forcePlanRefusal(refusal: RewriteRefusal) {
         doAnswer { PlanOutcome.Refused(refusal, "주입된 거부($refusal)") }
-            .`when`(planner).plan(any(), anyOrNull(), any())
+            .`when`(planner).plan(any(), any())
     }
 
     private fun forcePlanWithoutLimit() {
@@ -429,7 +452,7 @@ class AuditCodeCoverageTest {
                 is PlanOutcome.Planned -> PlanOutcome.Planned(real.plan.copy(limitCap = null))
                 else -> real
             }
-        }.`when`(planner).plan(any(), anyOrNull(), any())
+        }.`when`(planner).plan(any(), any())
     }
 
     private fun forceExecutionFailure(kind: ExecutionFailure.Kind) {

@@ -6,13 +6,11 @@ import com.loveqoo.queryguardian.ir.MaskUsage
 import com.loveqoo.queryguardian.ir.forcedExpressionForms
 import com.loveqoo.queryguardian.ir.maskFindings
 import com.loveqoo.queryguardian.ir.MaskProjection
-import com.loveqoo.queryguardian.ir.PredicateInjection
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewritePlan
 import com.loveqoo.queryguardian.ir.RewriteRefusal
 import com.loveqoo.queryguardian.ir.SelectScope
 import com.loveqoo.queryguardian.ir.TableRename
-import com.loveqoo.queryguardian.ir.TableRef
 
 /** 계획 수립 결과. 거부는 예외가 아니라 값이다 — 게이트가 사유를 그대로 사용자에게 전달한다. */
 sealed interface PlanOutcome {
@@ -35,7 +33,6 @@ sealed interface PlanOutcome {
  */
 val RewriteRefusal.auditCode: AuditCode get() = when (this) {
     RewriteRefusal.MASK_NOT_EXPRESSIBLE -> AuditCode.REWRITE_MASK_NOT_EXPRESSIBLE
-    RewriteRefusal.OUTER_JOIN_FILTER -> AuditCode.REWRITE_OUTER_JOIN_FILTER
     RewriteRefusal.EXPRESSION_NOT_USABLE -> AuditCode.REWRITE_EXPRESSION_NOT_USABLE
     RewriteRefusal.SCOPE_NOT_FOUND -> AuditCode.REWRITE_SCOPE_NOT_FOUND
     RewriteRefusal.VERIFY_FAILED -> AuditCode.REWRITE_VERIFY_FAILED
@@ -56,9 +53,8 @@ class RewritePlanner(
     private val maxRows: Long,
 ) {
 
-    fun plan(ir: QueryIR, purposeCode: String?, tableMap: Map<String, String>): PlanOutcome {
+    fun plan(ir: QueryIR, tableMap: Map<String, String>): PlanOutcome {
         val masks = mutableListOf<MaskProjection>()
-        val injections = mutableListOf<PredicateInjection>()
         val renames = mutableListOf<TableRename>()
 
         for (scope in allScopes(ir.root)) {
@@ -68,7 +64,6 @@ class RewritePlanner(
             // 여기까지 오는 쿼리는 **이미 사용자가 가려서 쓴 것**이거나 마스킹 대상이 없는 것이다.
             // planMasks(scope, masks)?.let { return it }
             for (instance in scope.tables.filter { it.physical }) {
-                planInjections(scope, instance, purposeCode, injections)?.let { return it }
                 // 물리명 치환은 **물리 테이블 인스턴스에만** 계획한다 — CTE·파생 alias가 논리명과 겹쳐도
                 // 그것들은 physical=false라 여기 오지 않는다(전역 치환이면 그 참조까지 깨뜨린다).
                 tableMap[instance.name.lowercase()]?.let { physical ->
@@ -80,7 +75,6 @@ class RewritePlanner(
         return PlanOutcome.Planned(
             RewritePlan(
                 maskProjections = masks,
-                injections = injections,
                 limitCap = LimitCap(ir.root.scopeId, effectiveCap(ir.root.limit), maxRows),
                 tableRenames = renames,
             )
@@ -139,63 +133,6 @@ class RewritePlanner(
                 column = finding.column,
                 expressionTemplate = template,
                 outputName = finding.column,
-            )
-        }
-        return null
-    }
-
-    /**
-     * FILTER·INTEGRITY 술어 주입 (§3.0-1, §3.0.2).
-     *
-     * OUTER JOIN의 null 생성 쪽 인스턴스는 **거부**한다 — WHERE 주입이 LEFT JOIN을 사실상 INNER로 바꿔
-     * 결과 의미가 변한다. 조용히 의미를 바꾸는 것보다 거부가 안전하다(fail-closed).
-     */
-    private fun planInjections(
-        scope: SelectScope,
-        instance: TableRef,
-        purposeCode: String?,
-        into: MutableList<PredicateInjection>,
-    ): PlanOutcome.Refused? {
-        val filters = catalog.filterExpressions(instance.name, purposeCode).map { it to "FILTER" }
-        val integrity = catalog.integrityExpressions(instance.name).map { it to "INTEGRITY" }
-
-        // 주입이 의미를 바꾸는 스코프(부정 문맥·null 생성 경로)에는 넣지 않는다 — 넣으면 필터가 **반전**되거나
-        // 조인이 INNER로 바뀐다. 자동 보정만 포기하는 것이고, 필수 술어 자체는 판정 층이 모든 스코프에서
-        // 계속 요구한다(분석가가 직접 써야 통과).
-        if (!scope.injectable) return null
-
-        for ((expression, kind) in filters + integrity) {
-            // **주입 생략 단축 경로를 두지 않는다.** 한때 "그 컬럼에 이미 최상위 조건이 있으면 생략"을 넣어
-            // OUTER JOIN 오차단을 완화했는데, 적대 검토가 그것이 fail-open임을 지적했다:
-            // `WHERE mc.consent_yn <> 'Y'`도 "이미 제약됨"으로 읽혀 필수 조건이 **아예 주입되지 않는다**.
-            // 안전성이 "판정 층이 형태를 검사해 막아줄 것"이라는 가정에 얹히는데, 판정은 다른 카탈로그 축을
-            // 읽으므로 두 축의 일치가 보장되지 않는다. 중복 주입(`AND (x='Y') AND (x='Y')`)은 무해하므로
-            // 항상 주입하는 쪽이 안전하다. OUTER JOIN 오차단은 알려진 한계로 남긴다(INNER JOIN으로 우회 가능).
-            if (instance.instanceKey in scope.nullProducingInstances) {
-                return PlanOutcome.Refused(
-                    RewriteRefusal.OUTER_JOIN_FILTER,
-                    "OUTER JOIN으로 null이 생성되는 쪽(${instance.instanceKey})에 필수 조건" +
-                        "(${expression.label})을 주입하면 조인 의미가 INNER로 바뀝니다 — " +
-                        "해당 테이블을 INNER JOIN으로 바꾸거나 조건을 직접 작성해 주세요",
-                )
-            }
-            if (expression.template == null) {
-                return PlanOutcome.Refused(
-                    RewriteRefusal.EXPRESSION_NOT_USABLE,
-                    "$kind 강제식을 쓸 수 없습니다: ${instance.name}.${expression.column} (${expression.label})",
-                )
-            }
-            // 인스턴스 한정은 **계획 수립자의 책임**이다 — 같은 테이블이 여러 인스턴스로 있으면
-            // 재작성기가 추측하면 셀프 조인에서 엉뚱한 쪽에 붙는다.
-            val qualified = expression.template.replace(
-                com.loveqoo.queryguardian.catalog.Expressions.COL,
-                "${instance.instanceKey}.${expression.column}",
-            )
-            into += PredicateInjection(
-                scopeId = scope.scopeId,
-                instanceKey = instance.instanceKey,
-                predicateSql = qualified,
-                reason = "${expression.label} (${instance.name}.${expression.column})",
             )
         }
         return null

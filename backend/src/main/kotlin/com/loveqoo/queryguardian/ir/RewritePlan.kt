@@ -13,8 +13,6 @@ package com.loveqoo.queryguardian.ir
 data class RewritePlan(
     /** MASK 매핑 컬럼의 투영을 강제식으로 치환 (§3.0.1). */
     val maskProjections: List<MaskProjection> = emptyList(),
-    /** FILTER·INTEGRITY 술어를 최상위 AND conjunct로 주입 (§3.0-1). */
-    val injections: List<PredicateInjection> = emptyList(),
     /** 행 상한 — 루트(또는 UNION 노드)에 적용 (§3.0-2). */
     val limitCap: LimitCap? = null,
     /**
@@ -28,12 +26,12 @@ data class RewritePlan(
     val tableRenames: List<TableRename> = emptyList(),
 ) {
     val isEmpty: Boolean
-        get() = maskProjections.isEmpty() && injections.isEmpty() && limitCap == null && tableRenames.isEmpty()
+        get() = maskProjections.isEmpty() && limitCap == null && tableRenames.isEmpty()
 
     /** 계획이 참조하는 모든 스코프 id — 핸들과의 짝 검증에 쓴다. */
     val referencedScopeIds: Set<String>
-        get() = (maskProjections.map { it.scopeId } + injections.map { it.scopeId } +
-            tableRenames.map { it.scopeId } + listOfNotNull(limitCap?.scopeId)).toSet()
+        get() = (maskProjections.map { it.scopeId } + tableRenames.map { it.scopeId } +
+            listOfNotNull(limitCap?.scopeId)).toSet()
 }
 
 /**
@@ -68,22 +66,6 @@ data class MaskProjection(
 )
 
 /**
- * [scopeId] 스코프의 WHERE에 [predicateSql]를 최상위 AND conjunct로 주입한다.
- *
- * [predicateSql]는 **이미 인스턴스로 한정된 최종 술어**다(`mc.consent_yn = 'Y'`) — 스코프에 같은 테이블이
- * 여러 인스턴스로 있을 수 있으므로 한정은 계획 수립자의 책임이다. 재작성기는 파싱해 결합만 한다.
- *
- * [alreadySatisfied]가 true면 동일 술어가 이미 최상위 conjunct로 있어 주입을 생략했다는 기록(감사용).
- */
-data class PredicateInjection(
-    val scopeId: String,
-    val instanceKey: String,
-    val predicateSql: String,
-    val reason: String,
-    val alreadySatisfied: Boolean = false,
-)
-
-/**
  * 유효 상한 [maxRows] = `min(사용자 LIMIT ?: ∞, 설정 상한)`. 재작성기는 `LIMIT maxRows + 1`을 넣고
  * 실행기가 `maxRows + 1`번째 행을 보면 초과 행이 있다고 확정한 뒤 그 행을 버린다(§3.0-2).
  *
@@ -104,16 +86,13 @@ enum class RewriteRefusal {
     /** MASK 대상 컬럼이 투영이 아닌 위치(함수 인자·CASE·WHERE 등)에 있어 치환으로 표현할 수 없다 (§3.0.1). */
     MASK_NOT_EXPRESSIBLE,
 
-    /** OUTER JOIN의 null 생성 쪽 테이블에 FILTER 대상이 있다 — WHERE 주입이 LEFT JOIN을 INNER로 바꾼다 (§3.0.2). */
-    OUTER_JOIN_FILTER,
-
     /** 강제식·술어를 표현식으로 파싱할 수 없거나 서브쿼리를 포함한다 (§3.0-3). */
     EXPRESSION_NOT_USABLE,
 
     /** 계획이 지목한 스코프를 핸들에서 찾을 수 없다 — 다른 파싱의 계획을 적용하려 한 것이다. */
     SCOPE_NOT_FOUND,
 
-    /** 재작성 결과 자체 검증 실패 (§3.0.3) — 주입이 최상위 conjunct가 아니거나 MASK 컬럼이 남아 있는 등. */
+    /** 재작성 결과 자체 검증 실패 (§3.0.3) — MASK 컬럼이 원본 투영으로 남아 있거나 물리명 치환이 빠진 등. */
     VERIFY_FAILED,
 }
 
@@ -131,4 +110,9 @@ data class AppliedRewrite(
     val detail: String,
 )
 
-enum class RewriteKind { MASK, FILTER, INTEGRITY, LIMIT, TABLE_MAP }
+/**
+ * 재작성이 하는 일. **FILTER·INTEGRITY가 빠졌다** (spec 013 S2) — 서버가 사용자 SQL의 조건을
+ * 고치지 않기로 했으므로(spec 012 I1), 남은 것은 **양**(LIMIT)과 **이름**(TABLE_MAP), 그리고
+ * 아직 정리되지 않은 MASK다.
+ */
+enum class RewriteKind { MASK, LIMIT, TABLE_MAP }

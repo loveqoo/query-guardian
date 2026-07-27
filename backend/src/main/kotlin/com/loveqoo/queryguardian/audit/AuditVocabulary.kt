@@ -62,7 +62,6 @@ enum class AuditCode {
 
     // ── 재작성 (RewriteRefusal과 1:1) ─────────────────────────────────
     REWRITE_MASK_NOT_EXPRESSIBLE,
-    REWRITE_OUTER_JOIN_FILTER,
     REWRITE_EXPRESSION_NOT_USABLE,
     REWRITE_SCOPE_NOT_FOUND,
     REWRITE_VERIFY_FAILED,

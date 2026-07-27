@@ -2,7 +2,6 @@ package com.loveqoo.queryguardian.parser
 
 import com.loveqoo.queryguardian.ir.LimitCap
 import com.loveqoo.queryguardian.ir.MaskProjection
-import com.loveqoo.queryguardian.ir.PredicateInjection
 import com.loveqoo.queryguardian.ir.RewritePlan
 import com.loveqoo.queryguardian.ir.TableRename
 import kotlin.test.Test
@@ -34,10 +33,9 @@ class RewriteVerifierTest {
     @Test
     fun `계획대로 된 결과는 통과한다`() {
         val problems = verifier.verify(
-            "SELECT mask_email(users.email) AS email FROM demo_users users WHERE (users.id > 0) AND (users.id IS NOT NULL) LIMIT 1001",
+            "SELECT mask_email(users.email) AS email FROM demo_users users WHERE users.id > 0 LIMIT 1001",
             RewritePlan(
                 maskProjections = listOf(MaskProjection("s0", "users", "email", "mask_email({col})", "email")),
-                injections = listOf(PredicateInjection("s0", "users", "users.id IS NOT NULL", "무결성")),
                 limitCap = LimitCap("s0", 1000),
                 tableRenames = listOf(TableRename("s0", "users", "users", "demo_users")),
             ),
@@ -52,24 +50,12 @@ class RewriteVerifierTest {
         assertTrue(problems.any { it.contains("원본 투영으로 남아 있습니다") }, "$problems")
     }
 
-    @Test
-    fun `주입 술어가 없으면 잡는다`() {
-        val problems = verifier.verify(
-            "SELECT id FROM users",
-            RewritePlan(injections = listOf(PredicateInjection("s0", "users", "users.consent_yn = 'Y'", "동의"))),
-        )
-        assertTrue(problems.any { it.contains("최상위 조건으로 남아 있지 않습니다") }, "$problems")
-    }
-
-    /** OR 가지 안에 들어간 술어는 최상위 conjunct가 아니다 — 주입이 무력화된 상태를 잡아야 한다. */
-    @Test
-    fun `OR 가지 안의 술어는 최상위로 인정하지 않는다`() {
-        val problems = verifier.verify(
-            "SELECT id FROM users WHERE users.id = 1 OR users.consent_yn = 'Y'",
-            RewritePlan(injections = listOf(PredicateInjection("s0", "users", "users.consent_yn = 'Y'", "동의"))),
-        )
-        assertTrue(problems.any { it.contains("최상위 조건으로 남아 있지 않습니다") }, "$problems")
-    }
+    // **spec 013 S2: 주입 검증을 지웠다.** 여기 있던 두 테스트(술어 누락·OR 가지 안)는 검증기가
+    // "주입한 술어가 최상위 conjunct로 남았는가"를 보는지 쟀다. 주입이 없으니 검증할 것이 없다.
+    //
+    // 그 두 테스트가 지킨 성질(조건이 OR 가지에 들어가면 무력화된다)은 **판정 쪽에 살아 있다** —
+    // `require-predicate`가 `scope.whereConjuncts`(최상위 AND만 담는 축)에서 찾으므로, 사용자가
+    // 필수 조건을 OR 가지에 넣으면 충족으로 인정되지 않는다. `ShapeCoverageTest` 축 R이 잰다.
 
     @Test
     fun `물리명 치환이 안 됐으면 잡는다`() {
@@ -113,12 +99,18 @@ class RewriteVerifierTest {
         assertTrue(problems.single().contains("다시 파싱할 수 없습니다"), "$problems")
     }
 
-    /** 파생 스코프에 주입된 술어도 찾아야 한다 — 스코프 id는 재파싱하면 달라지므로 존재로 검증한다. */
+    /**
+     * **파생 스코프 안의 항목도 찾아야 한다** — 스코프 id는 재파싱하면 달라지므로 존재로 검증한다.
+     *
+     * 재료를 주입에서 **테이블명 치환**으로 바꿨다(S2). 재는 성질은 같다: 계획이 `s1`을 지목했지만
+     * 재파싱된 결과에 그 id가 없어도, 검증기는 스코프를 훑어 **적용됐는지**를 확인해야 한다.
+     * id로 지목해 찾으려 들면 파생 스코프의 적용이 전부 "안 됐다"로 읽힌다.
+     */
     @Test
-    fun `파생 스코프의 주입도 인정한다`() {
+    fun `파생 스코프의 적용도 인정한다`() {
         val problems = verifier.verify(
-            "SELECT d.id FROM (SELECT id FROM users WHERE users.consent_yn = 'Y') d",
-            RewritePlan(injections = listOf(PredicateInjection("s1", "users", "users.consent_yn = 'Y'", "동의"))),
+            "SELECT d.id FROM (SELECT id FROM demo_users users) d",
+            RewritePlan(tableRenames = listOf(TableRename("s1", "users", "users", "demo_users"))),
         )
         assertEquals(emptyList(), problems)
     }

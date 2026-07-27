@@ -110,22 +110,7 @@ class RewriteVerifier(private val parser: DialectParser) {
             }
         }
 
-        // ⑶ 주입 술어가 어느 스코프의 **최상위 conjunct**로 존재하는가
-        //    (재파싱하면 scopeId가 새로 발급되므로 스코프를 id로 지목할 수 없다 — 존재로 검증한다.
-        //     whereConjuncts 자체가 "최상위 AND만" 담는 축이므로, 여기 있다는 것이 곧 최상위라는 뜻이다.)
-        for (injection in plan.injections) {
-            if (injection.alreadySatisfied) continue // 주입하지 않았으므로 검증 대상이 아니다
-            // 이유가 정책을 바꾸지 않는다 — 파싱 실패면 아래 `matches`가 원문 텍스트 비교로 확인한다.
-            val expected = parser.parsePredicate(injection.predicateSql).predicateOrNull
-            val found = scopes.any { scope ->
-                scope.whereConjuncts.any { matches(it, expected, injection.predicateSql) }
-            }
-            if (!found) {
-                problems += "주입한 술어가 최상위 조건으로 남아 있지 않습니다: ${injection.predicateSql}"
-            }
-        }
-
-        // ⑷ MASK가 **계획한 그 강제식으로** 적용됐는가.
+        // ⑶ MASK가 **계획한 그 강제식으로** 적용됐는가.
         //
         //    "bare 투영으로 남지 않았다"만 확인하면 부족하다 — 적대 검토가 실증한 대로
         //    `CONCAT(users.email, '')`처럼 **항등에 가까운 아무 표현식**으로 감싸도 통과하고, 그것은 평문을 반환한다.
@@ -154,7 +139,7 @@ class RewriteVerifier(private val parser: DialectParser) {
             }
         }
 
-        // ⑸ 루트 LIMIT ≤ 상한+1 (재작성기는 truncated 판정을 위해 상한+1을 넣는다)
+        // ⑷ 루트 LIMIT ≤ 상한+1 (재작성기는 truncated 판정을 위해 상한+1을 넣는다)
         plan.limitCap?.let { cap ->
             val limit = ir.root.limit
             if (limit == null || limit > cap.maxRows + 1) {

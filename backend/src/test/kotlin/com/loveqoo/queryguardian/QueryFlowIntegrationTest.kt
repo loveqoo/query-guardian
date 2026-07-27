@@ -239,26 +239,19 @@ class QueryFlowIntegrationTest {
     /**
      * spec 008 — **판정 축과 재작성 축이 같은 집합을 봐야 한다**는 계약.
      *
-     * 적대 검토가 지적한 대로, 재작성의 안전성은 여러 곳에서 "판정 층이 이미 그 조건을 강제했다"에 기대고 있다.
-     * 그런데 판정은 `TableCatalog.requiredPredicates`를, 재작성은 `RewriteCatalog.filterExpressions`를 읽는다 —
-     * 두 축이 같은 매핑 집합을 본다는 보장이 코드에 없었다. 어긋나면 "판정은 요구하지 않는데 재작성이 주입"
-     * 또는 그 반대(주입도 없고 요구도 없음 = 조용한 무적용)가 된다.
+     * 원래 이 테스트는 FILTER를 두 축에서 세어 대조했다. 판정은 `TableCatalog.requiredPredicates`,
+     * 재작성은 `RewriteCatalog.filterExpressions`를 읽었고, 어긋나면 "판정은 요구하지 않는데 재작성이
+     * 주입" 또는 그 반대(조용한 무적용)가 됐다.
+     *
+     * **spec 013 S2가 그 축을 하나로 줄였다** — 주입이 없으므로 FILTER·INTEGRITY는 판정만의 어휘다.
+     * 대조할 두 축이 없어졌으니 그 절반을 지웠다. 대신 판정 축이 **두 종류를 다 보는지**가 새 질문이고,
+     * `IntegrityConstraintTest`가 그것을 잰다.
+     *
+     * MASK는 여전히 두 축이 있다 — 판정은 컬럼 집합(`must-be-masked`), 재작성은 강제식까지.
      */
     @Test
     @Order(7)
-    fun `판정 축과 재작성 축이 같은 FILTER 집합을 본다`() {
-        for (table in listOf("users", "marketing_consents", "user_events")) {
-            for (purpose in listOf(null, "marketing")) {
-                val judged = judgmentCatalog.requiredPredicates(table, purpose).size
-                val rewritten = rewriteCatalog.filterExpressions(table, purpose).size
-                assertEquals(
-                    judged, rewritten,
-                    "FILTER 매핑 개수가 축마다 다르다: table=$table purpose=$purpose " +
-                        "(판정 $judged / 재작성 $rewritten)",
-                )
-            }
-        }
-        // MASK 축도 같은 근거를 공유해야 한다(판정은 컬럼 집합만, 재작성은 강제식까지)
+    fun `판정 축과 재작성 축이 같은 MASK 집합을 본다`() {
         assertEquals(
             judgmentCatalog.maskedColumns("users"),
             rewriteCatalog.maskExpressions("users").map { it.column.lowercase() }.toSet(),

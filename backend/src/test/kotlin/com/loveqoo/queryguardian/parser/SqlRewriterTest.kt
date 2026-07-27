@@ -2,7 +2,6 @@ package com.loveqoo.queryguardian.parser
 
 import com.loveqoo.queryguardian.ir.LimitCap
 import com.loveqoo.queryguardian.ir.MaskProjection
-import com.loveqoo.queryguardian.ir.PredicateInjection
 import com.loveqoo.queryguardian.ir.QueryIR
 import com.loveqoo.queryguardian.ir.RewriteKind
 import com.loveqoo.queryguardian.ir.RewriteOutcome
@@ -57,44 +56,14 @@ class SqlRewriterTest {
     private fun mask(ir: QueryIR, instance: String, column: String, template: String = "mask_email({col})") =
         MaskProjection(ir.root.scopeId, instance, column, template, column)
 
-    private fun inject(ir: QueryIR, sql: String, instance: String = "t") =
-        PredicateInjection(ir.root.scopeId, instance, sql, "테스트")
-
     // ---- 주입 정확성 ⑴ 괄호 ----
-
-    /** 최상위 OR에 괄호 없이 AND를 붙이면 주입이 무력화된다 — 이 테스트가 그 회귀를 막는다. */
-    @Test
-    fun `최상위 OR인 WHERE는 괄호로 감싼 뒤 결합한다`() {
-        val out = rewrite("SELECT id FROM user_events WHERE a = 1 OR b = 2") { ir ->
-            RewritePlan(injections = listOf(inject(ir, "consent_yn = 'Y'", "user_events")))
-        }
-        // 주입 술어 자체도 괄호로 감싼다 — 템플릿이 `a = 1 OR b = 2` 같은 이항식일 때 필수다(§3.0-1)
-        assertTrue(out.contains("WHERE (a = 1 OR b = 2) AND (consent_yn = 'Y')"), "괄호가 없다: $out")
-    }
-
-    @Test
-    fun `WHERE가 없으면 그대로 술어가 된다`() {
-        val out = rewrite("SELECT id FROM user_events") { ir ->
-            RewritePlan(injections = listOf(inject(ir, "consent_yn = 'Y'", "user_events")))
-        }
-        assertTrue(out.contains("WHERE consent_yn = 'Y'"), out)
-    }
-
-    @Test
-    fun `AND WHERE에도 붙는다`() {
-        val out = rewrite("SELECT id FROM user_events WHERE a = 1 AND b = 2") { ir ->
-            RewritePlan(injections = listOf(inject(ir, "c = 'Y'", "user_events")))
-        }
-        assertTrue(out.contains("WHERE a = 1 AND b = 2 AND (c = 'Y')"), out)
-    }
-
-    @Test
-    fun `주입 술어에 서브쿼리를 쓸 수 없다`() {
-        val refused = refusal("SELECT id FROM user_events") { ir ->
-            RewritePlan(injections = listOf(inject(ir, "id IN (SELECT id FROM users)", "user_events")))
-        }
-        assertEquals(RewriteRefusal.EXPRESSION_NOT_USABLE, refused.refusal)
-    }
+    //
+    // **spec 013 S2: 술어 주입을 지웠다.** 여기 있던 네 테스트(최상위 OR 괄호·WHERE 없음·AND WHERE·
+    // 서브쿼리 거부)는 주입이 WHERE를 안전하게 결합하는지를 쟀다. 결합할 것이 없으니 함께 지웠다.
+    //
+    // 이 중 **괄호 테스트가 지켰던 성질은 다른 곳에 없다** — 남은 재작성(LIMIT·테이블명)은 WHERE를
+    // 건드리지 않으므로 우선순위 붕괴가 생길 자리가 없다. 다시 WHERE를 쓰는 재작성이 생기면
+    // 이 테스트를 되살려야 한다.
 
     // ---- 주입 정확성 ⑵ LIMIT ----
 
@@ -275,18 +244,23 @@ class SqlRewriterTest {
 
     // ---- 전체 조합 ----
 
+    /**
+     * 여러 항목이 **서로를 무르지 않고** 한 번에 적용되는가. 주입 재료를 뺐다(S2) —
+     * 남은 셋이 겹치는 지점(투영·FROM·꼬리)이 다르므로 조합 위험은 그대로 남아 있다.
+     *
+     * `WHERE`를 원문 그대로 두는 것도 단정한다: **남은 재작성은 조건을 건드리지 않는다**(spec 012 I1).
+     */
     @Test
-    fun `마스킹 필터 상한 물리명이 한 번에 적용된다`() {
+    fun `마스킹 상한 물리명이 한 번에 적용된다`() {
         val out = rewrite("SELECT u.email FROM users u WHERE u.id > 0 OR u.id < 0") { ir ->
             RewritePlan(
                 maskProjections = listOf(mask(ir, "u", "email")),
-                injections = listOf(inject(ir, "u.id IS NOT NULL", "u")),
                 limitCap = LimitCap(ir.root.scopeId, 1000),
                 tableRenames = listOf(TableRename(ir.root.scopeId, "u", "users", "demo_users")),
             )
         }
         assertTrue(out.contains("mask_email(u.email) AS email"), out)
-        assertTrue(out.contains("WHERE (u.id > 0 OR u.id < 0) AND (u.id IS NOT NULL)"), out)
+        assertTrue(out.contains("WHERE u.id > 0 OR u.id < 0"), "WHERE가 원문이 아니다: $out")
         assertTrue(out.contains("FROM demo_users u"), out)
         assertTrue(out.endsWith("LIMIT 1001"), out)
     }

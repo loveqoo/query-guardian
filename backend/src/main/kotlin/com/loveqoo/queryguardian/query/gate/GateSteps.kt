@@ -157,7 +157,7 @@ class GateSteps(
         }
 
     fun planRewrite(mapped: Mapped): GateOutcome<Planned> =
-        when (val planned = planner.plan(mapped.ir, mapped.request.purposeCode, mapped.mapping)) {
+        when (val planned = planner.plan(mapped.ir, mapped.mapping)) {
             is PlanOutcome.Planned -> cleared(PlannedEvidence(mapped, planned.plan))
             is PlanOutcome.Refused -> stopped(GateStop.Unprocessable(planned.auditCode, planned.message))
         }

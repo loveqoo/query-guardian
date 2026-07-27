@@ -20,7 +20,6 @@ import com.alibaba.druid.sql.ast.statement.SQLUnionQuery
 import com.alibaba.druid.sql.visitor.SQLASTVisitorAdapter
 import com.loveqoo.queryguardian.ir.AppliedRewrite
 import com.loveqoo.queryguardian.ir.MaskProjection
-import com.loveqoo.queryguardian.ir.PredicateInjection
 import com.loveqoo.queryguardian.ir.RewriteKind
 import com.loveqoo.queryguardian.ir.RewriteOutcome
 import com.loveqoo.queryguardian.ir.QueryIR
@@ -82,13 +81,6 @@ class SqlRewriter(
             val block = queryBlock(handle, mask.scopeId)
                 ?: return refuse(RewriteRefusal.SCOPE_NOT_FOUND, "MASK 대상 스코프가 쿼리 블록이 아닙니다: ${mask.scopeId}")
             applyMask(block, mask, applied)?.let { return it }
-        }
-
-        for (injection in plan.injections) {
-            if (injection.alreadySatisfied) continue // 이미 최상위 조건으로 존재 — 감사 기록용 항목이다
-            val block = queryBlock(handle, injection.scopeId)
-                ?: return refuse(RewriteRefusal.SCOPE_NOT_FOUND, "주입 대상 스코프가 쿼리 블록이 아닙니다: ${injection.scopeId}")
-            applyInjection(block, injection, applied)?.let { return it }
         }
 
         plan.limitCap?.let { cap ->
@@ -199,37 +191,6 @@ class SqlRewriter(
             normalize(from.alias ?: name)
         }
         else -> null // 조인·파생 등 다중 인스턴스면 비한정 참조를 귀속하지 않는다
-    }
-
-    // ---- 술어 주입 ----
-
-    private fun applyInjection(
-        block: SQLSelectQueryBlock,
-        injection: PredicateInjection,
-        applied: MutableList<AppliedRewrite>,
-    ): RewriteOutcome.Refused? {
-        val predicate = parseExpression(injection.predicateSql)
-            ?: return refuse(
-                RewriteRefusal.EXPRESSION_NOT_USABLE,
-                "주입할 술어를 파싱할 수 없습니다: ${injection.predicateSql}",
-            )
-        if (containsSubquery(predicate)) {
-            return refuse(RewriteRefusal.EXPRESSION_NOT_USABLE, "주입 술어에 서브쿼리를 쓸 수 없습니다: ${injection.predicateSql}")
-        }
-
-        val existing = block.where
-        if (existing == null) {
-            block.where = predicate
-        } else {
-            // Druid는 괄호를 자동 삽입하지 않는다(실측) — 원본이 OR이면 감싸지 않으면 우선순위가 붕괴한다.
-            (existing as? SQLExprImpl)?.setParenthesized(true)
-            (predicate as? SQLBinaryOpExpr)?.setParenthesized(true)
-            block.where = SQLBinaryOpExpr(existing, SQLBinaryOperator.BooleanAnd, predicate, DbType.mysql)
-        }
-        applied += AppliedRewrite(
-            RewriteKind.FILTER, injection.instanceKey, null, "${injection.predicateSql} (${injection.reason})",
-        )
-        return null
     }
 
     // ---- 물리 테이블명 치환 ----

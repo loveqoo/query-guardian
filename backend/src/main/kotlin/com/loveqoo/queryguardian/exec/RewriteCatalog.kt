@@ -35,8 +35,6 @@ interface RewriteCatalog {
      */
     fun maskedColumns(tableName: String): Set<String> =
         maskExpressions(tableName).map { it.column.lowercase() }.toSet()
-    fun filterExpressions(tableName: String, purposeCode: String?): List<ForcedExpression>
-    fun integrityExpressions(tableName: String): List<ForcedExpression>
 }
 
 @Component
@@ -45,25 +43,14 @@ class DbRewriteCatalog(
     private val objectMapper: ObjectMapper,
 ) : RewriteCatalog {
 
+    /**
+     * 재작성이 읽는 강제식은 **MASK 하나**로 줄었다 (spec 013 S2).
+     * FILTER·INTEGRITY는 주입이 사라지면서 **판정만의 어휘**가 됐다 — `TableCatalog.requiredPredicates`.
+     * purpose 스코프도 그쪽으로 갔다: 재작성은 이제 purpose를 알 필요가 없다.
+     */
     override fun maskExpressions(tableName: String): List<ForcedExpression> =
-        expressions(tableName, DefKind.MASK, purposeCode = null, purposeScoped = false)
-
-    /** FILTER는 purpose 스코프를 갖는다 — 항상 적용(null) + 현재 purpose에 등록된 것만. */
-    override fun filterExpressions(tableName: String, purposeCode: String?): List<ForcedExpression> =
-        expressions(tableName, DefKind.FILTER, purposeCode, purposeScoped = true)
-
-    override fun integrityExpressions(tableName: String): List<ForcedExpression> =
-        expressions(tableName, DefKind.INTEGRITY, purposeCode = null, purposeScoped = false)
-
-    private fun expressions(
-        tableName: String,
-        kind: DefKind,
-        purposeCode: String?,
-        purposeScoped: Boolean,
-    ): List<ForcedExpression> =
         bindings.forTable(tableName)
-            .filter { it.def.kind == kind }
-            .filter { !purposeScoped || it.mapping.purposeCode == null || it.mapping.purposeCode == purposeCode }
+            .filter { it.def.kind == DefKind.MASK }
             .map { bound ->
                 val expression = bound.def.expression
                 val params = Expressions.parseParams(objectMapper, bound.mapping.paramsJson)

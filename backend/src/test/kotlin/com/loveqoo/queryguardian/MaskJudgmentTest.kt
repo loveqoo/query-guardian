@@ -87,11 +87,22 @@ class MaskJudgmentTest {
         val report = lint("SELECT email FROM users LIMIT 10")
         val violation = report.violations.single { it.ruleId == "must-be-masked" }
         assertEquals(Severity.BLOCK, violation.severity)
-        assertTrue(violation.message.contains("가려서 조회"), violation.message)
         assertTrue(report.blocked, "$report")
+        // spec 012 P3: **고칠 방법을 조각으로** 준다 — 그대로 쓰면 통과하는 문자열이어야 한다
+        assertTrue(violation.message.contains("mask_email(email)"), violation.message)
     }
 
     /** 사용자가 등록된 형태로 직접 가리면 통과한다 — 정답을 쓸 수 있어야 모델이 성립한다(spec 012 I5). */
+    /** 제안이 실제로 정답이어야 한다 — 알려준 대로 고쳤는데 또 막히면 모델이 성립하지 않는다(spec 012 I3). */
+    @Test
+    fun `제안한 형태를 그대로 쓰면 통과한다`() {
+        val blocked = lint("SELECT email FROM users LIMIT 10")
+        val message = blocked.violations.single { it.ruleId == "must-be-masked" }.message
+        val suggested = Regex("`([^`]+)`").find(message)?.groupValues?.get(1) ?: error("제안이 없다: $message")
+        val fixed = lint("SELECT $suggested FROM users LIMIT 10")
+        assertFalse(fixed.blocked, "제안대로 고쳤는데 막혔다: $suggested → $fixed")
+    }
+
     @Test
     fun `등록된 형태로 직접 가리면 통과한다`() {
         val report = lint("SELECT mask_email(email) FROM users LIMIT 10")

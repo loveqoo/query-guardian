@@ -6,6 +6,7 @@ import com.loveqoo.queryguardian.ir.ResolvedColumn
 import com.loveqoo.queryguardian.ir.ScopeKind
 import com.loveqoo.queryguardian.ir.MaskUsage
 import com.loveqoo.queryguardian.ir.SelectScope
+import com.loveqoo.queryguardian.ir.MaskFinding
 import com.loveqoo.queryguardian.ir.maskFindings
 import com.loveqoo.queryguardian.ir.SelectItem
 
@@ -80,6 +81,19 @@ class MustBeMaskedRule : Rule {
     override val id = "must-be-masked"
     override val severity = Severity.BLOCK
 
+    /**
+     * **고칠 방법을 조각으로 준다** (spec 012 P3 · §9).
+     *
+     * 고친 SQL 전문을 만들어 주지 않는다 — 쿼리를 아는 사람에게 전문은 수다스럽다(사용자 결정).
+     * 대신 **그 자리에 무엇을 쓰면 되는지**를 그대로 준다: `mask_email(email)`.
+     * 등록된 MASK 강제식이 근거이므로 이 문자열을 그대로 쓰면 판정을 통과한다(같은 값을 비교에 쓴다).
+     *
+     * 한정자 없는 형태를 고른다 — 사용자가 별칭을 쓰면 거기 맞춰 쓰면 되고, 둘 다 인정된다.
+     */
+    private fun suggestion(catalog: TableCatalog, finding: MaskFinding): String? =
+        catalog.maskForms(finding.logicalTable, finding.instanceKey, finding.column)
+            .minByOrNull { it.length }
+
     override fun check(scope: SelectScope, catalog: TableCatalog, context: LintContext): List<Violation> =
         maskFindings(
             scope,
@@ -95,8 +109,12 @@ class MustBeMaskedRule : Rule {
                 // 사용자의 SQL을 고쳐야 하는데, 그 전제가 틀렸다(spec 008 §0).
                 MaskUsage.PROJECTION_ONLY -> Violation(
                     id, Severity.BLOCK,
-                    "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 합니다 — " +
-                        "등록된 강제식으로 감싸 주세요.",
+                    suggestion(catalog, finding)
+                        ?.let { "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 합니다 — `$it` 로 바꿔 주세요." }
+                    // 등록된 형태를 못 얻으면 **정답을 알려줄 수 없다.** 그 사실을 숨기지 않는다 —
+                    // "감싸 주세요"라고만 하면 사용자는 무엇으로 감쌀지 알 수 없고, 카탈로그가 깨진 것도 모른다.
+                        ?: "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 하는데 " +
+                        "등록된 강제식을 읽을 수 없습니다 — 카탈로그의 MASK 제약을 확인하세요.",
                 )
                 MaskUsage.NOT_EXPRESSIBLE -> Violation(
                     id, Severity.BLOCK,

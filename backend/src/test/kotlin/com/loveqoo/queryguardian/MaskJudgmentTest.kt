@@ -33,6 +33,8 @@ class MaskJudgmentTest {
     private val catalog = InMemoryTableCatalog(
         tables = setOf("users", "marketing_consents"),
         masked = mapOf("users" to setOf("email")),
+        // spec 012 P0: 사용자가 직접 써도 되는 형태의 근거 — 등록된 MASK 강제식
+        maskTemplates = mapOf("users" to mapOf("email" to "mask_email({col})")),
     )
 
     private fun lint(sql: String, vararg rules: UserRule) =
@@ -75,13 +77,26 @@ class MaskJudgmentTest {
 
     // ---- 시스템 룰 ----
 
+    /**
+     * spec 012 P2: 맨몸 투영은 **차단**이다. 예전에는 WARN이었다("실행 시 자동으로 마스킹됩니다") —
+     * 그 문장이 참이려면 서버가 사용자의 SQL을 고쳐야 하는데, 그 전제가 틀렸다(spec 008 §0).
+     * 이제는 사용자가 직접 가려서 써야 하고, 그 방법을 메시지가 알려준다.
+     */
     @Test
-    fun `투영만 하면 자동 마스킹 안내 WARN이 뜨고 차단되지 않는다`() {
+    fun `맨몸으로 투영하면 차단되고 가려서 쓰라고 알려준다`() {
         val report = lint("SELECT email FROM users LIMIT 10")
         val violation = report.violations.single { it.ruleId == "must-be-masked" }
-        assertEquals(Severity.WARN, violation.severity)
-        assertTrue(violation.message.contains("자동으로 마스킹"), violation.message)
+        assertEquals(Severity.BLOCK, violation.severity)
+        assertTrue(violation.message.contains("가려서 조회"), violation.message)
+        assertTrue(report.blocked, "$report")
+    }
+
+    /** 사용자가 등록된 형태로 직접 가리면 통과한다 — 정답을 쓸 수 있어야 모델이 성립한다(spec 012 I5). */
+    @Test
+    fun `등록된 형태로 직접 가리면 통과한다`() {
+        val report = lint("SELECT mask_email(email) FROM users LIMIT 10")
         assertFalse(report.blocked, "$report")
+        assertTrue(report.violations.none { it.ruleId == "must-be-masked" }, "$report")
     }
 
     @Test
@@ -115,10 +130,15 @@ class MaskJudgmentTest {
 
     @Test
     fun `사용자 규칙 must_be_masked는 이제 판정된다`() {
-        // 투영만 → 충족(위반 없음)
+        // spec 012 P2: 맨몸 투영은 이제 **위반**이다 — 서버가 대신 가려주지 않는다
         assertTrue(
-            lint("SELECT email FROM users LIMIT 10", maskRule()).violations.none { it.ruleId == "rule/1" },
-            "투영만 했으면 사용자 규칙 위반이 아니다",
+            lint("SELECT email FROM users LIMIT 10", maskRule()).violations.any { it.ruleId == "rule/1" },
+            "맨몸 투영은 사용자 규칙 위반이다",
+        )
+        // 등록된 형태로 직접 가리면 충족
+        assertTrue(
+            lint("SELECT mask_email(email) FROM users LIMIT 10", maskRule()).violations.none { it.ruleId == "rule/1" },
+            "직접 가렸으면 위반이 아니다",
         )
         // 표현 불가 위치 → 위반
         val violated = lint("SELECT LOWER(email) AS e FROM users LIMIT 10", maskRule())

@@ -117,11 +117,12 @@ class ExecutionFlowIntegrationTest {
     fun `쿼리 저장과 검토 승인`() {
         val saved = postAs("/api/queries", "u1", mapOf(
             "name" to "이메일 조회", "dialect" to "MYSQL", "requestId" to requestId,
-            "sql" to "SELECT email FROM users"))
+            "sql" to "SELECT mask_email(email) FROM users"))
         assertEquals(HttpStatus.CREATED, saved.statusCode, "저장 실패: ${saved.body}")
         queryId = (saved.body!!["id"] as Number).toLong()
-        // 마스킹 대상을 투영만 했으므로 차단이 아니라 **안내(WARN)** 여야 한다
-        assertTrue(saved.body!!["lintReport"].toString().contains("자동으로 마스킹"), "${saved.body}")
+        // spec 012 P2: 사용자가 **직접 가려서** 썼으므로 마스킹 위반이 없다.
+        // 예전에는 맨몸으로 쓰고 "실행 시 자동으로 마스킹됩니다" 안내(WARN)를 받았다 — 그 전제가 틀렸다.
+        assertTrue(!saved.body!!["lintReport"].toString().contains("must-be-masked"), "${saved.body}")
 
         // 미검토 쿼리 하나 더 — 실행 거부 확인용
         pendingQueryId = (postAs("/api/queries", "u1", mapOf(
@@ -160,8 +161,9 @@ class ExecutionFlowIntegrationTest {
         assertEquals(5, (body["configuredCap"] as Number).toInt())
         assertEquals(true, body["moreRowsExist"])
 
-        // 무엇이 자동 적용됐는지 사용자에게 보인다
-        assertTrue(body["applied"].toString().contains("MASK"), "${body["applied"]}")
+        // spec 012 P2: 서버가 마스킹을 **적용하지 않는다** — 사용자가 이미 가려서 썼기 때문이다.
+        // 실행된 SQL에 `mask_email`이 있는 것은 **사용자가 쓴 것**이지 서버가 넣은 것이 아니다.
+        assertTrue(!body["applied"].toString().contains("MASK"), "서버가 또 가렸다(이중 마스킹): ${body["applied"]}")
         assertTrue(body["rewrittenSql"].toString().contains("mask_email"), "${body["rewrittenSql"]}")
         // 물리 테이블로 치환됐다 — 논리명이 그대로 실행되지 않았다
         assertTrue(body["rewrittenSql"].toString().contains("demo_users"), "${body["rewrittenSql"]}")
@@ -221,7 +223,7 @@ class ExecutionFlowIntegrationTest {
     @Order(7)
     fun `미리보기 - 실행 없이 재작성 SQL을 보여준다`() {
         val response = postAs("/api/preview-rewrite", "u1", mapOf(
-            "sql" to "SELECT email FROM users", "requestId" to requestId, "dialect" to "MYSQL"))
+            "sql" to "SELECT mask_email(email) FROM users", "requestId" to requestId, "dialect" to "MYSQL"))
         assertEquals(HttpStatus.OK, response.statusCode, "미리보기 실패: ${response.body}")
         val body = response.body!!
 
@@ -240,13 +242,13 @@ class ExecutionFlowIntegrationTest {
         // requestId 없으면 purposeCode를 주입할 수 없다 → purpose별 FILTER 자가 면제를 막는다 (spec 005 C1)
         assertEquals(
             HttpStatus.FORBIDDEN,
-            postAs("/api/preview-rewrite", "u1", mapOf("sql" to "SELECT email FROM users")).statusCode,
+            postAs("/api/preview-rewrite", "u1", mapOf("sql" to "SELECT mask_email(email) FROM users")).statusCode,
         )
         // 남의 승인 요청으로는 미리 볼 수 없다
         assertEquals(
             HttpStatus.FORBIDDEN,
             postAs("/api/preview-rewrite", "u2", mapOf(
-                "sql" to "SELECT email FROM users", "requestId" to requestId)).statusCode,
+                "sql" to "SELECT mask_email(email) FROM users", "requestId" to requestId)).statusCode,
         )
         // 룰 위반(BLOCK 컬럼)은 422 — 미리보기라고 통과시키지 않는다
         val blocked = postAs("/api/preview-rewrite", "u1", mapOf(
@@ -387,7 +389,7 @@ class ExecutionFlowIntegrationTest {
         // 지울 쿼리를 하나 만들어 실행까지 한 뒤 삭제한다
         val created = client.postAs("/api/queries", "u1", mapOf(
             "name" to "지울 쿼리", "dialect" to "MYSQL", "purposeCode" to "marketing",
-            "sql" to "SELECT email FROM users", "requestId" to requestId,
+            "sql" to "SELECT mask_email(email) FROM users", "requestId" to requestId,
         ))
         val disposable = (created.body?.get("id") as? Number)?.toLong()
             ?: error("쿼리 생성 실패: " + created.statusCode + " " + created.body)
@@ -483,7 +485,7 @@ class ExecutionFlowIntegrationTest {
         }
 
         // 사용자가 2행만 요청 — 설정 상한(5)은 발동하지 않았다
-        val narrow = run("SELECT email FROM users LIMIT 2")
+        val narrow = run("SELECT mask_email(email) FROM users LIMIT 2")
         assertEquals(2, narrow["rowCount"])
         assertEquals(2, (narrow["effectiveLimit"] as Number).toInt())
         assertEquals(5, (narrow["configuredCap"] as Number).toInt())
@@ -493,7 +495,7 @@ class ExecutionFlowIntegrationTest {
         )
 
         // LIMIT 0 — 초과 행을 볼 기회가 없으므로 "없다"고 단정하지 않는다
-        val zero = run("SELECT email FROM users LIMIT 0")
+        val zero = run("SELECT mask_email(email) FROM users LIMIT 0")
         assertEquals(0, zero["rowCount"])
         assertEquals(null, zero["moreRowsExist"], "확인하지 않은 것을 false로 단정했다: $zero")
     }

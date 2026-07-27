@@ -94,9 +94,10 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
             RuleOp.BLOCKS -> !isColumnReferenced(cond, scope) // blocks: 참조되면 미충족(위반)
             RuleOp.JOINS -> satisfiesJoins(cond, scope)
             // 컬럼을 조회하지 않는 스코프는 이 조건과 무관하다 — 중립이어야 AND 그룹을 헛되게 깨지 않는다
-            RuleOp.MUST_BE_MASKED -> when (maskUsage(cond, scope)) {
+            RuleOp.MUST_BE_MASKED -> when (maskUsage(cond, scope, catalog)) {
                 MaskUsage.ABSENT -> return Result.Neutral
-                MaskUsage.PROJECTION_ONLY -> true
+                // spec 012 P2: 맨몸 투영은 위반이다 — 서버가 대신 가려주지 않는다
+                MaskUsage.PROJECTION_ONLY -> false
                 // 사용자가 이미 등록된 형태로 가렸다 (spec 012 P0)
                 MaskUsage.ALREADY_MASKED -> true
                 MaskUsage.NOT_EXPRESSIBLE -> false
@@ -128,16 +129,21 @@ class UserRuleEvaluator(private val rules: () -> List<UserRule>) {
      * 기준이 갈라지면 "저장은 통과, 실행은 마스킹 없이 통과"가 생긴다.
      * 대상 테이블·컬럼이 불명이면 fail-closed로 표현 불가 취급(=위반).
      */
-    private fun maskUsage(cond: RuleCondition, scope: SelectScope): MaskUsage {
+    private fun maskUsage(cond: RuleCondition, scope: SelectScope, catalog: TableCatalog): MaskUsage {
         val table = cond.targetTable ?: return MaskUsage.NOT_EXPRESSIBLE
         val column = cond.targetColumn ?: return MaskUsage.NOT_EXPRESSIBLE
         val instances = scope.tables.filter { it.physical && it.name.equals(table, ignoreCase = true) }
         if (instances.isEmpty()) return MaskUsage.ABSENT
-        val usages = instances.map { maskUsageOf(scope, it.instanceKey, column) }
+        // 사용자가 직접 가려 쓴 형태도 인정한다 — 시스템 룰과 **같은 근거**(등록된 강제식)를 본다.
+        // 여기만 빠뜨리면 같은 쿼리가 시스템 룰은 통과하고 사용자 규칙은 위반이 된다 (spec 012 P0).
+        val usages = instances.map {
+            maskUsageOf(scope, it.instanceKey, column, catalog.maskForms(table, it.instanceKey, column))
+        }
         return when {
             // 한 인스턴스라도 표현 불가면 위반 — 셀프 조인에서 한쪽만 안전한 것은 안전이 아니다
             usages.any { it == MaskUsage.NOT_EXPRESSIBLE } -> MaskUsage.NOT_EXPRESSIBLE
             usages.any { it == MaskUsage.PROJECTION_ONLY } -> MaskUsage.PROJECTION_ONLY
+            usages.any { it == MaskUsage.ALREADY_MASKED } -> MaskUsage.ALREADY_MASKED
             else -> MaskUsage.ABSENT
         }
     }

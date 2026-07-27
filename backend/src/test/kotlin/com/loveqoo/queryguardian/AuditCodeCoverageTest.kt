@@ -77,7 +77,8 @@ import kotlin.test.assertTrue
  * ## 협력자 주입(6종)에 대하여
  *
  * `REWRITE_MASK_NOT_EXPRESSIBLE`·`REWRITE_SCOPE_NOT_FOUND`·`REWRITE_VERIFY_FAILED`·`REWRITE_NO_LIMIT`·
- * `TIMEOUT`·`CONNECTION`은 **정상 입력으로는 도달할 수 없는 방어선**이다(도달한다면 그것 자체가 상류
+ * `REWRITE_EXPRESSION_NOT_USABLE`(spec 012 P2에서 합류)·`TIMEOUT`·`CONNECTION`은
+ * **정상 입력으로는 도달할 수 없는 방어선**이다(도달한다면 그것 자체가 상류
  * 버그다). 이 사실 자체가 A0이 처음 밝혀낸 것이다 — 특히 `REWRITE_MASK_NOT_EXPRESSIBLE`은 판정의
  * mask 룰이 **같은 기준으로 먼저 BLOCK**하므로 판정과 재작성이 갈라질 때만 발화한다. 이 6종만 협력자
  * 빈(3개)을 spy로 강제하되, **요청은 여전히 HTTP를 통과하고 게이트 본문은 실제로 실행된다** — 검증
@@ -209,10 +210,10 @@ class AuditCodeCoverageTest {
 
         // ── 승인 ──
         previewScenario(AuditCode.NO_REQUEST, HttpStatus.FORBIDDEN, bodyCode = "NO_REQUEST") {
-            preview("SELECT email FROM users", requestId = null)
+            preview("SELECT mask_email(email) FROM users", requestId = null)
         },
         previewScenario(AuditCode.NOT_APPROVED, HttpStatus.FORBIDDEN, bodyCode = "NOT_APPROVED") { f ->
-            preview("SELECT email FROM users", f.pendingRequestId)
+            preview("SELECT mask_email(email) FROM users", f.pendingRequestId)
         },
         // execute 경로의 **승인 감사 래퍼**를 고정한다 — 승인은 저장 뒤에도 뒤집힐 수 있고(§5 완전 재판정),
         // 그때 감사가 남지 않으면 "403인데 기록 0건"이 되돌아온다.
@@ -244,7 +245,7 @@ class AuditCodeCoverageTest {
 
         // ── 접수·판정 ──
         previewScenario(AuditCode.PARSE_FAILED, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "PARSE_FAILED") { f ->
-            preview("SELEC email FROM users", f.approvedRequestId)
+            preview("SELEC mask_email(email) FROM users", f.approvedRequestId)
         },
         previewScenario(AuditCode.RULE_BLOCKED, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "RULE_BLOCKED") { f ->
             preview("SELECT ssn FROM users", f.approvedRequestId)
@@ -269,7 +270,7 @@ class AuditCodeCoverageTest {
             // 기준(MaskUsage)으로 **먼저 BLOCK**한다(RuleImpls: "실행 단계에서 거부될 쿼리를 저장
             // 시점에 막는다"). 즉 이 코드는 판정과 재작성이 갈라질 때만 발화하는 2선 방어다.
             forcePlanRefusal(RewriteRefusal.MASK_NOT_EXPRESSIBLE)
-            preview("SELECT email FROM users", f.approvedRequestId)
+            preview("SELECT mask_email(email) FROM users", f.approvedRequestId)
         },
         previewScenario(AuditCode.REWRITE_OUTER_JOIN_FILTER, HttpStatus.UNPROCESSABLE_ENTITY,
             bodyCode = "REWRITE_OUTER_JOIN_FILTER") { f ->
@@ -283,18 +284,21 @@ class AuditCodeCoverageTest {
         },
         previewScenario(AuditCode.REWRITE_EXPRESSION_NOT_USABLE, HttpStatus.UNPROCESSABLE_ENTITY,
             bodyCode = "REWRITE_EXPRESSION_NOT_USABLE") { f ->
-            // 강제식이 파싱되지 않는다 — 등록 검증을 우회해 들어온 행(마이그레이션·시드)을 가정한다
-            preview("SELECT note FROM broken_mask_table", f.approvedRequestId)
+            // spec 012 P2 이후 **정상 입력으로는 도달할 수 없다** — 강제식이 깨졌으면 판정이 먼저 막는다
+            // (맨몸 투영은 BLOCK, 깨진 강제식은 사용자가 쓸 정답 형태 자체가 없다). 그래서 위 6종과
+            // 같은 방식으로 협력자를 강제한다. 이 코드가 방어선으로만 남았다는 사실 자체가 측정 결과다.
+            forceRewriteRefusal(RewriteRefusal.EXPRESSION_NOT_USABLE)
+            preview("SELECT mask_email(email) FROM users", f.approvedRequestId)
         },
         previewScenario(AuditCode.REWRITE_SCOPE_NOT_FOUND, HttpStatus.UNPROCESSABLE_ENTITY,
             bodyCode = "REWRITE_SCOPE_NOT_FOUND") { f ->
             forceRewriteRefusal(RewriteRefusal.SCOPE_NOT_FOUND)
-            preview("SELECT email FROM users", f.approvedRequestId)
+            preview("SELECT mask_email(email) FROM users", f.approvedRequestId)
         },
         previewScenario(AuditCode.REWRITE_VERIFY_FAILED, HttpStatus.UNPROCESSABLE_ENTITY,
             bodyCode = "REWRITE_VERIFY_FAILED") { f ->
             forceRewriteRefusal(RewriteRefusal.VERIFY_FAILED)
-            preview("SELECT email FROM users", f.approvedRequestId)
+            preview("SELECT mask_email(email) FROM users", f.approvedRequestId)
         },
         execScenario(AuditCode.REWRITE_NO_LIMIT, HttpStatus.UNPROCESSABLE_ENTITY, bodyCode = "REWRITE_NO_LIMIT") { f ->
             // 계획에 상한이 없으면 실행하지 않는다 — 상한 없는 반출을 허용하지 않는 fail-closed
@@ -504,7 +508,7 @@ class AuditCodeCoverageTest {
         val narrowRequestId = approval("좁은 범위", listOf("users"), approve = true)
         val revokableRequestId = approval("승인 취소 대상", listOf("users"), approve = true)
 
-        val approvedQueryId = savedQuery("이메일 조회", "SELECT email FROM users", approvedRequestId, review = true)
+        val approvedQueryId = savedQuery("이메일 조회", "SELECT mask_email(email) FROM users", approvedRequestId, review = true)
         val pendingReviewQueryId = savedQuery("미검토", "SELECT id FROM users", approvedRequestId, review = false)
         val sqlErrorQueryId = savedQuery("없는 컬럼", "SELECT nickname FROM users", approvedRequestId, review = true)
         val revokedQueryId = savedQuery("권한 회수 예정", "SELECT id FROM revoked_table", approvedRequestId, review = true)

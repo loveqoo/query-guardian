@@ -90,9 +90,13 @@ class MustBeMaskedRule : Rule {
                 MaskUsage.ABSENT -> null
                 // 사용자가 등록된 형태 그대로 가려서 썼다 — 통과이고 재작성 대상도 아니다 (spec 012 P0)
                 MaskUsage.ALREADY_MASKED -> null
+                // spec 012 P2: 서버가 대신 가리지 않는다 — **사용자가 직접** 가려야 한다.
+                // 예전에는 WARN이었다("실행 시 자동으로 마스킹됩니다"). 그 문장이 참이려면 서버가
+                // 사용자의 SQL을 고쳐야 하는데, 그 전제가 틀렸다(spec 008 §0).
                 MaskUsage.PROJECTION_ONLY -> Violation(
-                    id, Severity.WARN,
-                    "컬럼 ${finding.logicalTable}.${finding.column}은(는) 실행 시 자동으로 마스킹됩니다.",
+                    id, Severity.BLOCK,
+                    "컬럼 ${finding.logicalTable}.${finding.column}은(는) 가려서 조회해야 합니다 — " +
+                        "등록된 강제식으로 감싸 주세요.",
                 )
                 MaskUsage.NOT_EXPRESSIBLE -> Violation(
                     id, Severity.BLOCK,

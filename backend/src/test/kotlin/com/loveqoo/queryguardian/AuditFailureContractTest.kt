@@ -122,7 +122,7 @@ class AuditFailureContractTest {
         val f = fixtures()
         failRepository()
 
-        val response = preview("SELECT email FROM users", f.requestId)
+        val response = preview("SELECT mask_email(email) FROM users", f.requestId)
 
         assertTrue(response.statusCode.is5xxServerError, "기록에 실패했는데 정상 응답이 나갔다: ${response.statusCode}")
         assertTrue(
@@ -147,7 +147,7 @@ class AuditFailureContractTest {
         val f = fixtures()
         failSerialization()
 
-        val response = preview("SELECT email FROM users", f.requestId)
+        val response = preview("SELECT mask_email(email) FROM users", f.requestId)
 
         assertTrue(response.statusCode.is5xxServerError, "직렬화 실패인데 정상 응답이 나갔다: ${response.statusCode}")
         assertTrue(!response.body.toString().contains("mask_email"), "강제식이 반출됐다: ${response.body}")
@@ -286,7 +286,7 @@ class AuditFailureContractTest {
             return id
         }
 
-        val approved = saved("이메일 조회", "SELECT email FROM users", review = true)
+        val approved = saved("이메일 조회", "SELECT mask_email(email) FROM users", review = true)
         val pending = saved("미검토", "SELECT id FROM users", review = false)
         sqlErrorId = saved("없는 컬럼", "SELECT nickname FROM users", review = true)
         // 준비 자체가 감사를 남기지 않았는지는 상관없다 — 각 테스트가 주입 전에 이 함수를 부른다.

@@ -119,24 +119,22 @@ class QueryExecutor(
     private fun buildUrl(): String = url
 
     /**
-     * [ExecutionOrder.maxRows]가 유효 상한이고, 여기서 **`maxRows + 1`번째 행이 오는지**로 `truncated`를
-     * 확정한 뒤 그 행을 버린다.
+     * [ExecutionOrder.maxRows]가 유효 상한이다. 재작성기가 IR을 통해 SQL에 `LIMIT maxRows + 1`을
+     * 넣어 두었으므로, 여기서는 **`maxRows + 1`번째 행이 오는지**만 보고 `truncated`를 확정한 뒤 그 행을 버린다.
      *
-     * **상한을 `setMaxRows`로 건다** (spec 012 P1). 예전에는 재작성기가 SQL에 `LIMIT maxRows + 1`을
-     * 넣었고 여기서는 세지 않았다 — "상한 장치가 둘이면 어긋난다"는 판단이었고 그것은 옳다.
-     * 서버가 사용자의 SQL을 고치지 않기로 하면서(spec 008 §0) 그 자리가 비었고, 실측으로 확인한 것:
+     * **`setMaxRows`는 쓰지 않는다** — 상한 장치가 둘이면 서로 어긋난다(§3.0-2 단일 장치).
      *
-     * - `setMaxRows(3)`는 사용자가 쓴 `LIMIT 9`를 **이긴다**(3행) — 거버넌스 상한이 선다
-     * - 같은 커넥션의 다음 `Statement`에 **남지 않는다** — 풀 누수 없음
-     * - 세션 변수 `SQL_SELECT_LIMIT`은 기본값 그대로다(드라이버가 세션을 안 건드린다)
+     * spec 012 P1에서 잠시 `setMaxRows`로 옮겼다가 되돌렸다. 그때의 전제("서버가 사용자 SQL을 전혀
+     * 바꾸지 않는다")가 틀렸기 때문이다 — 바꾸지 않는 것은 **값과 조건**(마스킹·필터)이고,
+     * **행 상한은 IR을 통해 벤더별로 붙인다**(사용자 확정 안전장치 4종). 그 사이 실측으로 남은 사실:
      *
-     * ⚠️ 반대로 **커넥션에 `SQL_SELECT_LIMIT`을 박는 방식은 쓸 수 없다** — 사용자가 명시한 `LIMIT`이
-     * 세션 상한을 이긴다(실측: 세션 3에 `LIMIT 9` → 9행). 초안이 그 방식을 택했다가 측정으로 뒤집었다.
+     * - `setMaxRows`는 JDBC 표준이지만 **구현이 드라이버마다 다르다.** MySQL(connector-j 9.7)에서는
+     *   서버를 멈추고 사용자의 `LIMIT`도 이기지만, 그 보장은 **벤더마다 다시 재야 하는 보장**이다.
+     *   결과를 다 받아 놓고 앞의 n개만 주는 드라이버라면 감사에는 "10행"인데 전부 건너온 것이 된다.
+     * - 반대로 커넥션에 `SQL_SELECT_LIMIT`을 박는 방식은 **쓸 수 없다** — 사용자가 명시한 `LIMIT`이
+     *   세션 상한을 이긴다(실측: 세션 3에 `LIMIT 9` → 9행).
      *
-     * 위 셋은 mysql-connector-j 9.7 기준이다. **드라이버를 올릴 때 다시 재야 한다.**
-     *
-     * 지금은 재작성기의 `LIMIT` 주입과 공존하지만 두 값이 같은 `maxRows + 1`이라 어긋나지 않는다.
-     * P2에서 주입이 사라지면 장치가 하나가 된다.
+     * IR을 통한 주입이 벤더 무관하게 서버를 멈추는 유일한 방법이고, 그래서 그것이 본체다.
      */
     fun execute(order: ExecutionOrder): ExecutionResult {
         val started = System.nanoTime()
@@ -144,8 +142,6 @@ class QueryExecutor(
             connection().use { connection ->
                 connection.createStatement().use { statement ->
                     statement.queryTimeout = (timeoutMs / 1000).toInt().coerceAtLeast(1)
-                    // +1 은 truncated 판정용 — 상한만큼만 받으면 "더 있는지"를 알 수 없다
-                    statement.maxRows = (order.maxRows + 1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                     statement.executeQuery(order.sql).use { rs ->
                         return read(rs, order.maxRows, order.governanceCap, started)
                     }

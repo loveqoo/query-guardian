@@ -63,7 +63,10 @@ class RewritePlanner(
 
         for (scope in allScopes(ir.root)) {
             // 마스킹은 **참조된 인스턴스** 축으로 순회한다 (귀속 불가·상관 참조 포함) — scope.tables 축은 샌다.
-            planMasks(scope, masks)?.let { return it }
+            // spec 012 P2b: **마스킹을 계획하지 않는다.** 서버가 사용자의 SQL을 고쳐서 가려 주던 것이
+            // 이 스펙의 전제였는데 그 전제가 틀렸다(spec 008 §0). 이제 판정이 맨몸 투영을 차단하므로
+            // 여기까지 오는 쿼리는 **이미 사용자가 가려서 쓴 것**이거나 마스킹 대상이 없는 것이다.
+            // planMasks(scope, masks)?.let { return it }
             for (instance in scope.tables.filter { it.physical }) {
                 planInjections(scope, instance, purposeCode, injections)?.let { return it }
                 // 물리명 치환은 **물리 테이블 인스턴스에만** 계획한다 — CTE·파생 alias가 논리명과 겹쳐도

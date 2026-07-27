@@ -136,11 +136,14 @@ class UserRuleEvaluatorTest {
     // ---- deferred / 미강제 (C3) ----
 
     @Test
-    fun `must_be_masked 전용 규칙은 위반 미발생 (미강제)`() {
+    /**
+     * spec 012 P2: 맨몸 투영은 **위반**이다. 예전에는 "미강제"였다 — 서버가 실행 시 대신 가려 주므로
+     * 판정에서 막을 이유가 없다는 전제였고, 그 전제가 틀렸다(spec 008 §0).
+     */
+    fun `must_be_masked 규칙은 맨몸 투영을 위반으로 본다`() {
         val r = rule(RuleScope.SINGLE, group(mustMask("users", "email")))
         val report = lint("SELECT email FROM users LIMIT 10", r)
-        assertFalse(report.blocked)
-        assertTrue(report.violations.none { it.ruleId == "rule/1" })
+        assertTrue(report.violations.any { it.ruleId == "rule/1" }, "$report")
     }
 
     // ---- AND / OR ----

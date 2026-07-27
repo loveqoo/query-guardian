@@ -49,31 +49,16 @@ class RewritePlannerTest {
     ): PlanOutcome = RewritePlanner(catalog, maxRows).plan(ir(sql), purpose, mapOf("users" to "demo_users"))
 
     // ---- MASK ----
-
-    @Test
-    fun `투영된 MASK 컬럼은 치환 계획이 된다`() {
-        val outcome = assertIs<PlanOutcome.Planned>(plan("SELECT email FROM users LIMIT 10"))
-        val mask = outcome.plan.maskProjections.single()
-        assertEquals("email", mask.column)
-        assertEquals("users", mask.instanceKey)
-        assertEquals("mask_email({col})", mask.expressionTemplate)
-    }
-
-    /** 동명 CTE가 있으면 전역 치환은 CTE 참조까지 물리명으로 바꿔 쿼리를 깨뜨린다 — 물리 인스턴스만 치환한다. */
-    @Test
-    fun `동명 CTE 참조는 물리명 치환 대상이 아니다`() {
-        val outcome = assertIs<PlanOutcome.Planned>(
-            plan("WITH users AS (SELECT id FROM users) SELECT id FROM users LIMIT 10"),
-        )
-        // CTE 본문의 물리 users 1건만 치환 대상 (루트의 users는 CTE 참조)
-        assertEquals(1, outcome.plan.tableRenames.size)
-    }
-
-    @Test
-    fun `alias로 참조된 인스턴스도 인스턴스 키로 지목한다`() {
-        val outcome = assertIs<PlanOutcome.Planned>(plan("SELECT u.email FROM users u LIMIT 10"))
-        assertEquals("u", outcome.plan.maskProjections.single().instanceKey)
-    }
+    //
+    // spec 012 P2b: **마스킹 계획을 세우지 않는다.** 서버가 사용자의 SQL을 고쳐 가려 주던 것이 전제였는데
+    // 그 전제가 틀렸다(spec 008 §0 — AI가 디자인에서 유추한 것을 사용자 결정으로 적었다).
+    //
+    // 여기 있던 테스트 다섯을 **지웠다**(치환 계획·별칭 인스턴스 지목·비투영 거부·star 거부·파생 스코프 배치).
+    // 기능이 없어졌으니 그 테스트는 없는 동작을 재는 것이 된다. 다만 그것들이 지키던 **성질 자체는
+    // 없어지지 않았고 판정으로 옮겨갔다** — 비투영 위치·star·파생 스코프의 마스킹 사용은
+    // `must-be-masked`가 차단하고, 그 커버리지는 `ShapeCoverageTest`의 E·M 축이 잰다.
+    //
+    // 남긴 것: "MASK 컬럼을 조회하지 않으면 계획이 없다"는 계획이 **비어 있음**을 재므로 여전히 유효하다.
 
     @Test
     fun `MASK 컬럼을 조회하지 않으면 계획이 없다`() {
@@ -81,54 +66,11 @@ class RewritePlannerTest {
         assertTrue(outcome.plan.maskProjections.isEmpty())
     }
 
-    /**
-     * §3.0.1: 투영이 아닌 위치(함수 인자·CASE·WHERE·GROUP BY)는 치환으로 표현할 수 없다.
-     * 적대 검토가 실측한 `CONCAT(email,'')` 한 겹 우회가 여기서 거부된다.
-     */
     @Test
-    fun `투영이 아닌 위치의 MASK 컬럼은 거부한다`() {
-        for (sql in listOf(
-            "SELECT CONCAT(email, '') AS e FROM users LIMIT 10",
-            "SELECT LOWER(email) AS e FROM users LIMIT 10",
-            "SELECT id FROM users WHERE email = 'a@b.com' LIMIT 10",
-            "SELECT id FROM users GROUP BY email LIMIT 10",
-            "SELECT id FROM users ORDER BY email LIMIT 10",
-            "SELECT CASE WHEN email IS NULL THEN 'x' ELSE 'y' END AS e FROM users LIMIT 10",
-            "SELECT email FROM users WHERE email LIKE '%@naver.com' LIMIT 10",
-        )) {
-            val outcome = plan(sql)
-            val refused = assertIs<PlanOutcome.Refused>(outcome, "거부되어야 함: $sql")
-            assertEquals(RewriteRefusal.MASK_NOT_EXPRESSIBLE, refused.refusal, sql)
-        }
-    }
-
-    @Test
-    fun `star 투영은 무엇이 나갈지 알 수 없으므로 거부한다`() {
-        val refused = assertIs<PlanOutcome.Refused>(plan("SELECT * FROM users LIMIT 10"))
-        assertEquals(RewriteRefusal.MASK_NOT_EXPRESSIBLE, refused.refusal)
-    }
-
-    @Test
-    fun `강제식이 없거나 col 자리표시자가 없으면 거부한다`() {
-        val refused = assertIs<PlanOutcome.Refused>(
-            plan("SELECT email FROM users LIMIT 10", catalog = FakeCatalog(maskTemplate = null)),
-        )
-        assertEquals(RewriteRefusal.EXPRESSION_NOT_USABLE, refused.refusal)
-    }
-
-    /**
-     * 파생 테이블 안에서 투영되면 **가장 안쪽 스코프**에 계획이 붙어야 한다(외곽 alias는 물리 테이블이 아니다).
-     * IR을 **한 번만** 파싱해 비교한다 — 스코프 id는 파싱마다 달라지므로(짝 검증의 근거) 두 번 파싱하면 못 맞춘다.
-     */
-    @Test
-    fun `파생 테이블 내부 투영은 그 스코프에 계획된다`() {
-        val parsed = ir("SELECT d.email FROM (SELECT email FROM users) d LIMIT 10")
-        val outcome = assertIs<PlanOutcome.Planned>(
-            RewritePlanner(FakeCatalog(), 1000).plan(parsed, "marketing", mapOf("users" to "demo_users")),
-        )
-        val mask = outcome.plan.maskProjections.single()
-        assertTrue(mask.scopeId != parsed.root.scopeId, "루트가 아니라 파생 스코프에 붙어야 함")
-        assertEquals(parsed.root.children.single().scopeId, mask.scopeId)
+    fun `마스킹 대상을 조회해도 계획하지 않는다`() {
+        // 사용자가 직접 가려서 쓴 형태 — 서버가 또 감싸면 이중 마스킹이다
+        val outcome = assertIs<PlanOutcome.Planned>(plan("SELECT mask_email(email) FROM users LIMIT 10"))
+        assertTrue(outcome.plan.maskProjections.isEmpty(), "${outcome.plan.maskProjections}")
     }
 
     // ---- FILTER / INTEGRITY ----

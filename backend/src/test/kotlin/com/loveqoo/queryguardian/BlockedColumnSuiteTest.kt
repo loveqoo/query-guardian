@@ -65,7 +65,9 @@ class BlockedColumnSuiteTest {
 
     @Test
     fun `차단 컬럼이 아닌 조회는 통과`() {
-        assertNotBlocked("SELECT id, email FROM users LIMIT 10")
+        // spec 012 P2: `email`은 마스킹 대상이라 맨몸으로 쓰면 막힌다 — 사용자가 직접 가려야 한다.
+        // 이 테스트가 재는 것은 **차단 컬럼(ssn)이 아닌 조회**이므로 가려서 쓴 형태로 확인한다.
+        assertNotBlocked("SELECT id, mask_email(email) FROM users LIMIT 10")
         assertNotBlocked("SELECT id FROM users WHERE created_at > NOW() - INTERVAL 1 DAY LIMIT 10")
     }
 

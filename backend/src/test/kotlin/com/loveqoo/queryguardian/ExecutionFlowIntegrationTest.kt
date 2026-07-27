@@ -227,13 +227,15 @@ class ExecutionFlowIntegrationTest {
         assertEquals(HttpStatus.OK, response.statusCode, "미리보기 실패: ${response.body}")
         val body = response.body!!
 
-        assertTrue(body["rewrittenSql"].toString().contains("mask_email"), "${body["rewrittenSql"]}")
+        // spec 012 P2b: 서버가 **가리지 않는다** — `mask_email`이 있는 것은 사용자가 쓴 것이다.
+        assertTrue(!body["applied"].toString().contains("MASK"), "서버가 또 가렸다: ${body["applied"]}")
+        assertTrue(body["rewrittenSql"].toString().contains("mask_email"), "사용자가 쓴 것이 남아야 한다")
+        // 물리 테이블 치환과 행 상한은 **의미를 바꾸지 않으므로** 그대로 적용된다(spec 012 I1)
         assertTrue(body["rewrittenSql"].toString().contains("demo_users"), "${body["rewrittenSql"]}")
-        assertTrue(body["applied"].toString().contains("MASK"), "${body["applied"]}")
         // 실행이 아니므로 결과 행이 없다
         assertTrue(!body.containsKey("rows"), "미리보기에 결과 행이 있다: $body")
-        // 통과했어도 안내(WARN)는 그 자리에서 보여야 한다
-        assertTrue(body["lintReport"].toString().contains("자동으로 마스킹"), "${body["lintReport"]}")
+        // 사용자가 직접 가렸으므로 마스킹 위반이 없다
+        assertTrue(!body["lintReport"].toString().contains("must-be-masked"), "${body["lintReport"]}")
     }
 
     @Test
@@ -570,62 +572,19 @@ class ExecutionFlowIntegrationTest {
         assertEquals(null, save.body?.get("requestId"), "요청 id가 403 본문으로 새어 나갔다: " + save.body)
     }
 
-    /**
-     * 재작성 증폭 (적대 검토 테스트 공백 5). 입력을 통과한 SQL은 **재작성 후에도** 감사에 온전히 저장돼야
-     * 한다 — 감사 INSERT가 죽으면 그 실행은 무기록으로 통과한다. `applied_json`은 마스킹 컬럼 수에
-     * 비례해 커지므로 원본보다 훨씬 빨리 TEXT 한계(65,535 B)를 넘는다.
-     */
-    @Test
-    @Order(20)
-    fun `감사 - 재작성으로 커진 기록도 잘리지 않고 저장된다`() {
-        ensureDemoSchema()
-        val projections = (1..2_000).joinToString(", ") { "email AS e$it" }
-        val sql = "SELECT $projections FROM users"
-        val id = (client.postAs("/api/queries", "u1", mapOf(
-            "name" to "증폭", "dialect" to "MYSQL", "requestId" to requestId, "sql" to sql,
-        )).body!!["id"] as Number).toLong()
-        postAs("/api/queries/$id/review", "ap1", mapOf("decision" to "APPROVED"))
-        val res = postAs("/api/queries/$id/execute", "u1")
-        assertEquals(HttpStatus.OK, res.statusCode, "실행 실패: " + res.body)
-
-        val event = executionEvents.findAll().filter { it.queryId == id }
-            .maxByOrNull { it.id!! } ?: error("감사 기록이 없다")
-        val applied = event.appliedJson ?: error("적용 목록이 저장되지 않았다")
-        // 표본이 실제로 TEXT 한계를 넘어야 MEDIUMTEXT 전환이 검증된다
-        assertTrue(applied.toByteArray().size > 65_535, "한계를 넘지 않는 표본이다: ${applied.length}")
-        assertTrue(applied.trimEnd().endsWith("]"), "적용 목록이 잘렸다(끝: ...${applied.takeLast(40)})")
-        assertEquals(sql, event.originalSql, "원본 SQL이 잘렸다")
-        assertTrue(event.rewrittenSql!!.contains("mask_email"), "재작성 SQL이 잘렸다")
-    }
-
-    /**
-     * 증폭 절벽 (실측 발견). 입력 상한(60,000 B)을 통과한 SQL도 마스킹 치환으로 부풀어 **파서 상한(64 KiB)**
-     * 을 넘을 수 있다 — 재작성 검증이 다시 파싱하므로 그 지점에서 걸린다. 데이터는 나가지 않아야 하고
-     * (fail-closed), 감사에 남아야 하고, 사용자는 **무엇을 고쳐야 할지** 알아야 한다.
-     */
-    @Test
-    @Order(21)
-    fun `증폭 절벽 - 재작성이 파서 상한을 넘으면 차단하고 이유를 알려준다`() {
-        ensureDemoSchema()
-        val sql = "SELECT " + (1..3_000).joinToString(", ") { "email AS e$it" } + " FROM users"
-        assertTrue(sql.toByteArray().size < 60_000, "입력 상한을 넘는 표본이면 다른 게이트가 잡는다")
-        val id = (client.postAs("/api/queries", "u1", mapOf(
-            "name" to "절벽", "dialect" to "MYSQL", "requestId" to requestId, "sql" to sql,
-        )).body!!["id"] as Number).toLong()
-        postAs("/api/queries/$id/review", "ap1", mapOf("decision" to "APPROVED"))
-
-        val res = postAs("/api/queries/$id/execute", "u1")
-        assertTrue(res.statusCode.is4xxClientError, "500이 아니라 4xx여야 한다: ${res.statusCode}")
-        assertTrue(
-            res.body.toString().contains("컬럼 수를 줄여"),
-            "무엇을 고쳐야 할지 알려주지 않는다: " + res.body,
-        )
-        // 차단도 감사 대상이다(§6)
-        assertTrue(
-            executionEvents.findAll().any { it.queryId == id && it.outcome == ExecutionOutcome.BLOCKED },
-            "차단이 기록되지 않았다",
-        )
-    }
+    // ---- spec 012 P2b로 사라진 시험 둘 ----
+    //
+    // 여기 있던 두 테스트를 **지웠다**: "재작성으로 커진 기록도 잘리지 않는다"와 "증폭 절벽".
+    // 둘 다 **마스킹 치환이 SQL을 부풀린다**는 현상 위에 서 있었고, 서버가 가리지 않게 되면서
+    // 그 현상 자체가 없어졌다.
+    //
+    // 다시 만들 수 없다는 것도 확인했다(실측): 입력 상한이 60,000 B이므로 **사용자가 직접 쓴 SQL로는
+    // TEXT 한계(65,535)에 닿을 수 없고**, 재작성은 이제 테이블명 치환과 LIMIT뿐이라 거의 커지지 않는다.
+    // 즉 감사의 어느 칸도 그 한계에 도달하지 못한다.
+    //
+    // 그래서 `execution_event`의 MEDIUMTEXT 전환과 "재작성 후 파서 상한 초과" 방어는 **남기되
+    // 도달 불가**다. 지우지 않는 이유: 방언이 늘거나 상한이 바뀌면 다시 도달할 수 있고, 그때
+    // 없으면 조용히 잘린다. 백로그에 "도달 불가 방어선"으로 적었다.
 
     /**
      * ⚠️ **현행 고정 — 정책 미결** (spec 010 P3 검토, `QueryService.delete` KDoc).

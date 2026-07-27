@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# 전체 검사 (실측 약 2분 — 백엔드 300건). 푸시는 커밋보다 훨씬 드물어 여기가 맞다.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 1
+
+echo "── pre-push ───────────────────────────────"
+
+# 빠른 검사부터. 여기서 걸리면 2분을 안 기다려도 된다.
+if ! "$ROOT/.githooks/pre-commit"; then
+  exit 1
+fi
+
+# --- 백엔드 ---
+# `BUILD SUCCESSFUL`만 보지 않는다. **몇 건이 돌았는지**를 함께 본다 —
+# 이 저장소는 "실행되지 않았다"를 "통과했다"로 읽은 적이 있다(learning 021).
+echo "백엔드 테스트 (약 2분)…"
+if (cd backend && ./gradlew --no-daemon --quiet test) ; then
+  python3 - <<'PY'
+import glob, xml.etree.ElementTree as ET, sys
+files = glob.glob("backend/build/test-results/test/*.xml")
+if not files:
+    print("\033[31m✗ 백엔드: 리포트가 0개다 — 테스트가 실제로 돌지 않았다\033[0m"); sys.exit(1)
+t = f = e = s = 0
+for p in files:
+    r = ET.parse(p).getroot()
+    t += int(r.get("tests", 0)); f += int(r.get("failures", 0))
+    e += int(r.get("errors", 0)); s += int(r.get("skipped", 0))
+ok = (f == 0 and e == 0)
+print(("\033[32m✓\033[0m" if ok else "\033[31m✗\033[0m") +
+      f" 백엔드 {len(files)}클래스 · {t}건 · 실패 {f} · 오류 {e} · 스킵 {s}")
+sys.exit(0 if ok else 1)
+PY
+  [ $? -ne 0 ] && exit 1
+else
+  echo -e "\033[31m✗ 백엔드 테스트 실패\033[0m — 자세한 것은: cd backend && ./gradlew test"
+  exit 1
+fi
+
+# --- 화면을 건드렸으면 알려 준다 ---
+# 시각 회귀·E2E는 서버가 떠 있어야 해서 훅에 넣지 않는다(안 떠 있으면 엉뚱한 이유로 실패하고,
+# 그런 훅은 꺼진다). 대신 **잊지 않게** 한다 — 조용한 미실행이 가장 나쁘다.
+upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)
+range="${upstream:+$upstream..}HEAD"
+if git diff --name-only "$range" 2>/dev/null | grep -qE '^frontend/src/'; then
+  echo
+  echo -e "\033[33m! 화면 파일이 바뀌었다\033[0m — 시각 회귀는 훅이 못 돌린다(서버 필요)."
+  echo "  프론트 개발 서버를 띄운 뒤:  cd frontend && npm run test:visual"
+fi
+
+exit 0

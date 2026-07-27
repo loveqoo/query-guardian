@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# 빠른 검사만 (실측 약 2초). 느린 것은 pre-push에 있다 — .githooks/README.md 참조.
+#
+# 여기 담을 기준: **초 단위로 끝나고, 서버가 안 떠 있어도 도는 것.**
+# 환경에 매달리는 검사를 넣으면 엉뚱한 이유로 실패하고, 그런 훅은 꺼진다.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 1
+
+fail=0
+run() { # run <이름> <디렉터리> <명령...>
+  local name="$1" dir="$2"; shift 2
+  local out
+  if ! out=$( (cd "$dir" && "$@") 2>&1 ); then
+    printf '\033[31m✗ %s\033[0m\n' "$name"
+    printf '%s\n' "$out" | tail -25
+    fail=1
+  else
+    printf '\033[32m✓\033[0m %s\n' "$name"
+  fi
+}
+
+echo "── pre-commit ─────────────────────────────"
+run "와이어 대조 (서버 DTO·어휘 ↔ 화면)" "$ROOT" python3 .dev/tools/wire-contract-check.py
+run "프론트 타입 체크"                    "$ROOT/frontend" npm run --silent typecheck
+run "프론트 계약 테스트"                  "$ROOT/frontend" npm run --silent test:logic
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "커밋을 멈췄다. 고치거나, 의도한 것이면 --no-verify 로 건너뛴다."
+  exit 1
+fi
+exit 0

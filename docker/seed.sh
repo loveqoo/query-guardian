@@ -66,7 +66,9 @@ post "rules" "{\"name\":\"마케팅 동의 사용자 한정\",\"scope\":\"MULTI\
   {\"node\":\"group\",\"combinator\":\"all\",\"children\":[
     {\"node\":\"cond\",\"op\":\"joins\",\"severity\":\"BLOCK\",\"table\":\"marketing_consents\",\"column\":\"user_id\",\"refTable\":\"users\",\"refColumn\":\"id\"},
     {\"node\":\"cond\",\"op\":\"requires\",\"severity\":\"BLOCK\",\"table\":\"marketing_consents\",\"column\":\"consent_yn\",\"defId\":$FILTER}]}}" >/dev/null
-# r2: PII 마스킹 필수 (SINGLE) — must_be_masked 전용 → 미강제(판정 미구현) 데모
+# r2: PII 마스킹 필수 (SINGLE) — must_be_masked 전용.
+#     ⚠️ 이 주석은 "미강제(판정 미구현) 데모"라고 적혀 있었으나 **낡았다** — spec 008 M1에서
+#     must_be_masked가 판정으로 전환됐다. 즉 이 규칙은 실제로 **차단한다**(BLOCK).
 post "rules" "{\"name\":\"PII 마스킹 필수\",\"scope\":\"SINGLE\",\"server\":\"mysql-prod\",\"tree\":
   {\"node\":\"group\",\"combinator\":\"all\",\"children\":[
     {\"node\":\"cond\",\"op\":\"must_be_masked\",\"severity\":\"BLOCK\",\"table\":\"users\",\"column\":\"email\",\"defId\":$MASK}]}}" >/dev/null

@@ -24,7 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DTO = (ROOT / "backend/src/main/kotlin/com/loveqoo/queryguardian/api/Dtos.kt").read_text()
 VOCAB = (ROOT / "backend/src/main/kotlin/com/loveqoo/queryguardian/audit/AuditVocabulary.kt").read_text()
+RULE_TREE = (ROOT / "backend/src/main/kotlin/com/loveqoo/queryguardian/rules/RuleTree.kt").read_text()
 TS = (ROOT / "frontend/src/api/client.ts").read_text()
+RULES_PAGE = (ROOT / "frontend/src/pages/RulesPage.tsx").read_text()
 
 # (Kotlin data class, zod 스키마) — 화면이 실제로 파싱하는 것만
 FIELD_PAIRS = [
@@ -84,6 +86,31 @@ def zod_enum(name: str):
     return None if not m else re.findall(r'"([^"]+)"', m.group(1))
 
 
+def judged_ops_backend():
+    """서버가 **판정하는** op의 와이어 값 집합.
+
+    `RuleCondition.judged`는 `@JsonIgnore`라 와이어에 안 나온다(파생 값을 내보내면 `tree_json`에
+    저장되어 정의를 바꿔도 옛 행이 옛 답을 든다). 그래서 화면은 사본을 들 수밖에 없고,
+    **사본이라서 실제로 갈라졌다** — 서버가 `must_be_masked`를 판정으로 전환(spec 008 M1)했는데
+    화면은 "판정 미구현" 배지를 계속 달았다. 여기서 소스를 읽어 그 갈라짐을 잡는다.
+    """
+    m = re.search(r"val judged: Boolean get\(\) =\s*\n?([^\n]*(?:\n\s+[^\n]*)*?)\n\s*\}", RULE_TREE)
+    if not m:
+        return None
+    names = set(re.findall(r"RuleOp\.([A-Z_]+)", m.group(1)))
+    if not names:
+        return None
+    # 상수 이름 → 와이어 값 (@JsonValue). 이름을 그대로 쓰면 소문자 와이어와 안 맞는다.
+    wire = dict(re.findall(r"([A-Z_]+)\(\"([a-z_]+)\"\)", RULE_TREE))
+    missing = names - wire.keys()
+    return None if missing else {wire[n] for n in names}
+
+
+def judged_ops_frontend():
+    m = re.search(r"const JUDGED_OPS: RuleOp\[\] = \[([^\]]*)\]", RULES_PAGE)
+    return None if not m else set(re.findall(r'"([^"]+)"', m.group(1)))
+
+
 def main() -> int:
     problems = 0
     for kotlin, zod in FIELD_PAIRS:
@@ -107,6 +134,21 @@ def main() -> int:
             problems += 1
         else:
             print(f"ok {kotlin} ↔ {zod} ({len(a)} 상수)")
+
+    a, b = judged_ops_backend(), judged_ops_frontend()
+    if a is None or b is None:
+        print("?? judged ops: 선언을 못 찾았다 (RuleTree.judged 또는 RulesPage.JUDGED_OPS)")
+        problems += 1
+    elif a != b:
+        print(
+            "!! 판정 대상 op가 갈라졌다 — 화면이 틀린 배지를 단다\n"
+            f"   서버(judged): {sorted(a)}\n"
+            f"   화면(JUDGED_OPS): {sorted(b)}\n"
+            f"   서버만: {sorted(a - b)}  화면만: {sorted(b - a)}"
+        )
+        problems += 1
+    else:
+        print(f"ok RuleCondition.judged ↔ JUDGED_OPS ({len(a)} op)")
 
     print("=== 어긋남 %d건 ===" % problems if problems else "=== 전부 일치 ===")
     return 1 if problems else 0

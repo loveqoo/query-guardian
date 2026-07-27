@@ -44,7 +44,8 @@ import {
  *
  * spec 003의 로컬 스텁 3단 레이아웃(목록 · 빌더 · IR 트리)을 유지하되 데이터 소스를
  * `/api/rules`로 전환한다. 조건 편집의 제약 select는 `/api/catalog/mappings`(컬럼 필터)
- * 실데이터, joins는 refTable/refColumn select, must_be_*는 "판정 미구현" 배지.
+ * 실데이터, joins는 refTable/refColumn select, must_be_within은 "판정 미구현" 배지
+ * (must_be_masked는 서버가 판정한다 — 배지를 달면 안 된다. 실제로 달고 있었다).
  * 저장/삭제/추가는 실 API, 테스트 실행은 백엔드 스텁 메시지.
  */
 
@@ -122,10 +123,22 @@ type IrTab = "summary" | "ir";
 let UID = 0;
 const nid = (p: string): string => `${p}${Date.now()}_${++UID}`;
 
-const JUDGED_OPS: RuleOp[] = ["requires", "blocks", "joins"];
+/**
+ * **판정 대상 연산자** — 서버 `RuleCondition.judged`와 같아야 한다.
+ *
+ * 이 목록은 서버가 주지 않는다(`judged`는 `@JsonIgnore`다 — 파생 값을 내보내면 `tree_json`에
+ * 저장돼 나중에 정의를 바꿔도 옛 행이 옛 답을 들고 있게 된다). 그래서 **사본일 수밖에 없고,
+ * 사본이라서 갈라졌다**: 서버는 spec 008 M1에서 `must_be_masked`를 미판정 → 판정으로 전환했는데
+ * 화면은 따라오지 않아 **"판정 미구현" 배지를 계속 달았다.** 담당자가 "어차피 안 걸린다"고 믿고
+ * 등록하면 실제로는 사용자 쿼리가 차단된다 — 화면이 틀린 말을 하고 있었다.
+ *
+ * 갈라짐을 줄이는 장치 둘:
+ * 1. **목록을 하나만 둔다.** 미판정은 판정의 여집합이다 — 예전에는 두 목록이 각자 틀릴 수 있었다.
+ * 2. `.dev/tools/wire-contract-check.py`가 이 배열과 서버의 `judged` 정의를 대조한다(CI에서 돈다).
+ */
+const JUDGED_OPS: RuleOp[] = ["requires", "blocks", "joins", "must_be_masked"];
 const isJudgedOp = (op: RuleOp): boolean => JUDGED_OPS.includes(op);
-const isDeferredOp = (op: RuleOp): boolean =>
-  op === "must_be_within" || op === "must_be_masked";
+const isDeferredOp = (op: RuleOp): boolean => !isJudgedOp(op);
 
 const clean = (v?: string): string | undefined =>
   v && v.trim() !== "" ? v : undefined;

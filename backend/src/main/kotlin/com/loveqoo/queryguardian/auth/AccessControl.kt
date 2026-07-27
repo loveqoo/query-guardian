@@ -2,6 +2,7 @@ package com.loveqoo.queryguardian.auth
 
 import com.loveqoo.queryguardian.api.AccessBlockedDto
 import com.loveqoo.queryguardian.audit.AuditCode
+import com.loveqoo.queryguardian.catalog.GovernedServer
 import com.loveqoo.queryguardian.catalog.CatalogTableRepository
 import org.springframework.stereotype.Component
 
@@ -21,7 +22,8 @@ class AccessControl(
     private val tablePerms: UserTablePermissionRepository,
     private val tables: CatalogTableRepository,
 ) {
-    private val DEFAULT_SERVER = "mysql-prod"
+    /** 사본이었다 — 정의는 [GovernedServer.KEY] 하나다. 둘이면 한쪽만 고쳐지는 날이 온다. */
+    private val DEFAULT_SERVER = GovernedServer.KEY
 
     /** 테이블 하나가 이 사용자에게 허용되는가. 카탈로그 미등록은 여기서 판단하지 않는다(check가 구분). */
     fun isTableAllowed(userId: String, tableName: String): Boolean {

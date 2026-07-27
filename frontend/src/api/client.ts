@@ -353,6 +353,19 @@ export const purposeSchema = z.object({
 });
 export type Purpose = z.infer<typeof purposeSchema>;
 
+/**
+ * 통제 대상 서버. **필드가 둘뿐인 것이 요점이다.**
+ *
+ * 규칙 화면은 예전에 디자인 샘플에서 서버 셋(MySQL·PostgreSQL·Trino)을 읽어
+ * 호스트·클러스터 구성·노드 수까지 보여 줬다. 전부 이 앱이 모르는 값이다.
+ * 서버가 주는 것만 그리면 화면이 거짓말할 자리가 없어진다 — 그래서 아는 것만 담는다.
+ */
+export const serverDescriptorSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+});
+export type ServerDescriptor = z.infer<typeof serverDescriptorSchema>;
+
 export const schemaDictSchema = z.record(z.string(), z.array(z.string()));
 export type SchemaDict = z.infer<typeof schemaDictSchema>;
 
@@ -1009,6 +1022,10 @@ export function deleteMapping(id: Id): Promise<void> {
 
 export function listPurposes(): Promise<Purpose[]> {
   return request(z.array(purposeSchema), "/catalog/purposes");
+}
+
+export function listServers(): Promise<ServerDescriptor[]> {
+  return request(z.array(serverDescriptorSchema), "/catalog/servers");
 }
 
 export function createPurpose(input: PurposeInput): Promise<Purpose> {

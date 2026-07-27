@@ -11,7 +11,7 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import { MONO_FONT } from "../theme";
-import { opMeta, servers } from "../mock/design";
+import { opMeta } from "../mock/design";
 import { useAuth } from "../auth/AuthContext";
 import StewardOnly from "../components/StewardOnly";
 import {
@@ -22,6 +22,7 @@ import {
   listDefs,
   listMappings,
   listRules,
+  listServers,
   listTables,
   testRule,
   updateRule,
@@ -37,6 +38,7 @@ import {
   type RuleScope,
   type RuleSeverity,
   type RuleTreeNode,
+  type ServerDescriptor,
 } from "../api/client";
 
 /**
@@ -288,12 +290,19 @@ const SEVERITY_OPTIONS = [
   { label: "차단 (BLOCK)", value: "BLOCK" },
   { label: "경고 (WARN)", value: "WARN" },
 ];
-const serverOptions = servers.map((s) => ({
-  label: s.vendor + " · " + s.key,
-  value: s.key,
-}));
-const serverByKey = (key: string | null) =>
-  servers.find((s) => s.key === key) || servers[0];
+/**
+ * 서버 목록은 **서버가 준다** (`GET /api/catalog/servers`).
+ *
+ * 예전에는 디자인 샘플의 셋(MySQL·PostgreSQL·Trino)을 고르게 하고 호스트·클러스터 구성·노드 수까지
+ * 보여 줬다. 전부 이 앱이 모르는 값이고, 고른 서버는 **평가에 쓰이지도 않는다**
+ * (`UserRuleEvaluator`는 대상 테이블 참조만 본다). 담당자가 `pg-analytics`를 골라 규칙을 만들면
+ * 그 대상 서버는 어디에도 없는 값이 됐다.
+ *
+ * `null`을 돌려줄 수 있게 둔 것은 의도다 — 목록에 없는 키를 **첫 항목으로 슬쩍 바꿔치기하면**
+ * 화면이 다시 거짓말을 시작한다(저장된 값은 그대로인데 다른 서버로 보인다).
+ */
+const findServer = (all: ServerDescriptor[], key: string | null): ServerDescriptor | null =>
+  all.find((s) => s.key === key) ?? null;
 
 const fieldLabel: React.CSSProperties = {
   display: "block",
@@ -318,6 +327,7 @@ export default function RulesPage() {
   const [tables, setTables] = useState<CatalogTable[]>([]);
   const [defs, setDefs] = useState<ConstraintDef[]>([]);
   const [mappings, setMappings] = useState<ConstraintMapping[]>([]);
+  const [servers, setServers] = useState<ServerDescriptor[]>([]);
 
   // editor
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -345,17 +355,19 @@ export default function RulesPage() {
     let alive = true;
     (async () => {
       try {
-        const [rl, tl, dl, ml] = await Promise.all([
+        const [rl, tl, dl, ml, sv] = await Promise.all([
           listRules(),
           listTables(),
           listDefs(),
           listMappings(),
+          listServers(),
         ]);
         if (!alive) return;
         setRules(rl);
         setTables(tl);
         setDefs(dl);
         setMappings(ml);
+        setServers(sv);
         if (rl.length) {
           const d = await getRule(rl[0].id);
           if (alive) applyDetail(d);
@@ -396,7 +408,7 @@ export default function RulesPage() {
       id: null,
       name: "새 규칙",
       scope: "SINGLE",
-      server: servers[0].key,
+      server: servers[0]?.key ?? null,
       enabled: true,
       tree: starterGroup("SINGLE"),
       corrupt: false,
@@ -1164,7 +1176,7 @@ export default function RulesPage() {
     const usedTables = Array.from(
       new Set(collectConds(tree).filter((n) => n.table).map((n) => n.table as string)),
     );
-    const server = serverByKey(d.server);
+    const server = findServer(servers, d.server);
     const enforced = isEnforced(tree);
     const sev = derivedSeverity(tree);
     return (
@@ -1191,13 +1203,13 @@ export default function RulesPage() {
                 <span
                   style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}
                 >
-                  <Tag color={server.vendorColor}>{server.vendor}</Tag>
                   <span style={{ fontFamily: MONO_FONT, color: C.text }}>
-                    {server.host}
+                    {d.server ?? "(미지정)"}
                   </span>
                 </span>
-                <span style={{ fontSize: 11, color: C.textTertiary }}>
-                  {server.cluster + " · " + server.nodes}
+                {/* 목록에 없는 키는 **그렇다고 말한다.** 첫 항목으로 바꿔치기하면 화면이 거짓말한다. */}
+                <span style={{ fontSize: 11, color: server ? C.textTertiary : C.error }}>
+                  {server ? server.label : "등록되지 않은 서버 — 이 규칙의 대상이 존재하지 않습니다"}
                 </span>
               </div>
             )}
@@ -1440,7 +1452,7 @@ export default function RulesPage() {
   const invalid = !tree || hasEmptyGroup(tree);
   const headerSev = draft ? derivedSeverity(draft.tree) : "NONE";
   const headerEnforced = draft ? isEnforced(draft.tree) : false;
-  const server = serverByKey(draft?.server ?? null);
+  const server = findServer(servers, draft?.server ?? null);
 
   return (
     <div
@@ -1591,7 +1603,7 @@ export default function RulesPage() {
                 onChange={(v) =>
                   patchDraft({
                     scope: v as RuleScope,
-                    server: v === "GLOBAL" ? null : (draft?.server ?? servers[0].key),
+                    server: v === "GLOBAL" ? null : (draft?.server ?? servers[0]?.key ?? null),
                   })
                 }
               />
@@ -1616,7 +1628,7 @@ export default function RulesPage() {
                 <div>
                   <Select
                     style={{ width: "100%" }}
-                    options={serverOptions}
+                    options={servers.map((s) => ({ label: s.label, value: s.key }))}
                     value={draft?.server ?? undefined}
                     onChange={(v) => patchDraft({ server: v })}
                   />
@@ -1633,11 +1645,10 @@ export default function RulesPage() {
                     <span style={{ display: "inline-flex" }}>
                       <AppstoreOutlined />
                     </span>
-                    <span style={{ fontFamily: MONO_FONT }}>{server.host}</span>
-                    <span>·</span>
-                    <span>{server.cluster}</span>
-                    <span>·</span>
-                    <span>{server.nodes}</span>
+                    <span style={{ fontFamily: MONO_FONT }}>{draft?.server ?? "(미지정)"}</span>
+                    {server ? null : (
+                      <span style={{ color: C.error }}>· 등록되지 않은 서버</span>
+                    )}
                   </div>
                 </div>
               )}

@@ -2,6 +2,7 @@ package com.loveqoo.queryguardian.auth
 
 import com.loveqoo.queryguardian.api.ForbiddenException
 import com.loveqoo.queryguardian.api.NotFoundException
+import com.loveqoo.queryguardian.catalog.GovernedServer
 import com.loveqoo.queryguardian.catalog.CatalogTableRepository
 import org.springframework.stereotype.Service
 import java.time.Instant
@@ -25,7 +26,8 @@ class UserAdminService(
     private val events: PermissionChangeEventRepository,
     private val tables: CatalogTableRepository,
 ) {
-    private val DEFAULT_SERVER = "mysql-prod"
+    /** 사본이었다 — 정의는 [GovernedServer.KEY] 하나다. */
+    private val DEFAULT_SERVER = GovernedServer.KEY
 
     /** 전 인증 사용자 열람 가능 — 승인 라인 편성에 필요(H3 카브아웃). password_hash는 노출하지 않는다. */
     fun list(): List<UserDto> = users.findAll()
